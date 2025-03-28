@@ -6,6 +6,7 @@ import time
 import json
 import requests
 from dotenv import load_dotenv
+from src.scene_video_detector import enhance_script_with_video_annotations
 
 # Thêm thư mục gốc vào sys.path
 if __name__ == "__main__":
@@ -153,7 +154,8 @@ class ScriptGenerator:
             
             logger.info(f"Đã tạo kịch bản với {len(scenes)} phân cảnh cho bài: {title}")
             
-            return {
+            # Tạo script object để trả về
+            script = {
                 "title": title,
                 "full_script": full_script,
                 "scenes": scenes,
@@ -161,6 +163,29 @@ class ScriptGenerator:
                 "url": article.get('url', ''),
                 "style": style
             }
+            
+            # Phân tích và đánh dấu các scene nên dùng video
+            try:
+                # Kiểm tra xem tính năng video clips có được bật không
+                from config.settings import VIDEO_SETTINGS
+                if VIDEO_SETTINGS.get("enable_video_clips", False):
+                    logger.info(f"Phân tích {len(scenes)} scene để xác định nên dùng video...")
+                    enhanced_script = enhance_script_with_video_annotations(script)
+                    
+                    # Log kết quả phân tích để debug
+                    video_scenes = sum(1 for scene in enhanced_script.get('scenes', []) if scene.get('prefer_video', False))
+                    logger.info(f"Kết quả phân tích: {video_scenes}/{len(scenes)} scene nên dùng video")
+                    
+                    return enhanced_script
+                else:
+                    logger.info("Tính năng video clips đang bị tắt trong cài đặt")
+                    return script
+            except ImportError as e:
+                logger.warning(f"Không thể import module scene_video_detector: {str(e)}")
+                return script
+            except Exception as e:
+                logger.error(f"Lỗi khi phân tích scene cho video: {str(e)}")
+                return script
             
         except Exception as e:
             logger.error(f"Lỗi khi tạo kịch bản: {str(e)}")

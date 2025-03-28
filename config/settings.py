@@ -58,7 +58,18 @@ VIDEO_SETTINGS = {
     "outro_duration": 5,  # seconds
     "image_duration": 5,  # seconds per image
     "background_music_volume": 0.1,
-    "format": "mp4"
+    "format": "mp4",
+    "enable_video_clips": True,          # Bật/tắt tính năng video clips
+    "video_clip_duration": 7,            # Thời lượng mong muốn cho video clips (giây)
+    "video_clip_frequency": 0.4,         # Tỷ lệ scene nên dùng video (0.0-1.0)
+    "min_scenes_between_videos": 1,      # Số scene tối thiểu giữa 2 video clips
+    "openai_model_for_scene_analysis": "gpt-4o-mini",  # Model để phân tích scene
+    "enable_transitions": True,
+    "transition_types": ["fade"],
+    "transition_duration": 0.8,
+    "enable_ken_burns": True,
+    "enable_background_music": True,
+    "music_volume": 0.1
 }
 
 # Cấu hình YouTube
