@@ -11,8 +11,8 @@ YOUTUBE_CLIENT_ID = os.getenv('YOUTUBE_CLIENT_ID')
 YOUTUBE_CLIENT_SECRET = os.getenv('YOUTUBE_CLIENT_SECRET')
 YOUTUBE_REFRESH_TOKEN = os.getenv('YOUTUBE_REFRESH_TOKEN')
 SERPER_API_KEY = os.getenv('SERPER_API_KEY', '8f9c1cf90515e0b8bffe46642d627c28a5b24d84')
-PEXELS_API_KEY = "To8Cla26rOGn94KUV7mD30iHVVeLO27R9Xed36XuefIcWiAkuSq334my"
-PIXABAY_API_KEY = "49574020-31c90e293b7479c966d33aaa6"
+PEXELS_API_KEY = "your_pexels_api_key_here"
+PIXABAY_API_KEY = "your_pixabay_api_key_here"
 
 # Nếu không có trong biến môi trường, sử dụng giá trị cụ thể
 if not ELEVENLABS_API_KEY:
