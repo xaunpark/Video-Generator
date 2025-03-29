@@ -1,0 +1,20 @@
+# Môi trường ảo
+venv/
+env/
+
+# File cấu hình
+.env
+
+# Cache và log
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+# Thư mục tạm
+temp/
+output/
+
+# IDE
+.vscode/
+.idea/
