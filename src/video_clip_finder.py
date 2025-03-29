@@ -8,6 +8,7 @@ import time
 import shutil
 from urllib.parse import urlparse
 from moviepy.editor import VideoFileClip, concatenate_videoclips, vfx
+from src.fix_pillow import *
 
 # Import API keys and settings
 from config.credentials import PEXELS_API_KEY, PIXABAY_API_KEY
