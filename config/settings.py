@@ -74,7 +74,13 @@ VIDEO_SETTINGS = {
     "debug_disable_effects": True,
     "image_animation": "zoom",      # Các tùy chọn: "none", "zoom"
     "animation_intensity": 0.1,     # Từ 0.01 (rất nhẹ) đến 0.1 (rõ ràng hơn)
-    "animation_cycle_seconds": 5     # Thời gian để hoàn thành một chu kỳ hiệu ứng (giây)
+    "animation_cycle_seconds": 5,    # Thời gian để hoàn thành một chu kỳ hiệu ứng (giây)
+    # --- THÊM CẤU HÌNH CHO SLOW MOTION ---
+    "enable_slow_motion_fallback": True, # Bật/tắt tính năng này
+    # Tỷ lệ thời lượng tối thiểu của video so với audio để áp dụng slow motion
+    # Ví dụ: 0.8 nghĩa là video phải dài ít nhất 80% audio duration
+    "slow_motion_min_ratio": 0.8
+    # ------------------------------------
 }
 
 # Cấu hình YouTube
@@ -94,3 +100,6 @@ VOICE_SETTINGS = {
     "style": 0.0,  # Giọng đọc tin tức trung tính
     "use_speaker_boost": True
 }
+
+# Đường dẫn đến ffprobe (tương tự ffmpeg)
+FFPROBE_EXECUTABLE_PATH = "ffprobe" # Mặc định tìm trong PATH
