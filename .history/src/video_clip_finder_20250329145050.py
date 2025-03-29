@@ -92,36 +92,12 @@ class VideoClipFinder:
                 continue
                 
             try:
-
-                # Lấy tên của hàm nguồn để log
-                source_name = source_func.__name__.replace('_search_', '').replace('_videos', '').capitalize()
-                logger.info(f"--- Searching source: {source_name} ---") # Log tên nguồn
-
                 video_results = source_func(query)
                 
                 if video_results and len(video_results) > 0:
                     # Filter and sort videos by relevance and quality
                     suitable_videos = self._filter_videos(video_results, query)
                     
-                    # --- THÊM ĐOẠN LOG NÀY ---
-                    if suitable_videos:
-                        logger.info(f"--- Top {min(5, len(suitable_videos))} suitable videos found from {source_name} (Target Duration: {self.target_duration:.1f}s) ---")
-                        for i, video_data in enumerate(suitable_videos[:5]): # Log top 5
-                            vid_url = video_data.get("video_url", "N/A")
-                            vid_score = video_data.get("score", 0.0)
-                            vid_duration = video_data.get("duration", 0.0)
-                            vid_source = video_data.get("source", "Unknown")
-                            vid_dims = f"{video_data.get('width', 'N/A')}x{video_data.get('height', 'N/A')}"
-
-                            # Định dạng thông tin thời lượng
-                            duration_str = f"{vid_duration:.1f}s" if vid_duration > 0 else "Unknown"
-
-                            logger.info(f"{i+1}. Score: {vid_score:.2f} | Duration: {duration_str} | Dim: {vid_dims} | Source: {vid_source} | URL: {vid_url[:70]}...")
-                        logger.info("--- Attempting download/process from top results ---")
-                    else:
-                         logger.info(f"No suitable videos found from {source_name} after filtering.")
-                    # --- KẾT THÚC ĐOẠN LOG ---
-
                     if suitable_videos:
                         # Try to download top videos until success
                         for video_data in suitable_videos[:5]:  # Try top 5
@@ -143,7 +119,7 @@ class VideoClipFinder:
                                 logger.warning(f"Failed to download/process video {video_url}: {str(e)}")
                                 continue  # Try next video
             except Exception as e:
-                logger.warning(f"Error searching videos from source {source_name}: {str(e)}") # Sử dụng source_name đã lấy
+                logger.warning(f"Error searching videos from source {source_func.__name__}: {str(e)}")
                 continue  # Try next source
                 
         logger.warning(f"No suitable video clips found for query: '{query}'")
@@ -582,64 +558,3 @@ class VideoClipFinder:
                 return cache_path
                 
         return None
-    
-# --- CODE KIỂM THỬ DƯỚI ĐÂY ---
-# --- CHẠY BẰNG LỆNH: python -m src.video_clip_finder ---
-if __name__ == "__main__":
-    import logging
-    import pprint # Để in kết quả đẹp hơn
-
-    # --- Cấu hình Logging để thấy DEBUG messages ---
-    # Thay đổi level thành DEBUG để xem log chi tiết về chấm điểm
-    logging.basicConfig(
-        level=logging.DEBUG, # ĐẶT LÀ DEBUG
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    logger = logging.getLogger("VideoClipFinderTest")
-    # ----------------------------------------------
-
-    logger.info("--- Bắt đầu kiểm tra VideoClipFinder ---")
-
-    # --- Đảm bảo API Keys đã được cấu hình ---
-    # Script sẽ tự động đọc từ config/credentials.py
-    # Nếu PEXELS_API_KEY hoặc PIXABAY_API_KEY bị thiếu, script sẽ cảnh báo.
-    # -------------------------------------------
-
-    try:
-        # Khởi tạo Finder
-        finder = VideoClipFinder()
-
-        # --- Các tham số kiểm thử ---
-        test_query = "people walking on street" # Thay đổi query để kiểm tra
-        test_scene_content = "A busy street scene with pedestrians." # Ít quan trọng cho test này
-        test_output_dir = os.path.join(finder.temp_dir, "finder_test_output")
-        os.makedirs(test_output_dir, exist_ok=True)
-        test_output_path = os.path.join(test_output_dir, "test_clip.mp4")
-        test_target_duration = 10.0 # Đặt thời lượng mong muốn (ví dụ: 10 giây)
-        # ---------------------------
-
-        logger.info(f"Kiểm tra với query: '{test_query}', target duration: {test_target_duration}s")
-
-        # Gọi hàm tìm kiếm (hàm này sẽ gọi _filter_videos bên trong)
-        result_path = finder.find_video_clip(
-            test_query,
-            test_scene_content,
-            test_output_path,
-            target_duration=test_target_duration
-        )
-
-        if result_path:
-            logger.info(f"--- KIỂM TRA THÀNH CÔNG ---")
-            logger.info(f"Đã tìm và xử lý video: {result_path}")
-            logger.info("!!! Quan trọng: Kiểm tra log DEBUG ở trên để xem điểm thời lượng (Duration score) đã được tính đúng chưa.")
-        else:
-            logger.warning(f"--- KIỂM TRA KHÔNG TÌM THẤY VIDEO PHÙ HỢP ---")
-            logger.warning("Không tìm thấy video phù hợp cho query trên.")
-            logger.info("!!! Quan trọng: Kiểm tra log DEBUG ở trên để xem điểm thời lượng (Duration score) đã được tính như thế nào cho các video được tìm thấy (nếu có).")
-
-    except ValueError as ve:
-         logger.error(f"Lỗi cấu hình (thiếu API key?): {ve}")
-    except Exception as e:
-        logger.error(f"Lỗi trong quá trình kiểm tra: {e}", exc_info=True)
-
-    logger.info("--- Kết thúc kiểm tra VideoClipFinder ---")    

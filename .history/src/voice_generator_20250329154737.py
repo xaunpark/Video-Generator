@@ -278,8 +278,6 @@ class VoiceGenerator:
             logger.warning(f"Model không hợp lệ: {model}. Sử dụng model mặc định: {self.model}")
 
 # Test module nếu chạy trực tiếp
-# python -m src.voice_generator
-
 if __name__ == "__main__":
     # Script giả lập để test
     test_script = {

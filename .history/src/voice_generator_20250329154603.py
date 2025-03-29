@@ -131,50 +131,34 @@ class VoiceGenerator:
                 try:
                     scene_number = scene['number']
                     content = scene['content']
-
+                    
                     # Tên file
                     scene_audio_filename = f"scene_{scene_number}.mp3"
                     scene_audio_path = os.path.join(project_dir, scene_audio_filename)
-
+                    
                     # Tạo file âm thanh
                     self._generate_audio(content, scene_audio_path)
-
-                    # --- LẤY THỜI LƯỢNG THỰC TẾ CHO SCENE ---
-                    actual_scene_duration = 0.0
-                    try:
-                         # Kiểm tra file tồn tại trước khi đọc
-                        if os.path.exists(scene_audio_path):
-                            audio_info = mutagen.mp3.MP3(scene_audio_path)
-                            actual_scene_duration = audio_info.info.length # Thời lượng tính bằng giây
-                            logger.info(f"Thời lượng thực tế (mutagen) cho scene {scene_number}: {actual_scene_duration:.2f}s")
-                        else:
-                            logger.warning(f"File {scene_audio_path} không tồn tại sau khi tạo. Không thể lấy thời lượng.")
-                            actual_scene_duration = self._estimate_duration(content) # Fallback estimation
-
-                    except Exception as e:
-                        logger.warning(f"Lỗi khi đọc thời lượng file {scene_audio_path} bằng mutagen: {e}. Sử dụng ước tính.")
-                        actual_scene_duration = self._estimate_duration(content) # Fallback estimation
-                    # --- KẾT THÚC LẤY THỜI LƯỢNG ---
-
-                    # Ghi âm thành công, thêm thông tin vào danh sách với thời lượng thực tế
+                    
+                    # Ghi âm thành công, thêm thông tin vào danh sách
+                    duration = self._estimate_duration(content)
+                    
                     audio_files.append({
                         "type": "scene",
                         "number": scene_number,
                         "path": scene_audio_path,
-                        "duration": actual_scene_duration, # <-- SỬ DỤNG THỜI LƯỢNG THỰC TẾ
+                        "duration": duration,
                         "content": content
                     })
-
-                    # Bỏ log cũ nếu không cần thiết nữa
-                    # logger.info(f"Đã tạo file âm thanh cho phân cảnh {scene_number}")
+                    
+                    logger.info(f"Đã tạo file âm thanh cho phân cảnh {scene_number}")
                 except Exception as e:
                     logger.error(f"Lỗi khi tạo file âm thanh cho phân cảnh {scene.get('number', 'unknown')}: {str(e)}")
-
-        # Lưu thông tin các file âm thanh (không cần sửa hàm này)
+        
+        # Lưu thông tin các file âm thanh
         self._save_audio_info(audio_files, script['title'], project_dir)
-
-        logger.info(f"Đã tạo {len(audio_files)} file âm thanh cho kịch bản (với thời lượng thực tế)")
-
+        
+        logger.info(f"Đã tạo {len(audio_files)} file âm thanh cho kịch bản")
+        
         return audio_files
     
     def _generate_audio(self, text, output_path):
@@ -232,10 +216,10 @@ class VoiceGenerator:
         return script.get('title', '')
     
     def _estimate_duration(self, text):
-        """Ước tính thời lượng của đoạn âm thanh dựa trên số từ (DÙNG LÀM FALLBACK)"""
+        """Ước tính thời lượng của đoạn âm thanh dựa trên số từ"""
         # Tiếng Anh: trung bình 3 từ/giây khi đọc
         words = text.split()
-        return len(words) / 3.0 if len(words) > 0 else 0.0
+        return len(words) / 3
     
     def _save_audio_info(self, audio_files, title, project_dir):
         """Lưu thông tin âm thanh vào file JSON"""
@@ -278,8 +262,6 @@ class VoiceGenerator:
             logger.warning(f"Model không hợp lệ: {model}. Sử dụng model mặc định: {self.model}")
 
 # Test module nếu chạy trực tiếp
-# python -m src.voice_generator
-
 if __name__ == "__main__":
     # Script giả lập để test
     test_script = {

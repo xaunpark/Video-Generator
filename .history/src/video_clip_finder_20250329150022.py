@@ -92,36 +92,12 @@ class VideoClipFinder:
                 continue
                 
             try:
-
-                # Lấy tên của hàm nguồn để log
-                source_name = source_func.__name__.replace('_search_', '').replace('_videos', '').capitalize()
-                logger.info(f"--- Searching source: {source_name} ---") # Log tên nguồn
-
                 video_results = source_func(query)
                 
                 if video_results and len(video_results) > 0:
                     # Filter and sort videos by relevance and quality
                     suitable_videos = self._filter_videos(video_results, query)
                     
-                    # --- THÊM ĐOẠN LOG NÀY ---
-                    if suitable_videos:
-                        logger.info(f"--- Top {min(5, len(suitable_videos))} suitable videos found from {source_name} (Target Duration: {self.target_duration:.1f}s) ---")
-                        for i, video_data in enumerate(suitable_videos[:5]): # Log top 5
-                            vid_url = video_data.get("video_url", "N/A")
-                            vid_score = video_data.get("score", 0.0)
-                            vid_duration = video_data.get("duration", 0.0)
-                            vid_source = video_data.get("source", "Unknown")
-                            vid_dims = f"{video_data.get('width', 'N/A')}x{video_data.get('height', 'N/A')}"
-
-                            # Định dạng thông tin thời lượng
-                            duration_str = f"{vid_duration:.1f}s" if vid_duration > 0 else "Unknown"
-
-                            logger.info(f"{i+1}. Score: {vid_score:.2f} | Duration: {duration_str} | Dim: {vid_dims} | Source: {vid_source} | URL: {vid_url[:70]}...")
-                        logger.info("--- Attempting download/process from top results ---")
-                    else:
-                         logger.info(f"No suitable videos found from {source_name} after filtering.")
-                    # --- KẾT THÚC ĐOẠN LOG ---
-
                     if suitable_videos:
                         # Try to download top videos until success
                         for video_data in suitable_videos[:5]:  # Try top 5
@@ -143,7 +119,7 @@ class VideoClipFinder:
                                 logger.warning(f"Failed to download/process video {video_url}: {str(e)}")
                                 continue  # Try next video
             except Exception as e:
-                logger.warning(f"Error searching videos from source {source_name}: {str(e)}") # Sử dụng source_name đã lấy
+                logger.warning(f"Error searching videos from source {source_func.__name__}: {str(e)}")
                 continue  # Try next source
                 
         logger.warning(f"No suitable video clips found for query: '{query}'")
