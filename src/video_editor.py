@@ -45,6 +45,15 @@ class VideoEditor:
         self.width = VIDEO_SETTINGS.get("width", 1920)
         self.height = VIDEO_SETTINGS.get("height", 1080)
         self.fps = VIDEO_SETTINGS.get("fps", 24)
+
+        # === THÊM DÒNG NÀY ĐỂ TÌM FFMPEG ===
+        self.ffmpeg_path = shutil.which("ffmpeg") # Tìm đường dẫn ffmpeg trong PATH
+        if not self.ffmpeg_path:
+            logger.error("Không tìm thấy FFmpeg trong PATH hệ thống!")
+            raise FileNotFoundError("FFmpeg không được tìm thấy. Hãy cài đặt và thêm vào PATH.")
+        else:
+            logger.info(f"Đã tìm thấy FFmpeg tại: {self.ffmpeg_path}")
+        # ===================================
         
         # Tạo thư mục tạm để lưu các video scene
         self.temp_video_dir = os.path.join(self.temp_dir, "scene_videos")
