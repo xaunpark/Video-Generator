@@ -50,6 +50,8 @@ class VideoEditor:
         self.ffmpeg_path = shutil.which("ffmpeg") # Tìm đường dẫn ffmpeg trong PATH
         if not self.ffmpeg_path:
             logger.error("Không tìm thấy FFmpeg trong PATH hệ thống!")
+            logger.error("Vui lòng cài đặt FFmpeg và đảm bảo nó được thêm vào biến môi trường PATH.")
+            logger.error("Tải FFmpeg tại: https://ffmpeg.org/download.html")
             raise FileNotFoundError("FFmpeg không được tìm thấy. Hãy cài đặt và thêm vào PATH.")
         else:
             logger.info(f"Đã tìm thấy FFmpeg tại: {self.ffmpeg_path}")

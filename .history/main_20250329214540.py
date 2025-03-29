@@ -190,7 +190,6 @@ def main():
         json.dump(image_info, f, ensure_ascii=False, indent=2)
     
     logger.info(f"Saved image information at: {images_path}")
-    ###---KẾT THÚC KHỐI TẠO IMAGE---
 
     # Save project information
     project_info = {
