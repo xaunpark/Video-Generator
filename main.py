@@ -158,10 +158,10 @@ def main():
     if 'image_url' in selected_article:
         script['image_url'] = selected_article['image_url']
     
-    # Generate images
-    images = image_generator.generate_images_for_script(script)
+    # Generate images (Truyền thêm audio_files vào generate_images_for_script)
+    images = image_generator.generate_images_for_script(script, audio_files_info=audio_files)
     
-    logger.info(f"Generated {len(images)} images for script")
+    logger.info(f"Generated {len(images)} images/videos for script")
     
     # Save image information
     images_path = os.path.join(TEMP_DIR, f"images_{timestamp}.json")
@@ -183,6 +183,12 @@ def main():
     
     logger.info(f"Generated {len(audio_files)} audio files for script")
     
+    # --- THÊM KIỂM TRA audio_files ---
+    if not audio_files:
+        logger.error("Audio generation failed or returned empty list. Cannot proceed with image/video generation.")
+        return # Thoát nếu không có audio
+
+
     # Save project information
     project_info = {
         "title": script['title'],
@@ -236,15 +242,21 @@ def main():
 
         output_path = os.path.join(OUTPUT_DIR, video_filename)
 
-        # Get the directory where audio files are stored
-        audio_dir = os.path.dirname(audio_files[0]['path']) if audio_files else None
+        # Cần lấy audio_dir từ audio_files (ví dụ: từ file đầu tiên)
+        audio_dir = None
+        if audio_files and audio_files[0].get('path'):
+            audio_dir = os.path.dirname(audio_files[0]['path'])
+
+        if not audio_dir:
+            logger.error("Could not determine audio directory. Cannot create video.")
+            return
 
         # Create video with correct parameter order
         output_path = video_editor.create_video(
             script=script,                 # First parameter should be the script
-            media_items=images,            # Second parameter should be the media items (images)
+            media_items=images,            # Sử dụng biến images (giờ chứa cả video clips)
             audio_dir=audio_dir,           # Third parameter should be the audio directory
-            output_path=output_path        # Fourth parameter should be the output path
+            output_path=output_path        # output_path đã tính toán trước đó
         )
 
         # Added completion message
@@ -256,7 +268,7 @@ def main():
         print("="*50 + "\n")
         
     except Exception as e:
-        logger.error(f"Error creating video: {str(e)}")
+        logger.error(f"Error creating video: {str(e)}", exc_info=True)
 
 if __name__ == "__main__":
     main()
