@@ -67,9 +67,14 @@ VIDEO_SETTINGS = {
     "enable_transitions": True,
     "transition_types": ["fade"],
     "transition_duration": 0.8,
-    "enable_ken_burns": True,
     "enable_background_music": True,
-    "music_volume": 0.1
+    "music_volume": 0.1,
+    # Cài đặt hiệu ứng cho ảnh tĩnh
+    "enable_ken_burns": False,
+    "debug_disable_effects": True,
+    "image_animation": "zoom",      # Các tùy chọn: "none", "zoom"
+    "animation_intensity": 0.1,     # Từ 0.01 (rất nhẹ) đến 0.1 (rõ ràng hơn)
+    "animation_cycle_seconds": 5     # Thời gian để hoàn thành một chu kỳ hiệu ứng (giây)
 }
 
 # Cấu hình YouTube

@@ -1,0 +1,130 @@
+=== TEST TRÍCH XUẤT NỘI DUNG (2025-03-28 03:19:43) ===
+
+--- BÀI BÁO #1 ---
+Tiêu đề: Markets digest bank earnings after recent turmoil
+Nguồn: CNN
+URL: https://www.cnn.com/business/live-news/stock-market-bank-earnings/index.html
+Độ dài nội dung: 2276 ký tự
+Số từ: 362 từ
+Số dòng: 17 dòng
+
+=== NỘI DUNG ĐẦY ĐỦ ===
+Chief executives at some of the largest banks in the United States were forced to address the elephant in the room as they reported first-quarter earnings on Friday morning: The regional banking crisis that brought Silicon Valley Bank and Signature Bank to ruin last month.
+
+> Banking industry turmoil has added to risks of recessionary “storm clouds” on the horizon, said JPMorgan Chase CEO Jamie Dimon Friday in a release. He added that “the banking situation is distinct from 2008 as it has involved far fewer financial players and fewer issues that need to be resolved.”
+
+Still, said Dimon, who leads the country’s largest bank, “financial conditions will likely tighten as lenders become more conservative, and we do not know if this will slow consumer spending.”
+
+>“We are glad to have been in a strong position to help support the US financial system during the recent events that impacted the banking industry,” commented Wells Fargo CEO Charlie Scharf in a statement. “Regional and community banks are an important part of our financial system and are uniquely positioned to serve their customers and communities.”
+
+> “I believe today’s crisis of confidence in the regional banking sector will further accelerate capital markets growth, and BlackRock will be a central player,” wrote BlackRock CEO Larry Fink on Friday.
+
+“Increased financing through the capital markets will require the scale, multi-asset capabilities and excellence in portfolio construction that BlackRock consistently delivers across market cycles,” he said in a statement.
+
+That means bad news for regional banks could be good news for BlackRock – the lack of trust in regional banks will drive more investment into capital markets and BlackRock is poised to benefit as that happens.
+
+“Throughout our history, moments of market dislocation and disruption have served as inflection points for BlackRock,” he explained.
+
+Regulators also hired BlackRock in early April to help the US government in the sale of the $114 billion in assets it collected from the collapse> Citigroup and PNC did not address the banking crisis in their releases, but will likely answer questions about how they’ve weathered the turmoil and what they see ahead at their first-quarter presentations, planned for 11 a.m. ET.
+
+=== TÓM TẮT ===
+
+
+--------------------------------------------------------------------------------
+
+--- BÀI BÁO #2 ---
+Tiêu đề: Still haven't filed your taxes? Here's what you need to know
+Nguồn: CNN
+URL: https://www.cnn.com/2023/04/13/success/tax-filing-tips/index.html
+Độ dài nội dung: 7531 ký tự
+Số từ: 1304 từ
+Số dòng: 81 dòng
+
+=== NỘI DUNG ĐẦY ĐỦ ===
+New York CNN —
+
+So far this tax season, the IRS has received more than 100 million income tax returns for 2022.
+
+That means tens of millions of households have yet to file their returns. If yours is among them, here are some last-minute tax-filing tips to keep in mind as the Tuesday, April 18 deadline approaches.
+
+Not everyone has to file on April 18: If you live in a federally declared disaster area, have a business there — or have relevant tax documents stored by businesses in that area — it’s likely the IRS has already extended the filing and payment deadlines for you. Here is where you can find the specific extension dates for each disaster area.
+
+Thanks to many rounds of extreme weather in recent months, for instance, tax filers in most of California — which accounts for 10% to 15% of all federal filers — have already been granted an extension until Oct. 16 to file and to pay, according to an IRS spokesperson.
+
+If you’re in the armed forces and are currently or were recently stationed in a combat zone, the filing and payment deadlines for your 2022 taxes are most likely extended by 180 days. But your specific extended filing and payment deadlines will depend on the day you leave (or left) the combat zone. This IRS publication offers more detail.
+
+Lastly, if you made little to no money last year (typically less than $12,950 for single filers and $25,900 for married couples), you may not be required to file a return. But you may want to anyway if you think you are eligible for a refund thanks to, for instance, refundable tax credits such as the Earned Income Tax Credit. (Use this IRS tool to gauge whether you are required to file this year.) You also are likely eligible to use IRS Free File (intended for those with adjusted gross income of $73,000 or less) so it won’t cost you to submit a return.
+
+Your paycheck may not be your only source of income: If you had one full-time job you may think that is the only income you made and have to report. But that’s not necessarily so.
+
+Other potentially taxable and reportable income sources include:
+
+Interest on your savings
+
+Investment income (e.g., dividends and capital gains)
+
+Pay for part-time or seasonal work, or a side hustle
+
+Unemployment income
+
+Social Security benefits or distribution from a retirement account
+
+Tips
+
+Gambling winnings
+
+Income from a rental property you own
+
+Organize your tax documents: By now you should have received every tax document that third parties are required to send you (your employer, bank, brokerage, etc.).
+
+If you don’t recall receiving a hard copy of a tax form in the mail, check your email and your online accounts — a document may have been sent to you electronically.
+
+Here are some of the tax forms you may have received:
+
+W-2 from your wage or salaried jobs
+
+from your wage or salaried jobs 1099-B for capital gains and losses on your investments
+
+for capital gains and losses on your investments 1099-DIV from your brokerage or company where you own stock for dividends or other distributions from their investments
+
+from your brokerage or company where you own stock for dividends or other distributions from their investments 1099-INT for interest over $10 on your savings at a financial institution
+
+for interest over $10 on your savings at a financial institution 1099-NEC from your clients, if you worked as a contractor
+
+from your clients, if you worked as a contractor 1099-K for payments for goods and services through third-party platforms like Venmo, CashApp or Etsy. The 1099-K is required if you made more than $20,000 in over 200 transactions during the year. (Next year the reporting threshold drops to $600.) But even if you didn’t get a 1099-K you still must report all the income that you made over third-party platforms in 2022.
+
+for payments for goods and services through third-party platforms like Venmo, CashApp or Etsy. The 1099-K is required if you made more than $20,000 in over 200 transactions during the year. (Next year the reporting threshold drops to $600.) But even if you didn’t get a 1099-K you still must report all the income that you made over third-party platforms in 2022. 1099-Rs for distributions over $10 that you received for a pension, annuity, retirement account, profit-sharing plan or insurance contract
+
+for distributions over $10 that you received for a pension, annuity, retirement account, profit-sharing plan or insurance contract SSA-1099 or SSA-1042S for Social Security benefits received.
+
+“Be aware that there’s no form for some taxable income, like proceeds from renting out your vacation property, meaning you’re responsible for reporting it on your own,” according to the Illinois CPA Society.
+
+One very last-minute way to reduce your 2022 tax bill: If you’re eligible to make a tax-deductible contribution to an IRA and haven’t done so for last year, you have until April 18 to contribute up to $6,000 ($7,000 if you’re 50 or older). That will reduce your tax bill and augment your retirement savings.
+
+Proofread your return before submitting it: Do this whether you’re using tax software or working with a professional tax preparer.
+
+Little mistakes and oversights delay the processing of your return (and the issuance of your refund if you’re owed one). You want to avoid things like having a typo in your name, birth date, Social Security number or direct deposit number; choosing the wrong filing status (e.g., married vs single); making a simple math error; or leaving a required field blank.
+
+What to do if you can’t file by April 18: If you’re not able to file by next Tuesday, fill out Form 4868 electronically or on paper and send it in by April 18. You will be granted an automatic six-month extension to file.
+
+Note, however, that an extension to file is not an extension to pay. You will be charged interest (currently running at 7%) and a penalty on any amount you still owe for 2022 but haven’t paid by April 18.
+
+So if you suspect you still owe tax — perhaps you had some income outside of your job for which tax wasn’t withheld or you had a big capital gain last year — approximate how much more you owe and send that money to the IRS by Tuesday.
+
+You can choose to do so by mail, attaching a check to your extension request form. Make sure your envelope is postmarked no later than April 18.
+
+Or the more efficient route is pay what you owe electronically at IRS.gov, said CPA Damien Martin, a tax partner at EY. If you do that, the IRS notes you will not have to file a Form 4868. “The IRS will automatically process an extension of time to file,” the agency notes in its instructions.
+
+If you opt to electronically pay directly from your bank account, which is free, select “extension” and then “tax year 2022” when given the option.
+
+You can also pay by credit or debit card, but you will be charged a processing fee. Doing so, though, may become much more costly than just a fee if you charge your tax payment but don’t pay your credit card bill off in full every month, since you likely pay a high interest rate on outstanding balances.
+
+If you still owe income taxes to your state, remember that you may need to go through a similar exercise of filing for an extension and making a payment to your state’s revenue department, Martin said.
+
+Use this interactive tax assistant for basic questions you may have: The IRS provides an “interactive tax assistant” that can help you answer more than 50 basic questions pertaining to your individual circumstance on income, deductions, credits and other technical questions.
+
+=== TÓM TẮT ===
+So far this tax season, the IRS has received more than 90 million income tax returns for 2022.
+
+--------------------------------------------------------------------------------
+

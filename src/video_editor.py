@@ -11,12 +11,17 @@ import shutil
 import random
 import time
 import json
+import math
+import subprocess
+import tempfile
+
 from moviepy.editor import (
     VideoFileClip, ImageClip, AudioFileClip, CompositeVideoClip, 
     concatenate_videoclips, TextClip
 )
 import moviepy.video.fx.all as vfx
 from moviepy.audio.AudioClip import CompositeAudioClip
+from src.fix_pillow import *
 
 # Import cấu hình từ project
 from config.settings import TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS
@@ -28,7 +33,7 @@ logger = logging.getLogger(__name__)
 class VideoEditor:
     """
     Class để tạo video tin tức từ ảnh, video clips và audio.
-    Hỗ trợ hiệu ứng Ken Burns cho ảnh, transitions giữa các cảnh, và nhạc nền.
+    Hỗ trợ hiệu ứng cho ảnh, transitions giữa các cảnh, và nhạc nền.
     """
     
     def __init__(self):
@@ -50,14 +55,17 @@ class VideoEditor:
         self.transition_types = VIDEO_SETTINGS.get("transition_types", ["fade"])
         self.transition_duration = VIDEO_SETTINGS.get("transition_duration", 0.8)
         
-        # Cài đặt hiệu ứng Ken Burns cho ảnh tĩnh
-        self.enable_ken_burns = VIDEO_SETTINGS.get("enable_ken_burns", True)
+        # Cài đặt hiệu ứng cho ảnh tĩnh
+        self.image_animation = VIDEO_SETTINGS.get("image_animation", "zoom")
+        self.animation_intensity = VIDEO_SETTINGS.get("animation_intensity", 0.02)
+        self.animation_cycle_seconds = VIDEO_SETTINGS.get("animation_cycle_seconds", 5)
         
         # Cài đặt nhạc nền
         self.enable_background_music = VIDEO_SETTINGS.get("enable_background_music", False)
         self.music_volume = VIDEO_SETTINGS.get("music_volume", 0.1)
         
         logger.info(f"VideoEditor đã khởi tạo. Kích thước video: {self.width}x{self.height}, FPS: {self.fps}")
+        logger.info(f"Hiệu ứng ảnh: {self.image_animation}, Cường độ: {self.animation_intensity}")
     
     def create_video(self, script, media_items, audio_dir, output_path):
         """
@@ -188,16 +196,9 @@ class VideoEditor:
     def process_scene_media(self, media_item, audio_path, output_path):
         """
         Xử lý media (ảnh hoặc video) cho một scene và kết hợp với audio.
-        
-        Args:
-            media_item (dict): Thông tin media (type, path, etc.)
-            audio_path (str): Đường dẫn đến file audio
-            output_path (str): Đường dẫn lưu video đầu ra
-            
-        Returns:
-            str: Đường dẫn đến file video đã tạo
+        Phiên bản tối ưu về độ ổn định, không sử dụng hiệu ứng phức tạp.
         """
-        media_type = media_item.get('type', 'image')  # 'image' hoặc 'video'
+        media_type = media_item.get('type', 'image')
         media_path = media_item.get('path')
         scene_number = media_item.get('number', 'unknown')
         
@@ -209,291 +210,290 @@ class VideoEditor:
         
         logger.info(f"Xử lý scene {scene_number} với {media_type} từ {os.path.basename(media_path)}")
         
-        # Đọc audio
-        audio_clip = AudioFileClip(audio_path)
-        audio_duration = audio_clip.duration
+        # Lấy thông tin audio
+        audio_info = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", audio_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        audio_data = json.loads(audio_info.stdout)
+        audio_duration = float(audio_data["format"]["duration"])
         logger.info(f"Thời lượng audio: {audio_duration:.2f}s")
         
-        # Xử lý theo loại media
+        # Xử lý video hoặc ảnh
         if media_type == 'video':
             # Xử lý video clip
             try:
-                video_clip = VideoFileClip(media_path)
+                # Tạo file tạm
+                temp_video = output_path + ".temp.mp4"
                 
-                # Kiểm tra thời lượng video
-                logger.info(f"Thời lượng video gốc: {video_clip.duration:.2f}s")
+                # Sử dụng ffmpeg trực tiếp thay vì MoviePy
+                video_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", media_path,
+                    "-t", str(audio_duration),
+                    "-vf", f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2",
+                    "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+                    "-pix_fmt", "yuv420p", "-r", str(self.fps),
+                    "-an",  # Không bao gồm audio
+                    temp_video
+                ]
                 
-                # Nếu video ngắn hơn audio, lặp lại video
-                if video_clip.duration < audio_duration:
-                    logger.info(f"Video ngắn hơn audio. Lặp lại video để phù hợp.")
-                    video_clip = video_clip.fx(vfx.loop, duration=audio_duration)
+                logger.info(f"Xử lý video clip: {' '.join(video_cmd)}")
+                subprocess.run(video_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
-                # Nếu video dài hơn, cắt bớt
-                elif video_clip.duration > audio_duration:
-                    logger.info(f"Video dài hơn audio. Cắt bớt để phù hợp.")
-                    video_clip = video_clip.subclip(0, audio_duration)
+                # Kết hợp video và audio
+                output_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", temp_video,
+                    "-i", audio_path,
+                    "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-shortest",
+                    output_path
+                ]
                 
-                # Đảm bảo kích thước video đúng
-                if video_clip.size != (self.width, self.height):
-                    logger.info(f"Điều chỉnh kích thước video từ {video_clip.size} thành {(self.width, self.height)}")
-                    video_clip = video_clip.resize(width=self.width, height=self.height)
+                logger.info(f"Kết hợp video và audio: {' '.join(output_cmd)}")
+                subprocess.run(output_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
-                # Thêm audio
-                final_clip = video_clip.set_audio(audio_clip)
+                # Xóa file tạm
+                if os.path.exists(temp_video):
+                    os.remove(temp_video)
+                    
+                logger.info(f"Đã xử lý video clip thành công: {output_path}")
                 
-                # Tùy chọn: Thêm hiệu ứng video để tăng chất lượng
-                if VIDEO_SETTINGS.get("enhance_video", False):
-                    logger.info("Áp dụng hiệu ứng tăng cường chất lượng video")
-                    final_clip = final_clip.fx(vfx.colorx, 1.1)  # Tăng cường màu sắc nhẹ
-                
-            except Exception as e:
-                logger.error(f"Lỗi khi xử lý video: {str(e)}", exc_info=True)
-                # Fallback: Nếu xử lý video thất bại, chuyển sang xử lý như ảnh tĩnh
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Lỗi ffmpeg khi xử lý video: {e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)}")
                 logger.info("Chuyển sang xử lý như ảnh tĩnh do lỗi video")
+                media_type = 'image'
+            except Exception as e:
+                logger.error(f"Lỗi khi xử lý video: {str(e)}")
+                logger.info("Chuyển sang xử lý như ảnh tĩnh do lỗi")
                 media_type = 'image'
         
         if media_type == 'image':
-            # Xử lý ảnh tĩnh
+            # Xử lý ảnh tĩnh (với hiệu ứng zoom nhẹ)
             try:
-                # Đọc ảnh và tạo clip với thời lượng bằng audio
-                image_clip = ImageClip(media_path, duration=audio_duration)
+                # Tạo video tạm từ ảnh (không có audio)
+                temp_video = output_path + ".temp.mp4"
                 
-                # Thêm hiệu ứng Ken Burns nếu được bật
-                if self.enable_ken_burns:
-                    # Chọn ngẫu nhiên kiểu hiệu ứng Ken Burns
-                    ken_burns_type = random.choice(['zoom_in', 'zoom_out', 'pan_left', 'pan_right'])
-                    logger.info(f"Áp dụng hiệu ứng Ken Burns: {ken_burns_type}")
+                # Lấy cài đặt hiệu ứng từ VIDEO_SETTINGS
+                animation_type = VIDEO_SETTINGS.get("image_animation", "zoom")
+                intensity = VIDEO_SETTINGS.get("animation_intensity", 0.02)
+                cycle_seconds = VIDEO_SETTINGS.get("animation_cycle_seconds", 5)
+                
+                # Xác định filter dựa trên loại hiệu ứng
+                vf_filter = ""
+                if animation_type == "none":
+                    # Không có hiệu ứng, chỉ scale và pad
+                    vf_filter = f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2"
+                elif animation_type == "zoom":
+                    # Lấy cường độ zoom từ cấu hình
+                    intensity = VIDEO_SETTINGS.get("animation_intensity", 0.02) # Ví dụ: 0.02 nghĩa là zoom tối đa 2%
+                    # Tính tổng số khung hình
+                    total_frames = int(self.fps * audio_duration)
+                    # --- DÒNG MỚI (Sử dụng zoom tuyến tính) ---
+                    # Công thức: zoom từ 1.0 lên 1.0 + intensity trong total_frames
+                    # Biến 'on' đại diện cho số khung hình hiện tại (từ 0 đến total_frames - 1)
+                    vf_filter = f"zoompan=z='1+({intensity}*on/{total_frames})':d={total_frames}:s={self.width}x{self.height}"
+                    logger.info(f"Sử dụng hiệu ứng zoom tuyến tính cho scene {scene_number}") # Thêm log để biết đang dùng hiệu ứng nào
+                else:
+                    # Mặc định không có hiệu ứng nếu cấu hình không hợp lệ
+                    vf_filter = f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2"
+                    logger.warning(f"Loại hiệu ứng '{animation_type}' không được hỗ trợ, sử dụng ảnh tĩnh")
+                
+                # Sử dụng ffmpeg với filter đã xác định
+                image_cmd = [
+                    "ffmpeg", "-y",
+                    "-loop", "1",
+                    "-i", media_path,
+                    "-t", str(audio_duration),
+                    "-vf", vf_filter,
+                    "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+                    "-pix_fmt", "yuv420p", "-r", str(self.fps),
+                    "-shortest",
+                    "-an",  # Không bao gồm audio
+                    temp_video
+                ]
+                
+                logger.info(f"Tạo video từ ảnh tĩnh với hiệu ứng {animation_type}: {' '.join(image_cmd)}")
+                subprocess.run(image_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                
+                # Kiểm tra video tạm có hợp lệ không
+                if not os.path.exists(temp_video) or os.path.getsize(temp_video) < 10000:
+                    raise Exception(f"Video tạm không hợp lệ hoặc quá nhỏ: {temp_video}")
+                
+                # Kết hợp video và audio
+                output_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", temp_video,
+                    "-i", audio_path,
+                    "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-shortest",
+                    output_path
+                ]
+                
+                logger.info(f"Kết hợp ảnh video và audio: {' '.join(output_cmd)}")
+                subprocess.run(output_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                
+                # Xóa file tạm
+                if os.path.exists(temp_video):
+                    os.remove(temp_video)
                     
-                    if ken_burns_type == 'zoom_in':
-                        # Zoom từ 100% lên 105%
-                        zoom_factor = lambda t: 1 + (0.05 * t / audio_duration)
-                        image_clip = image_clip.resize(zoom_factor)
+                logger.info(f"Đã xử lý ảnh tĩnh thành công với hiệu ứng {animation_type}: {output_path}")
+                
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Lỗi ffmpeg khi xử lý ảnh: {e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)}")
+                
+                # Thử lại với hiệu ứng tắt nếu có lỗi
+                logger.info("Thử lại với ảnh tĩnh không có hiệu ứng")
+                try:
+                    temp_video = output_path + ".static.mp4"
                     
-                    elif ken_burns_type == 'zoom_out':
-                        # Zoom từ 105% xuống 100%
-                        zoom_factor = lambda t: 1.05 - (0.05 * t / audio_duration)
-                        image_clip = image_clip.resize(zoom_factor)
+                    # Tạo video từ ảnh tĩnh không có hiệu ứng
+                    static_cmd = [
+                        "ffmpeg", "-y",
+                        "-loop", "1",
+                        "-i", media_path,
+                        "-t", str(audio_duration),
+                        "-vf", f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2",
+                        "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+                        "-pix_fmt", "yuv420p", "-r", str(self.fps),
+                        "-shortest",
+                        "-an",
+                        temp_video
+                    ]
                     
-                    elif ken_burns_type == 'pan_left':
-                        # Pan từ phải sang trái
-                        def pan_position(t):
-                            progress = t / audio_duration
-                            x_offset = int(self.width * 0.05 * progress)
-                            return ('center', f"{-x_offset}px")
+                    logger.info(f"Tạo video từ ảnh tĩnh không có hiệu ứng: {' '.join(static_cmd)}")
+                    subprocess.run(static_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    
+                    # Kết hợp video và audio
+                    static_output_cmd = [
+                        "ffmpeg", "-y",
+                        "-i", temp_video,
+                        "-i", audio_path,
+                        "-c:v", "copy",
+                        "-c:a", "aac", "-b:a", "192k",
+                        "-shortest",
+                        output_path
+                    ]
+                    
+                    logger.info(f"Kết hợp video tĩnh và audio: {' '.join(static_output_cmd)}")
+                    subprocess.run(static_output_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    
+                    # Xóa file tạm
+                    if os.path.exists(temp_video):
+                        os.remove(temp_video)
                         
-                        image_clip = image_clip.resize(1.05).set_position(pan_position)
+                    logger.info(f"Đã xử lý ảnh tĩnh thành công không có hiệu ứng: {output_path}")
                     
-                    elif ken_burns_type == 'pan_right':
-                        # Pan từ trái sang phải
-                        def pan_position(t):
-                            progress = t / audio_duration
-                            x_offset = int(self.width * 0.05 * (1 - progress))
-                            return ('center', f"{-x_offset}px")
-                        
-                        image_clip = image_clip.resize(1.05).set_position(pan_position)
-                
-                # Thêm audio
-                final_clip = image_clip.set_audio(audio_clip)
-                
+                except Exception as static_e:
+                    logger.error(f"Lỗi khi xử lý ảnh tĩnh không có hiệu ứng: {str(static_e)}")
+                    raise
             except Exception as e:
-                logger.error(f"Lỗi khi xử lý ảnh: {str(e)}", exc_info=True)
+                logger.error(f"Lỗi khi xử lý ảnh: {str(e)}")
                 raise
-        
-        # Xuất video scene
-        try:
-            final_clip.write_videofile(
-                output_path,
-                codec='libx264',
-                audio_codec='aac',
-                fps=self.fps,
-                preset='medium',
-                threads=4
-            )
-            logger.info(f"Đã tạo video scene thành công: {output_path}")
-        except Exception as e:
-            logger.error(f"Lỗi khi xuất video scene: {str(e)}", exc_info=True)
-            raise
-        
-        # Đóng các clips để giải phóng bộ nhớ
-        try:
-            if 'audio_clip' in locals() and audio_clip is not None:
-                audio_clip.close()
-            if 'final_clip' in locals() and final_clip is not None:
-                final_clip.close()
-        except Exception as e:
-            logger.warning(f"Lỗi khi đóng clips: {str(e)}")
         
         return output_path
     
     def concatenate_scene_videos(self, scene_videos, output_path):
         """
-        Nối tất cả video của các scene thành một video liên tục với transitions.
-        
-        Args:
-            scene_videos (list): Danh sách các đường dẫn tới video scenes
-            output_path (str): Đường dẫn để lưu video cuối cùng
-            
-        Returns:
-            str: Đường dẫn tới video cuối cùng
+        Nối tất cả video của các scene thành một video liên tục.
+        Phiên bản đơn giản và ổn định nhất.
         """
         if not scene_videos:
             raise ValueError("Không có scene videos để nối")
         
         logger.info(f"Nối {len(scene_videos)} video scenes thành video cuối cùng")
         
-        # Đọc tất cả clip
-        video_clips = []
-        total_duration = 0
+        # Tạo file danh sách chứa các video hợp lệ
+        valid_videos = []
+        for video_path in scene_videos:
+            if os.path.exists(video_path) and os.path.getsize(video_path) > 10000:
+                valid_videos.append(video_path)
+            else:
+                logger.warning(f"Bỏ qua video không hợp lệ: {video_path}")
         
-        for i, video_path in enumerate(scene_videos):
-            try:
-                if not os.path.exists(video_path):
-                    logger.warning(f"Không tìm thấy video {i+1}: {video_path}. Bỏ qua.")
-                    continue
-                    
-                clip = VideoFileClip(video_path)
-                video_clips.append(clip)
-                total_duration += clip.duration
-                logger.info(f"Đọc video {i+1}: {os.path.basename(video_path)}, thời lượng: {clip.duration:.2f}s")
-            except Exception as e:
-                logger.error(f"Lỗi khi đọc video {i+1} ({video_path}): {str(e)}")
-                # Tiếp tục với clip khác
+        if not valid_videos:
+            raise ValueError("Không có video hợp lệ để nối")
         
-        if not video_clips:
-            raise Exception("Không có clip hợp lệ để nối")
+        # Tạo file danh sách
+        concat_list = os.path.join(self.temp_dir, f"concat_list_{int(time.time())}.txt")
+        with open(concat_list, 'w', encoding='utf-8') as f:
+            for video in valid_videos:
+                # Escape path for ffmpeg
+                escaped_path = video.replace('\\', '/')
+                f.write(f"file '{escaped_path}'\n")
         
-        logger.info(f"Tổng thời lượng: {total_duration:.2f}s")
-        
-        # Tùy chọn: Thêm nhạc nền nếu được cấu hình
-        background_music = None
-        if self.enable_background_music:
-            try:
-                music_dir = os.path.join(self.assets_dir, "background_music")
-                
-                if os.path.exists(music_dir):
-                    music_files = [f for f in os.listdir(music_dir) 
-                                 if f.lower().endswith(('.mp3', '.wav', '.m4a'))]
-                    
-                    if music_files:
-                        # Chọn file nhạc ngẫu nhiên
-                        music_file = random.choice(music_files)
-                        music_path = os.path.join(music_dir, music_file)
-                        logger.info(f"Sử dụng nhạc nền: {music_file}")
-                        
-                        # Đọc file nhạc
-                        background_music = AudioFileClip(music_path)
-                        
-                        # Điều chỉnh thời lượng nhạc
-                        if background_music.duration < total_duration:
-                            # Lặp lại nhạc nếu nhạc ngắn hơn video
-                            logger.info(f"Lặp lại nhạc ({background_music.duration:.2f}s) để đủ thời lượng video ({total_duration:.2f}s)")
-                            background_music = background_music.fx(vfx.audio_loop, duration=total_duration)
-                        else:
-                            # Cắt nhạc nếu nhạc dài hơn video
-                            logger.info(f"Cắt nhạc ({background_music.duration:.2f}s) về thời lượng video ({total_duration:.2f}s)")
-                            background_music = background_music.subclip(0, total_duration)
-                        
-                        # Điều chỉnh âm lượng nhạc nền
-                        logger.info(f"Điều chỉnh âm lượng nhạc nền xuống {self.music_volume * 100:.0f}%")
-                        background_music = background_music.volumex(self.music_volume)
-            except Exception as e:
-                logger.warning(f"Lỗi khi xử lý nhạc nền: {str(e)}")
-                background_music = None
-        
-        # Thêm transitions giữa các clip nếu được bật
-        final_video = None
-        
-        if self.enable_transitions and len(video_clips) > 1:
-            logger.info(f"Thêm transitions giữa các scenes (loại: {', '.join(self.transition_types)})")
-            
-            # Chuẩn bị video với transitions
-            clips_with_transitions = []
-            
-            for i, clip in enumerate(video_clips):
-                # Đối với clip đầu tiên
-                if i == 0:
-                    # Thêm fade in cho clip đầu tiên
-                    clip = clip.fx(vfx.fadein, self.transition_duration / 2)
-                
-                # Đối với clip cuối cùng
-                if i == len(video_clips) - 1:
-                    # Thêm fade out cho clip cuối cùng
-                    clip = clip.fx(vfx.fadeout, self.transition_duration / 2)
-                
-                # Thêm clip vào danh sách
-                clips_with_transitions.append(clip)
-                
-                # Nếu clip thứ i có transition tiếp theo
-                if i < len(video_clips) - 1:
-                    # Chọn một kiểu transition ngẫu nhiên
-                    transition_type = random.choice(self.transition_types)
-                    
-                    if transition_type == "fade" and i < len(video_clips) - 1:
-                        # Thêm crossfadeout cho clip hiện tại
-                        video_clips[i] = video_clips[i].fx(vfx.fadeout, self.transition_duration / 2)
-                        
-                        # Thêm crossfadein cho clip tiếp theo
-                        video_clips[i+1] = video_clips[i+1].fx(vfx.fadein, self.transition_duration / 2)
-            
-            # Nối các clip với transitions
-            try:
-                logger.info("Nối các clips với hiệu ứng transitions")
-                final_video = concatenate_videoclips(video_clips, method="compose")
-                logger.info(f"Đã nối {len(video_clips)} clips với transitions")
-            except Exception as e:
-                logger.error(f"Lỗi khi nối clips với transitions: {str(e)}")
-                # Fallback: Nối đơn giản không có transition
-                logger.info("Chuyển sang nối clips không có transition do lỗi")
-                final_video = concatenate_videoclips(video_clips)
-        else:
-            # Nối đơn giản nếu không dùng transition
-            logger.info("Nối các clips không có transition")
-            final_video = concatenate_videoclips(video_clips)
-        
-        # Thêm nhạc nền nếu có
-        if background_music is not None:
-            try:
-                # Lấy audio gốc từ video
-                original_audio = final_video.audio
-                
-                if original_audio is not None:
-                    # Trộn audio gốc với nhạc nền
-                    logger.info("Trộn audio gốc với nhạc nền")
-                    final_audio = CompositeAudioClip([original_audio, background_music])
-                    final_video = final_video.set_audio(final_audio)
-                    logger.info("Đã thêm nhạc nền vào video")
-            except Exception as e:
-                logger.error(f"Lỗi khi thêm nhạc nền: {str(e)}")
-        
-        # Xuất video cuối cùng
         try:
-            logger.info(f"Đang xuất video cuối cùng vào: {output_path}")
-            final_video.write_videofile(
-                output_path,
-                codec='libx264',
-                audio_codec='aac',
-                fps=self.fps,
-                preset='medium',
-                threads=4
-            )
-            logger.info(f"Đã xuất video cuối cùng thành công: {output_path}")
+            # Sử dụng phương pháp concat để nối video
+            # Cách này đơn giản nhất và ít lỗi nhất
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_list,
+                "-c", "copy",  # Chỉ copy không encode lại
+                output_path
+            ]
+            
+            logger.info(f"Nối video với ffmpeg: {' '.join(cmd)}")
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            # Xóa file danh sách tạm
+            os.remove(concat_list)
+            
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+                logger.info(f"Đã tạo video cuối cùng thành công: {output_path}")
+                return output_path
+            else:
+                raise Exception("Video đầu ra không hợp lệ hoặc quá nhỏ")
+        
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Lỗi ffmpeg khi nối video: {e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)}")
+            
+            # Xóa file danh sách nếu có
+            if os.path.exists(concat_list):
+                os.remove(concat_list)
+            
+            # Fallback sử dụng MoviePy một cách đơn giản nhất
+            logger.info("Thử nối video bằng MoviePy")
+            try:
+                clips = []
+                for video in valid_videos:
+                    clip = VideoFileClip(video)
+                    clips.append(clip)
+                
+                final = concatenate_videoclips(clips)
+                final.write_videofile(
+                    output_path,
+                    codec='libx264',
+                    audio_codec='aac',
+                    fps=self.fps,
+                    preset='medium',
+                    threads=4,
+                    ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
+                )
+                
+                # Đóng tất cả clips
+                for clip in clips:
+                    clip.close()
+                final.close()
+                
+                return output_path
+                
+            except Exception as e2:
+                logger.error(f"Lỗi MoviePy khi nối video: {str(e2)}")
+                raise Exception(f"Không thể nối video bằng cả hai phương pháp: {str(e)} -> {str(e2)}")
+        
         except Exception as e:
-            logger.error(f"Lỗi khi xuất video cuối cùng: {str(e)}", exc_info=True)
+            logger.error(f"Lỗi không xác định: {str(e)}")
+            
+            # Xóa file danh sách nếu có
+            if os.path.exists(concat_list):
+                os.remove(concat_list)
+                
             raise
-        
-        # Đóng tất cả clips để giải phóng tài nguyên
-        try:
-            for clip in video_clips:
-                clip.close()
-            
-            if background_music:
-                background_music.close()
-            
-            final_video.close()
-        except Exception as e:
-            logger.warning(f"Lỗi khi đóng clips: {str(e)}")
-        
-        return output_path
     
     def add_subtitles_to_video(self, video_path, script, output_path=None):
         """
@@ -551,7 +551,10 @@ class VideoEditor:
             output_path,
             codec='libx264',
             audio_codec='aac',
-            fps=self.fps
+            fps=self.fps,
+            preset='medium',
+            threads=4,
+            ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
         )
         
         # Đóng clips
@@ -710,7 +713,6 @@ if __name__ == "__main__":
     print(f"Kích thước video: {VIDEO_SETTINGS.get('width', 1920)}x{VIDEO_SETTINGS.get('height', 1080)}")
     print(f"FPS: {VIDEO_SETTINGS.get('fps', 24)}")
     print(f"Enable transitions: {VIDEO_SETTINGS.get('enable_transitions', True)}")
-    print(f"Enable Ken Burns: {VIDEO_SETTINGS.get('enable_ken_burns', True)}")
     print(f"Enable background music: {VIDEO_SETTINGS.get('enable_background_music', False)}")
     
     # Kiểm tra test files nếu tồn tại

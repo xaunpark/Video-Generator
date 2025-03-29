@@ -120,7 +120,7 @@ def main():
     
     for category in priority_categories:
         if categorized.get(category) and len(categorized[category]) > 0:
-            selected_article = categorized[category][0]
+            selected_article = categorized[category][1]
             logger.info(f"Selected article from {category} category: {selected_article['title']}")
             break
     
@@ -220,9 +220,33 @@ def main():
                 background_music = os.path.join(music_dir, music_files[0])
         
         # Create video
-        output_path = video_editor.create_video(images, audio_files, script, background_music)
-        logger.info(f"Successfully created video: {output_path}")
+        #output_path = video_editor.create_video(images, audio_files, script, background_music)
+        #logger.info(f"Successfully created video: {output_path}")
         
+        # Create output path
+        def sanitize_filename(filename):
+            """Remove invalid characters from filename"""
+            invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+            for char in invalid_chars:
+                filename = filename.replace(char, '_')
+            return filename
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        video_filename = sanitize_filename(f"{timestamp}_{script['title'][:30].replace(' ', '_')}.mp4")
+
+        output_path = os.path.join(OUTPUT_DIR, video_filename)
+
+        # Get the directory where audio files are stored
+        audio_dir = os.path.dirname(audio_files[0]['path']) if audio_files else None
+
+        # Create video with correct parameter order
+        output_path = video_editor.create_video(
+            script=script,                 # First parameter should be the script
+            media_items=images,            # Second parameter should be the media items (images)
+            audio_dir=audio_dir,           # Third parameter should be the audio directory
+            output_path=output_path        # Fourth parameter should be the output path
+        )
+
         # Added completion message
         print("\n" + "="*50)
         print(f"Video successfully created!")
