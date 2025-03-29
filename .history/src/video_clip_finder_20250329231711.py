@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 # --- THÊM HẰNG SỐ CHO NGƯỠNG THỜI LƯỢNG ---
 # Tỷ lệ thời lượng tối thiểu chấp nhận được so với target_duration
-# Ví dụ: 0.75 nghĩa là video phải dài ít nhất 80% thời lượng audio
-MINIMUM_DURATION_RATIO = 0.8
+# Ví dụ: 0.75 nghĩa là video phải dài ít nhất 75% thời lượng audio
+MINIMUM_DURATION_RATIO = 0.75
 # Thời gian tối đa cho phép video dài hơn target_duration mà vẫn được điểm cao nhất
-IDEAL_DURATION_UPPER_MARGIN = 3.0 # giây
+IDEAL_DURATION_UPPER_MARGIN = 5.0 # giây
 
 class VideoClipFinder:
     """Class to find and download short video clips from free sources like Pexels and Pixabay."""
@@ -412,7 +412,7 @@ class VideoClipFinder:
             # --- KẾT THÚC ĐIỀU CHỈNH LOGIC CHẤM ĐIỂM ---
 
             # Giới hạn điểm tối đa là 1.0
-            # score = min(1.0, score)
+            score = min(1.0, score)
 
             # Add to list with score
             video["score"] = score
@@ -432,9 +432,10 @@ class VideoClipFinder:
 
         # Log kết quả sau khi lọc và sắp xếp
         if scored_videos:
-            logger.info(f"Found {len(scored_videos)} suitable videos after filtering and sorting. Top result score: {scored_videos[0]['score']:.2f}, duration: {scored_videos[0]['duration']:.1f}s (Target: {target_duration:.1f}s).")
+             logger.info(f"Found {len(scored_videos)} suitable videos after duration filtering and scoring (Target: {target_duration:.1f}s). Top result score: {scored_videos[0]['score']:.2f}")
         else:
              logger.info(f"No videos met the minimum duration requirement or other criteria for query '{query}' (Target: {target_duration:.1f}s).")
+
 
         return scored_videos
             
@@ -648,7 +649,7 @@ if __name__ == "__main__":
         finder = VideoClipFinder()
 
         # --- Các tham số kiểm thử ---
-        test_query = "a car in a forest" # Thay đổi query để kiểm tra
+        test_query = "people walking on street" # Thay đổi query để kiểm tra
         test_scene_content = "A busy street scene with pedestrians." # Ít quan trọng cho test này
         test_output_dir = os.path.join(finder.temp_dir, "finder_test_output")
         os.makedirs(test_output_dir, exist_ok=True)

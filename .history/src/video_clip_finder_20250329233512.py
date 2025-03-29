@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 # --- THÊM HẰNG SỐ CHO NGƯỠNG THỜI LƯỢNG ---
 # Tỷ lệ thời lượng tối thiểu chấp nhận được so với target_duration
-# Ví dụ: 0.75 nghĩa là video phải dài ít nhất 80% thời lượng audio
-MINIMUM_DURATION_RATIO = 0.8
+# Ví dụ: 0.75 nghĩa là video phải dài ít nhất 75% thời lượng audio
+MINIMUM_DURATION_RATIO = 0.75
 # Thời gian tối đa cho phép video dài hơn target_duration mà vẫn được điểm cao nhất
 IDEAL_DURATION_UPPER_MARGIN = 3.0 # giây
 

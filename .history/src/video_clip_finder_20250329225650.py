@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 # --- THÊM HẰNG SỐ CHO NGƯỠNG THỜI LƯỢNG ---
 # Tỷ lệ thời lượng tối thiểu chấp nhận được so với target_duration
-# Ví dụ: 0.75 nghĩa là video phải dài ít nhất 80% thời lượng audio
-MINIMUM_DURATION_RATIO = 0.8
+# Ví dụ: 0.75 nghĩa là video phải dài ít nhất 75% thời lượng audio
+MINIMUM_DURATION_RATIO = 0.75
 # Thời gian tối đa cho phép video dài hơn target_duration mà vẫn được điểm cao nhất
-IDEAL_DURATION_UPPER_MARGIN = 3.0 # giây
+IDEAL_DURATION_UPPER_MARGIN = 5.0 # giây
 
 class VideoClipFinder:
     """Class to find and download short video clips from free sources like Pexels and Pixabay."""
@@ -319,29 +319,6 @@ class VideoClipFinder:
             if not video.get("video_url"):
                 continue
 
-        if target_duration <= 0:
-            logger.warning("Target duration is zero or negative, cannot perform duration filtering/scoring.")
-            # Nếu target_duration không hợp lệ, có thể xử lý khác hoặc bỏ qua phần duration
-            # Ở đây ta sẽ bỏ qua phần lọc/chấm điểm theo duration nếu target không hợp lệ
-            perform_duration_check = False
-        else:
-            perform_duration_check = True
-            # Tính toán thời lượng tối thiểu dựa trên tỷ lệ
-            minimum_acceptable_duration = target_duration * MINIMUM_DURATION_RATIO
-            logger.debug(f"Target duration: {target_duration:.2f}s. Minimum acceptable: {minimum_acceptable_duration:.2f}s (Ratio: {MINIMUM_DURATION_RATIO*100}%)")
-
-        for video in video_results:
-            # Skip videos without URL
-            if not video.get("video_url"):
-                continue
-
-            # --- LỌC CỨNG DỰA TRÊN THỜI LƯỢNG TỐI THIỂU ---
-            duration = video.get("duration", 0)
-            if perform_duration_check and duration > 0 and duration < minimum_acceptable_duration:
-                logger.debug(f"Video {video.get('source')}/{video.get('id', '')}: Duration {duration:.1f}s is LESS than minimum required {minimum_acceptable_duration:.1f}s. SKIPPING.")
-                continue # Bỏ qua video này vì quá ngắn
-            # --- KẾT THÚC LỌC CỨNG ---
-                                
             # Base score
             score = 0.5
 
@@ -373,68 +350,60 @@ class VideoClipFinder:
                 elif ratio_diff < 0.3:
                     score += 0.1
 
-            # --- ĐIỀU CHỈNH LOGIC CHẤM ĐIỂM THỜI LƯỢNG ---
+            # --- BẮT ĐẦU LOGIC CHẤM ĐIỂM THỜI LƯỢNG MỚI ---
+            duration = video.get("duration", 0)
             duration_score_bonus = 0.0 # Điểm thưởng dựa trên thời lượng
 
-            if perform_duration_check and duration > 0: # Chỉ chấm điểm nếu biết duration và target_duration hợp lệ
-                # Định nghĩa lại các khoảng thời lượng
+            if duration > 0 and target_duration > 0: # Chỉ chấm điểm nếu biết cả hai thời lượng
+                # Định nghĩa các khoảng thời lượng lý tưởng và chấp nhận được
                 ideal_lower_bound = target_duration
-                ideal_upper_bound = target_duration + IDEAL_DURATION_UPPER_MARGIN # Cho phép dài hơn margin giây
-                # acceptable_lower_bound đã được dùng để lọc cứng, giờ là ngưỡng dưới của khoảng "chấp nhận được"
-                acceptable_lower_bound_for_scoring = minimum_acceptable_duration
+                ideal_upper_bound = target_duration + 5.0 # Cho phép dài hơn tối đa 5 giây
+                acceptable_lower_bound = target_duration * 0.75 # Ngắn hơn tối đa 25% (để có thể làm chậm)
 
-                # Tính điểm thưởng (điều chỉnh điểm thưởng ở đây)
+                # Tính điểm thưởng
                 if ideal_lower_bound <= duration <= ideal_upper_bound:
-                    # Lý tưởng: Thời lượng đúng hoặc dài hơn một chút -> Điểm thưởng cao nhất
-                    duration_score_bonus = 0.40 # Tăng nhẹ điểm thưởng tối đa
-                    log_msg = "IDEAL MATCH"
-                elif acceptable_lower_bound_for_scoring <= duration < ideal_lower_bound:
-                    # Chấp nhận được: Ngắn hơn (nhưng không quá ngưỡng lọc) -> Điểm thưởng thấp hơn
+                    # Rất tốt: Thời lượng đúng hoặc dài hơn một chút
+                    duration_score_bonus = 0.35 # Điểm thưởng cao nhất
+                    logger.debug(f"Video {video.get('source')}/{video.get('id', '')}: Duration {duration:.1f}s - IDEAL MATCH (+{duration_score_bonus})")
+                elif acceptable_lower_bound <= duration < ideal_lower_bound:
+                    # Chấp nhận được: Ngắn hơn một chút, có thể làm chậm
                     # Điểm thưởng giảm dần khi càng ngắn
-                    proximity_factor = (duration - acceptable_lower_bound_for_scoring) / (ideal_lower_bound - acceptable_lower_bound_for_scoring)
-                    # Giảm khoảng điểm thưởng cho trường hợp này
-                    duration_score_bonus = 0.05 + (0.15 * proximity_factor) # Từ 0.05 đến 0.20
-                    log_msg = "ACCEPTABLE SHORT"
+                    proximity_factor = (duration - acceptable_lower_bound) / (ideal_lower_bound - acceptable_lower_bound)
+                    duration_score_bonus = 0.1 + (0.15 * proximity_factor) # Từ 0.1 đến 0.25
+                    logger.debug(f"Video {video.get('source')}/{video.get('id', '')}: Duration {duration:.1f}s - ACCEPTABLE SHORT (+{duration_score_bonus:.2f})")
                 else:
-                     # Quá dài hoặc các trường hợp khác không nằm trong 2 khoảng trên
-                     duration_score_bonus = 0.0 # Không có điểm thưởng
-                     log_msg = "POOR MATCH (Too long or other)"
+                     # Quá ngắn hoặc quá dài, không có điểm thưởng
+                     logger.debug(f"Video {video.get('source')}/{video.get('id', '')}: Duration {duration:.1f}s - POOR MATCH (+0.0)")
+                     pass
 
-                logger.debug(f"Video {video.get('source')}/{video.get('id', '')}: Duration {duration:.1f}s - {log_msg} (+{duration_score_bonus:.2f})")
-
-            elif duration == 0 and perform_duration_check:
-                # Không biết thời lượng (Pixabay)
+            elif duration == 0:
+                # Không biết thời lượng (thường là Pixabay), không cộng không trừ
                 logger.debug(f"Video {video.get('source')}/{video.get('id', '')}: Duration UNKNOWN (+0.0)")
-                pass # Không cộng không trừ
+                pass
 
             # Cộng điểm thưởng thời lượng vào điểm tổng
             score += duration_score_bonus
-            # --- KẾT THÚC ĐIỀU CHỈNH LOGIC CHẤM ĐIỂM ---
+            # --- KẾT THÚC LOGIC CHẤM ĐIỂM THỜI LƯỢNG MỚI ---
+
+            # XÓA HOẶC COMMENT OUT LOGIC CHẤM ĐIỂM THỜI LƯỢNG CŨ NẾU CÓ
+            # Ví dụ:
+            # # Score based on duration (LOGIC CŨ - ĐÃ BÌNH LUẬN)
+            # # duration = video.get("duration", 0)
+            # # if 5 <= duration <= 15:
+            # #     score += 0.2  # Ideal duration
+            # # elif duration > 0:
+            # #     score += 0.1  # At least we know the duration
 
             # Giới hạn điểm tối đa là 1.0
-            # score = min(1.0, score)
+            score = min(1.0, score)
 
             # Add to list with score
             video["score"] = score
             scored_videos.append(video)
-            logger.debug(f"Video {video.get('source')}/{video.get('id', '')} FINAL SCORE: {score:.2f}") # Log điểm cuối cùng
+            logger.debug(f"Video {video.get('source')}/{video.get('id', '')} final score: {score:.2f}") # Log điểm cuối cùng
 
         # Sort by score, highest first (Giữ nguyên)
         scored_videos.sort(key=lambda x: x.get("score", 0), reverse=True)
-
-        # --- THÊM BƯỚC SẮP XẾP PHỤ ĐỂ PHÂN BIỆT KHI ĐIỂM BẰNG NHAU ---
-        if target_duration > 0: # Chỉ sắp xếp theo chênh lệch thời lượng nếu target hợp lệ
-            # Sắp xếp lại danh sách dựa trên độ chênh lệch tuyệt đối so với target_duration
-            # Video nào có chênh lệch nhỏ hơn sẽ được ưu tiên (đưa lên đầu trong nhóm cùng điểm)
-            # Hàm sort là stable, nên thứ tự điểm cao nhất vẫn được giữ
-            scored_videos.sort(key=lambda x: abs(x.get("duration", 0) - target_duration))
-        # --- KẾT THÚC BƯỚC SẮP XẾP PHỤ ---
-
-        # Log kết quả sau khi lọc và sắp xếp
-        if scored_videos:
-            logger.info(f"Found {len(scored_videos)} suitable videos after filtering and sorting. Top result score: {scored_videos[0]['score']:.2f}, duration: {scored_videos[0]['duration']:.1f}s (Target: {target_duration:.1f}s).")
-        else:
-             logger.info(f"No videos met the minimum duration requirement or other criteria for query '{query}' (Target: {target_duration:.1f}s).")
 
         return scored_videos
             
@@ -648,7 +617,7 @@ if __name__ == "__main__":
         finder = VideoClipFinder()
 
         # --- Các tham số kiểm thử ---
-        test_query = "a car in a forest" # Thay đổi query để kiểm tra
+        test_query = "people walking on street" # Thay đổi query để kiểm tra
         test_scene_content = "A busy street scene with pedestrians." # Ít quan trọng cho test này
         test_output_dir = os.path.join(finder.temp_dir, "finder_test_output")
         os.makedirs(test_output_dir, exist_ok=True)
