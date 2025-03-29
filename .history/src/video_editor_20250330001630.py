@@ -25,7 +25,8 @@ from src.fix_pillow import *
 
 # Import cấu hình từ project
 from config.settings import (
-    TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS, FFPROBE_EXECUTABLE_PATH # Import thêm
+    TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS,
+    FFMPEG_EXECUTABLE_PATH, FFPROBE_EXECUTABLE_PATH # Import thêm
 )
 
 # Cấu hình logging

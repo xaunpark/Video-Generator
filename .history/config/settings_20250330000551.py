@@ -100,6 +100,3 @@ VOICE_SETTINGS = {
     "style": 0.0,  # Giọng đọc tin tức trung tính
     "use_speaker_boost": True
 }
-
-# Đường dẫn đến ffprobe (tương tự ffmpeg)
-FFPROBE_EXECUTABLE_PATH = "ffprobe" # Mặc định tìm trong PATH

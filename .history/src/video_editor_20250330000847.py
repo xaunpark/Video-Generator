@@ -25,7 +25,8 @@ from src.fix_pillow import *
 
 # Import cấu hình từ project
 from config.settings import (
-    TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS, FFPROBE_EXECUTABLE_PATH # Import thêm
+    TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS,
+    FFMPEG_EXECUTABLE_PATH, FFPROBE_EXECUTABLE_PATH # Import thêm
 )
 
 # Cấu hình logging
@@ -239,174 +240,151 @@ class VideoEditor:
     def process_scene_media(self, media_item, audio_path, output_path):
         """
         Xử lý media (ảnh hoặc video) cho một scene và kết hợp với audio,
-        sử dụng thời lượng chính xác từ media_item và áp dụng slow motion nếu cần.
+        sử dụng thời lượng chính xác từ media_item.
         """
         media_type = media_item.get('type', 'image')
         media_path = media_item.get('path')
         scene_number = media_item.get('number', 'unknown')
+
+        # --- BƯỚC 1: Lấy Thời lượng Đích ---
         target_duration = media_item.get('duration')
-
         if target_duration is None or not isinstance(target_duration, (int, float)) or target_duration <= 0:
+            # Fallback nếu duration không hợp lệ (không nên xảy ra)
+            logger.error(f"Scene {scene_number}: Invalid or missing duration in media_item: {target_duration}. Cannot process.")
+            # Có thể raise lỗi hoặc trả về None/False tùy cách bạn muốn xử lý lỗi
             raise ValueError(f"Scene {scene_number}: Invalid duration provided in media_item.")
+            # Hoặc dùng default nếu muốn cố gắng tiếp tục:
+            # logger.warning(f"Scene {scene_number}: Invalid duration {target_duration}. Using default: {VIDEO_SETTINGS['image_duration']}s")
+            # target_duration = VIDEO_SETTINGS['image_duration']
+        # --- KẾT THÚC BƯỚC 1 ---
 
+        # Kiểm tra file media và audio
         if not media_path or not os.path.exists(media_path):
             raise ValueError(f"Scene {scene_number}: Media path not found or invalid: {media_path}")
         if not os.path.exists(audio_path):
             raise ValueError(f"Scene {scene_number}: Audio path not found: {audio_path}")
 
         logger.info(f"Processing Scene {scene_number} ({media_type}) using media: {os.path.basename(media_path)}")
-        logger.info(f"Target duration for scene {scene_number}: {target_duration:.2f}s (from media_item)")
+        logger.info(f"Target duration for scene {scene_number}: {target_duration:.2f}s (from media_item)") # Log thời lượng đích
 
-        temp_video = output_path + ".temp.mp4"
-        apply_slow_motion = False
-        speed_factor = 1.0
-        actual_video_duration = None
+        # --- BƯỚC 2: THAY THẾ audio_duration BẰNG target_duration ---
 
+        # Xử lý video hoặc ảnh
         if media_type == 'video':
-            # Lấy thời lượng thực tế của video đầu vào
-            actual_video_duration = self._get_video_duration_ffprobe(media_path)
-
-            if actual_video_duration is not None and target_duration > 0:
-                # Kiểm tra điều kiện áp dụng slow motion
-                enable_slow_mo = VIDEO_SETTINGS.get("enable_slow_motion_fallback", False)
-                min_ratio = VIDEO_SETTINGS.get("slow_motion_min_ratio", 0.8)
-                lower_bound = min_ratio * target_duration
-
-                if enable_slow_mo and lower_bound <= actual_video_duration < target_duration:
-                    apply_slow_motion = True
-                    # Tính toán hệ số để đạt target_duration
-                    speed_factor = target_duration / actual_video_duration
-                    logger.info(f"Scene {scene_number}: Applying slow motion. Video duration {actual_video_duration:.2f}s is within [{lower_bound:.2f}s - {target_duration:.2f}s). Speed factor: {1/speed_factor:.2f}x (setpts multiplier: {speed_factor:.4f})")
-                elif actual_video_duration < lower_bound:
-                     logger.warning(f"Scene {scene_number}: Video duration {actual_video_duration:.2f}s is TOO SHORT (below {lower_bound:.2f}s). Will result in visual ending early.")
-                     # Giữ nguyên, không áp dụng slow-mo, -shortest sẽ cắt audio theo video ngắn
-                # else: video duration >= target_duration (sẽ được cắt bằng -t)
-
-            # Xây dựng lệnh ffmpeg xử lý video
             try:
-                vf_filters = []
-                ffmpeg_video_cmd = [self.ffmpeg_path, "-y", "-i", media_path]
-
-                if apply_slow_motion:
-                    # Áp dụng setpts để thay đổi tốc độ
-                    vf_filters.append(f"setpts={speed_factor:.4f}*PTS")
-                    # KHÔNG sử dụng -t khi dùng setpts để kéo dài
-                elif actual_video_duration is None or actual_video_duration >= target_duration:
-                    # Cắt video nếu dài hơn hoặc không biết duration
-                    ffmpeg_video_cmd.extend(["-t", str(target_duration)])
-                # Nếu actual_video_duration < lower_bound, không dùng -t, để nó ngắn
-
-                # Thêm filter scale và pad (giữ nguyên)
-                vf_filters.append(f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease")
-                vf_filters.append(f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2")
-                vf_filters.append("setsar=1") # Đảm bảo đúng aspect ratio
-
-                # Nối các filter lại
-                ffmpeg_video_cmd.extend(["-vf", ",".join(vf_filters)])
-
-                # Thêm các tham số còn lại
-                ffmpeg_video_cmd.extend([
+                temp_video = output_path + ".temp.mp4"
+                # Sử dụng ffmpeg trực tiếp
+                video_cmd = [
+                    self.ffmpeg_path, "-y",
+                    "-i", media_path,
+                    # Sử dụng target_duration để cắt video đầu vào nếu cần
+                    "-t", str(target_duration),
+                    "-vf", f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,setsar=1", # Thêm setsar=1
                     "-c:v", "libx264", "-crf", "23", "-preset", "medium",
                     "-pix_fmt", "yuv420p", "-r", str(self.fps),
                     "-an", # Bỏ audio gốc
                     temp_video
-                ])
+                ]
+                logger.info(f"Processing video clip (duration: {target_duration:.2f}s): {' '.join(video_cmd)}")
+                subprocess.run(video_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-                logger.info(f"Processing video clip command: {' '.join(ffmpeg_video_cmd)}")
-                subprocess.run(ffmpeg_video_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                # Kết hợp video và audio
+                output_cmd = [
+                    self.ffmpeg_path, "-y",
+                    "-i", temp_video,
+                    "-i", audio_path,
+                    "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k",
+                    # -shortest đảm bảo video cuối cùng không dài hơn audio hoặc video đã xử lý
+                    "-shortest",
+                    output_path
+                ]
+                logger.info(f"Combining processed video and audio: {' '.join(output_cmd)}")
+                subprocess.run(output_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-                if not os.path.exists(temp_video) or os.path.getsize(temp_video) < 1000:
-                     raise Exception(f"Temporary video from clip processing is invalid or too small: {temp_video}")
+                if os.path.exists(temp_video): os.remove(temp_video)
+                logger.info(f"Scene {scene_number}: Video clip processed successfully: {output_path}")
 
             except subprocess.CalledProcessError as e:
                 logger.error(f"Scene {scene_number}: FFmpeg error processing video: {e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)}")
-                # Nếu xử lý video lỗi, thử fallback sang xử lý như ảnh tĩnh
                 logger.info(f"Scene {scene_number}: Attempting to process as static image due to video error.")
-                media_type = 'image' # Quan trọng: phải gán lại media_type
+                media_type = 'image' # Chuyển sang xử lý như ảnh
             except Exception as e:
                 logger.error(f"Scene {scene_number}: Error processing video: {str(e)}")
                 logger.info(f"Scene {scene_number}: Attempting to process as static image due to error.")
-                media_type = 'image' # Quan trọng: phải gán lại media_type
+                media_type = 'image' # Chuyển sang xử lý như ảnh
 
         # Lưu ý: Logic dưới đây chỉ chạy nếu media_type là 'image' ban đầu HOẶC nếu xử lý video thất bại
         if media_type == 'image':
             try:
-                # temp_video = output_path + ".temp.mp4" # Đã khai báo ở trên
-                animation_type = VIDEO_SETTINGS.get("image_animation", "none")
+                temp_video = output_path + ".temp.mp4"
+                animation_type = VIDEO_SETTINGS.get("image_animation", "none") # Mặc định là none nếu không chắc
                 intensity = VIDEO_SETTINGS.get("animation_intensity", 0.02)
-                total_frames = int(self.fps * target_duration)
+                # Tính tổng số khung hình dựa trên target_duration
+                total_frames = int(self.fps * target_duration) # Sử dụng target_duration
 
                 vf_filter = ""
                 if animation_type == "zoom" and total_frames > 0:
-                    vf_filter = f"zoompan=z='1+({intensity}*on/{total_frames})':d={total_frames}:s={self.width}x{self.height}:fps={self.fps},setsar=1"
-                    logger.info(f"Scene {scene_number}: Applying linear zoom effect to image.")
+                    # Sử dụng zoom tuyến tính đã sửa
+                    vf_filter = f"zoompan=z='1+({intensity}*on/{total_frames})':d={total_frames}:s={self.width}x{self.height}:fps={self.fps},setsar=1" # Thêm fps và setsar
+                    logger.info(f"Scene {scene_number}: Applying linear zoom effect.")
                 else:
+                    # Mặc định không hiệu ứng hoặc nếu total_frames <= 0
                     if animation_type != "none":
-                         logger.warning(f"Scene {scene_number}: Invalid image duration or animation type '{animation_type}'. Using static image.")
-                    vf_filter = f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+                         logger.warning(f"Scene {scene_number}: Invalid duration or animation type '{animation_type}'. Using static image.")
+                    vf_filter = f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,setsar=1" # Thêm setsar
                     logger.info(f"Scene {scene_number}: Using static image (no animation).")
 
                 image_cmd = [
                     self.ffmpeg_path, "-y",
                     "-loop", "1",
                     "-i", media_path,
-                    "-t", str(target_duration), # Đảm bảo dùng target_duration
+                    # Sử dụng target_duration
+                    "-t", str(target_duration),
                     "-vf", vf_filter,
                     "-c:v", "libx264", "-crf", "23", "-preset", "medium",
                     "-pix_fmt", "yuv420p", "-r", str(self.fps),
-                    "-an",
+                    "-an", # Bỏ audio (sẽ ghép sau)
                     temp_video
                 ]
-                logger.info(f"Creating video from image command: {' '.join(image_cmd)}")
+                logger.info(f"Creating video from image (duration: {target_duration:.2f}s): {' '.join(image_cmd)}")
                 subprocess.run(image_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-                if not os.path.exists(temp_video) or os.path.getsize(temp_video) < 1000:
+                if not os.path.exists(temp_video) or os.path.getsize(temp_video) < 1000: # Kiểm tra size nhỏ hơn
                     raise Exception(f"Temporary video from image is invalid or too small: {temp_video}")
 
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Scene {scene_number}: FFmpeg error processing image: {e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)}")
+                # Kết hợp video và audio
+                output_cmd = [
+                    self.ffmpeg_path, "-y",
+                    "-i", temp_video,
+                    "-i", audio_path,
+                    "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-shortest",
+                    output_path
+                ]
+                logger.info(f"Combining image-video and audio: {' '.join(output_cmd)}")
+                subprocess.run(output_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
                 if os.path.exists(temp_video): os.remove(temp_video)
-                raise Exception(f"Scene {scene_number}: Failed to process image.") from e
+                logger.info(f"Scene {scene_number}: Image processed successfully: {output_path}")
+
+            except subprocess.CalledProcessError as e:
+                # Lỗi ngay cả khi tạo ảnh tĩnh -> đây là lỗi nghiêm trọng hơn
+                logger.error(f"Scene {scene_number}: FFmpeg error processing image: {e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)}")
+                # Cố gắng xóa file tạm nếu có
+                temp_video = output_path + ".temp.mp4"
+                if os.path.exists(temp_video): os.remove(temp_video)
+                # Raise lỗi để báo hiệu xử lý scene thất bại
+                raise Exception(f"Scene {scene_number}: Failed to process image even without effects.") from e
             except Exception as e:
                 logger.error(f"Scene {scene_number}: Unexpected error processing image: {str(e)}")
+                 # Cố gắng xóa file tạm nếu có
+                temp_video = output_path + ".temp.mp4"
                 if os.path.exists(temp_video): os.remove(temp_video)
-                raise
+                raise # Re-raise lỗi
 
-        # --- KẾT HỢP VIDEO ĐÃ XỬ LÝ VÀ AUDIO (Giữ nguyên) ---
-        try:
-            output_cmd = [
-                self.ffmpeg_path, "-y",
-                "-i", temp_video,      # Video đã được xử lý (cắt hoặc làm chậm)
-                "-i", audio_path,
-                "-c:v", "copy",        # Chỉ copy video stream đã xử lý
-                "-c:a", "aac", "-b:a", "192k",
-                "-shortest",           # Kết thúc khi stream ngắn hơn kết thúc
-                output_path
-            ]
-            logger.info(f"Combining processed video/image-video and audio: {' '.join(output_cmd)}")
-            subprocess.run(output_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-            # Dọn dẹp file tạm
-            if os.path.exists(temp_video):
-                os.remove(temp_video)
-
-            # Kiểm tra file output cuối cùng
-            if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
-                 raise Exception(f"Final scene video output is invalid or too small: {output_path}")
-
-            logger.info(f"Scene {scene_number}: Combined media and audio successfully: {output_path}")
-            return output_path
-
-        except subprocess.CalledProcessError as e:
-             logger.error(f"Scene {scene_number}: FFmpeg error combining video and audio: {e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)}")
-             if os.path.exists(temp_video): os.remove(temp_video) # Dọn dẹp nếu lỗi
-             if os.path.exists(output_path): os.remove(output_path) # Dọn dẹp nếu lỗi
-             raise Exception(f"Scene {scene_number}: Failed to combine video and audio.") from e
-        except Exception as e:
-             logger.error(f"Scene {scene_number}: Unexpected error combining video and audio: {str(e)}")
-             if os.path.exists(temp_video): os.remove(temp_video)
-             if os.path.exists(output_path): os.remove(output_path)
-             raise
+        return output_path # Trả về đường dẫn video của scene đã xử lý
     
     def concatenate_scene_videos(self, scene_videos, output_path):
         """
