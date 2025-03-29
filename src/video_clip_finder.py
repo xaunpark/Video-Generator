@@ -92,12 +92,36 @@ class VideoClipFinder:
                 continue
                 
             try:
+
+                # Lấy tên của hàm nguồn để log
+                source_name = source_func.__name__.replace('_search_', '').replace('_videos', '').capitalize()
+                logger.info(f"--- Searching source: {source_name} ---") # Log tên nguồn
+
                 video_results = source_func(query)
                 
                 if video_results and len(video_results) > 0:
                     # Filter and sort videos by relevance and quality
                     suitable_videos = self._filter_videos(video_results, query)
                     
+                    # --- THÊM ĐOẠN LOG NÀY ---
+                    if suitable_videos:
+                        logger.info(f"--- Top {min(5, len(suitable_videos))} suitable videos found from {source_name} (Target Duration: {self.target_duration:.1f}s) ---")
+                        for i, video_data in enumerate(suitable_videos[:5]): # Log top 5
+                            vid_url = video_data.get("video_url", "N/A")
+                            vid_score = video_data.get("score", 0.0)
+                            vid_duration = video_data.get("duration", 0.0)
+                            vid_source = video_data.get("source", "Unknown")
+                            vid_dims = f"{video_data.get('width', 'N/A')}x{video_data.get('height', 'N/A')}"
+
+                            # Định dạng thông tin thời lượng
+                            duration_str = f"{vid_duration:.1f}s" if vid_duration > 0 else "Unknown"
+
+                            logger.info(f"{i+1}. Score: {vid_score:.2f} | Duration: {duration_str} | Dim: {vid_dims} | Source: {vid_source} | URL: {vid_url[:70]}...")
+                        logger.info("--- Attempting download/process from top results ---")
+                    else:
+                         logger.info(f"No suitable videos found from {source_name} after filtering.")
+                    # --- KẾT THÚC ĐOẠN LOG ---
+
                     if suitable_videos:
                         # Try to download top videos until success
                         for video_data in suitable_videos[:5]:  # Try top 5
@@ -119,7 +143,7 @@ class VideoClipFinder:
                                 logger.warning(f"Failed to download/process video {video_url}: {str(e)}")
                                 continue  # Try next video
             except Exception as e:
-                logger.warning(f"Error searching videos from source {source_func.__name__}: {str(e)}")
+                logger.warning(f"Error searching videos from source {source_name}: {str(e)}") # Sử dụng source_name đã lấy
                 continue  # Try next source
                 
         logger.warning(f"No suitable video clips found for query: '{query}'")
@@ -261,78 +285,119 @@ class VideoClipFinder:
             
     def _filter_videos(self, video_results, query):
         """
-        Filter and score videos based on quality and relevance.
-        
+        Filter and score videos based on quality, relevance, and DURATION MATCH. # <-- Cập nhật docstring
+
         Args:
             video_results (list): List of video data dictionaries
             query (str): The original search query
-            
+
         Returns:
             list: Filtered and sorted list of videos
         """
         if not video_results:
             return []
-            
+
         scored_videos = []
-        
+
         # Convert query to lowercase for comparison
         query_lower = query.lower()
         query_words = set(query_lower.split())
-        
+
+        # Lấy target_duration từ instance variable
+        target_duration = self.target_duration
+        logger.debug(f"Target duration for filtering: {target_duration:.2f}s") # Thêm log để debug
+
         for video in video_results:
             # Skip videos without URL
             if not video.get("video_url"):
                 continue
-                
+
             # Base score
             score = 0.5
-            
-            # Score based on title match with query
+
+            # Score based on title match with query (Giữ nguyên)
             title = video.get("title", "").lower()
             title_words = set(title.split())
-            
-            # Calculate word overlap between query and title
             common_words = query_words.intersection(title_words)
             if common_words:
-                title_score = len(common_words) / len(query_words)
+                title_score = len(common_words) / len(query_words) if len(query_words) > 0 else 0 # Tránh chia cho 0
                 score += title_score * 0.3
-                
-            # Score based on resolution
+
+            # Score based on resolution (Giữ nguyên)
             width = video.get("width", 0)
             height = video.get("height", 0)
-            
             if width >= 1920 and height >= 1080:
-                score += 0.3  # Full HD or better
+                score += 0.3
             elif width >= 1280 and height >= 720:
-                score += 0.2  # HD
+                score += 0.2
             elif width >= 640 and height >= 480:
-                score += 0.1  # SD
-                
-            # Score based on aspect ratio match
+                score += 0.1
+
+            # Score based on aspect ratio match (Giữ nguyên)
             if width > 0 and height > 0:
                 video_ratio = width / height
                 target_ratio = self.target_width / self.target_height
                 ratio_diff = abs(video_ratio - target_ratio)
-                
                 if ratio_diff < 0.1:
-                    score += 0.2  # Very good match
+                    score += 0.2
                 elif ratio_diff < 0.3:
-                    score += 0.1  # Decent match
-                    
-            # Score based on duration
+                    score += 0.1
+
+            # --- BẮT ĐẦU LOGIC CHẤM ĐIỂM THỜI LƯỢNG MỚI ---
             duration = video.get("duration", 0)
-            if 5 <= duration <= 15:
-                score += 0.2  # Ideal duration
-            elif duration > 0:
-                score += 0.1  # At least we know the duration
-                
+            duration_score_bonus = 0.0 # Điểm thưởng dựa trên thời lượng
+
+            if duration > 0 and target_duration > 0: # Chỉ chấm điểm nếu biết cả hai thời lượng
+                # Định nghĩa các khoảng thời lượng lý tưởng và chấp nhận được
+                ideal_lower_bound = target_duration
+                ideal_upper_bound = target_duration + 5.0 # Cho phép dài hơn tối đa 5 giây
+                acceptable_lower_bound = target_duration * 0.75 # Ngắn hơn tối đa 25% (để có thể làm chậm)
+
+                # Tính điểm thưởng
+                if ideal_lower_bound <= duration <= ideal_upper_bound:
+                    # Rất tốt: Thời lượng đúng hoặc dài hơn một chút
+                    duration_score_bonus = 0.35 # Điểm thưởng cao nhất
+                    logger.debug(f"Video {video.get('source')}/{video.get('id', '')}: Duration {duration:.1f}s - IDEAL MATCH (+{duration_score_bonus})")
+                elif acceptable_lower_bound <= duration < ideal_lower_bound:
+                    # Chấp nhận được: Ngắn hơn một chút, có thể làm chậm
+                    # Điểm thưởng giảm dần khi càng ngắn
+                    proximity_factor = (duration - acceptable_lower_bound) / (ideal_lower_bound - acceptable_lower_bound)
+                    duration_score_bonus = 0.1 + (0.15 * proximity_factor) # Từ 0.1 đến 0.25
+                    logger.debug(f"Video {video.get('source')}/{video.get('id', '')}: Duration {duration:.1f}s - ACCEPTABLE SHORT (+{duration_score_bonus:.2f})")
+                else:
+                     # Quá ngắn hoặc quá dài, không có điểm thưởng
+                     logger.debug(f"Video {video.get('source')}/{video.get('id', '')}: Duration {duration:.1f}s - POOR MATCH (+0.0)")
+                     pass
+
+            elif duration == 0:
+                # Không biết thời lượng (thường là Pixabay), không cộng không trừ
+                logger.debug(f"Video {video.get('source')}/{video.get('id', '')}: Duration UNKNOWN (+0.0)")
+                pass
+
+            # Cộng điểm thưởng thời lượng vào điểm tổng
+            score += duration_score_bonus
+            # --- KẾT THÚC LOGIC CHẤM ĐIỂM THỜI LƯỢNG MỚI ---
+
+            # XÓA HOẶC COMMENT OUT LOGIC CHẤM ĐIỂM THỜI LƯỢNG CŨ NẾU CÓ
+            # Ví dụ:
+            # # Score based on duration (LOGIC CŨ - ĐÃ BÌNH LUẬN)
+            # # duration = video.get("duration", 0)
+            # # if 5 <= duration <= 15:
+            # #     score += 0.2  # Ideal duration
+            # # elif duration > 0:
+            # #     score += 0.1  # At least we know the duration
+
+            # Giới hạn điểm tối đa là 1.0
+            score = min(1.0, score)
+
             # Add to list with score
-            video["score"] = min(1.0, score)  # Cap at 1.0
+            video["score"] = score
             scored_videos.append(video)
-            
-        # Sort by score, highest first
+            logger.debug(f"Video {video.get('source')}/{video.get('id', '')} final score: {score:.2f}") # Log điểm cuối cùng
+
+        # Sort by score, highest first (Giữ nguyên)
         scored_videos.sort(key=lambda x: x.get("score", 0), reverse=True)
-        
+
         return scored_videos
             
     def _download_video(self, video_url, query):
@@ -517,3 +582,64 @@ class VideoClipFinder:
                 return cache_path
                 
         return None
+    
+# --- CODE KIỂM THỬ DƯỚI ĐÂY ---
+# --- CHẠY BẰNG LỆNH: python -m src.video_clip_finder ---
+if __name__ == "__main__":
+    import logging
+    import pprint # Để in kết quả đẹp hơn
+
+    # --- Cấu hình Logging để thấy DEBUG messages ---
+    # Thay đổi level thành DEBUG để xem log chi tiết về chấm điểm
+    logging.basicConfig(
+        level=logging.DEBUG, # ĐẶT LÀ DEBUG
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger("VideoClipFinderTest")
+    # ----------------------------------------------
+
+    logger.info("--- Bắt đầu kiểm tra VideoClipFinder ---")
+
+    # --- Đảm bảo API Keys đã được cấu hình ---
+    # Script sẽ tự động đọc từ config/credentials.py
+    # Nếu PEXELS_API_KEY hoặc PIXABAY_API_KEY bị thiếu, script sẽ cảnh báo.
+    # -------------------------------------------
+
+    try:
+        # Khởi tạo Finder
+        finder = VideoClipFinder()
+
+        # --- Các tham số kiểm thử ---
+        test_query = "people walking on street" # Thay đổi query để kiểm tra
+        test_scene_content = "A busy street scene with pedestrians." # Ít quan trọng cho test này
+        test_output_dir = os.path.join(finder.temp_dir, "finder_test_output")
+        os.makedirs(test_output_dir, exist_ok=True)
+        test_output_path = os.path.join(test_output_dir, "test_clip.mp4")
+        test_target_duration = 10.0 # Đặt thời lượng mong muốn (ví dụ: 10 giây)
+        # ---------------------------
+
+        logger.info(f"Kiểm tra với query: '{test_query}', target duration: {test_target_duration}s")
+
+        # Gọi hàm tìm kiếm (hàm này sẽ gọi _filter_videos bên trong)
+        result_path = finder.find_video_clip(
+            test_query,
+            test_scene_content,
+            test_output_path,
+            target_duration=test_target_duration
+        )
+
+        if result_path:
+            logger.info(f"--- KIỂM TRA THÀNH CÔNG ---")
+            logger.info(f"Đã tìm và xử lý video: {result_path}")
+            logger.info("!!! Quan trọng: Kiểm tra log DEBUG ở trên để xem điểm thời lượng (Duration score) đã được tính đúng chưa.")
+        else:
+            logger.warning(f"--- KIỂM TRA KHÔNG TÌM THẤY VIDEO PHÙ HỢP ---")
+            logger.warning("Không tìm thấy video phù hợp cho query trên.")
+            logger.info("!!! Quan trọng: Kiểm tra log DEBUG ở trên để xem điểm thời lượng (Duration score) đã được tính như thế nào cho các video được tìm thấy (nếu có).")
+
+    except ValueError as ve:
+         logger.error(f"Lỗi cấu hình (thiếu API key?): {ve}")
+    except Exception as e:
+        logger.error(f"Lỗi trong quá trình kiểm tra: {e}", exc_info=True)
+
+    logger.info("--- Kết thúc kiểm tra VideoClipFinder ---")    
