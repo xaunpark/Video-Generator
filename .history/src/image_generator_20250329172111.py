@@ -143,7 +143,7 @@ class ImageGenerator:
                     media_items.append({
                         "type": "source",
                         "path": source_image_path,
-                        "duration": VIDEO_SETTINGS["image_duration"], # Sử dụng duration mặc định cho ảnh nguồn
+                        "duration": actual_scene_duration,
                         "caption": "Source image from article" # Caption in English
                     })
                     logger.info(f"Successfully added source image: {source_image_path}")
@@ -230,13 +230,16 @@ class ImageGenerator:
                              media_path_for_scene = image_path
                              media_type_for_scene = "image"
                              media_found_for_scene = True
+                        else:
+                             # Lỗi đã được log bên trong _get_cached_or_download_image
+                             logger.warning(f"Scene {scene_number}: Failed to find online image.")
 
                     except Exception as img_err:
                          logger.warning(f"Scene {scene_number}: Error finding online image: {img_err}. Trying local fallback.")
+                         # Không cần gán media_found_for_scene = False vì nó vẫn đang là False
 
                     # 2. Thử fallback ảnh local (nếu tìm online thất bại)
                     if not media_found_for_scene:
-                        logger.debug(f"Scene {scene_number}: Trying local fallback image...")
                         try:
                             local_fallback_path = self._use_local_fallback_image(search_query, image_output_path) # Lưu đè nếu thành công
                             if local_fallback_path:
@@ -244,6 +247,9 @@ class ImageGenerator:
                                 media_path_for_scene = local_fallback_path
                                 media_type_for_scene = "image"
                                 media_found_for_scene = True
+                            else:
+                                # Lỗi đã được log bên trong _use_local_fallback_image
+                                logger.warning(f"Scene {scene_number}: Local fallback image search failed.")
                         except Exception as local_err:
                             logger.warning(f"Scene {scene_number}: Error using local fallback image: {local_err}. Trying text-only fallback.")
 

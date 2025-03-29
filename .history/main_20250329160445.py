@@ -242,21 +242,15 @@ def main():
 
         output_path = os.path.join(OUTPUT_DIR, video_filename)
 
-        # Cần lấy audio_dir từ audio_files (ví dụ: từ file đầu tiên)
-        audio_dir = None
-        if audio_files and audio_files[0].get('path'):
-            audio_dir = os.path.dirname(audio_files[0]['path'])
-
-        if not audio_dir:
-            logger.error("Could not determine audio directory. Cannot create video.")
-            return
+        # Get the directory where audio files are stored
+        audio_dir = os.path.dirname(audio_files[0]['path']) if audio_files else None
 
         # Create video with correct parameter order
         output_path = video_editor.create_video(
             script=script,                 # First parameter should be the script
-            media_items=images,            # Sử dụng biến images (giờ chứa cả video clips)
+            media_items=images,            # Second parameter should be the media items (images)
             audio_dir=audio_dir,           # Third parameter should be the audio directory
-            output_path=output_path        # output_path đã tính toán trước đó
+            output_path=output_path        # Fourth parameter should be the output path
         )
 
         # Added completion message
@@ -268,7 +262,7 @@ def main():
         print("="*50 + "\n")
         
     except Exception as e:
-        logger.error(f"Error creating video: {str(e)}", exc_info=True)
+        logger.error(f"Error creating video: {str(e)}")
 
 if __name__ == "__main__":
     main()
