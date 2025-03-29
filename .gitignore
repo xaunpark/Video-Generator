@@ -1,20 +1,20 @@
-# Môi trường ảo
+# Môi trường ảo Python
 venv/
-env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# File cấu hình
+# File chứa biến môi trường nhạy cảm
 .env
 
-# Cache và log
-__pycache__/
-*.py[cod]
-*$py.class
-*.log
-
-# Thư mục tạm
+# Thư mục tạm và output (tùy chọn, nhưng nên có)
 temp/
 output/
 
-# IDE
+# File log
+*.log
+
+# Cấu hình IDE/Editor
 .vscode/
 .idea/

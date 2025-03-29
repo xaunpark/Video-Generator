@@ -1,22 +1,54 @@
+# config/credentials.py
 import os
+import logging # Thêm logging để báo lỗi
 from dotenv import load_dotenv
 
-# Nạp biến môi trường từ file .env
+# Nạp biến môi trường từ file .env (đảm bảo dòng này ở đầu)
 load_dotenv()
 
-# API Keys - cách 1: từ biến môi trường
-OPENAI_API_KEY = os.getenv('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')
+logger = logging.getLogger(__name__) # Tạo logger cho file này
+
+# --- Lấy API Keys CHỈ TỪ BIẾN MÔI TRƯỜNG ---
+
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
 YOUTUBE_CLIENT_ID = os.getenv('YOUTUBE_CLIENT_ID')
 YOUTUBE_CLIENT_SECRET = os.getenv('YOUTUBE_CLIENT_SECRET')
 YOUTUBE_REFRESH_TOKEN = os.getenv('YOUTUBE_REFRESH_TOKEN')
-SERPER_API_KEY = os.getenv('SERPER_API_KEY', '8f9c1cf90515e0b8bffe46642d627c28a5b24d84')
-PEXELS_API_KEY = "To8Cla26rOGn94KUV7mD30iHVVeLO27R9Xed36XuefIcWiAkuSq334my"
-PIXABAY_API_KEY = "49574020-31c90e293b7479c966d33aaa6"
+SERPER_API_KEY = os.getenv('SERPER_API_KEY')
+PEXELS_API_KEY = os.getenv('PEXELS_API_KEY')
+PIXABAY_API_KEY = os.getenv('PIXABAY_API_KEY')
 
-# Nếu không có trong biến môi trường, sử dụng giá trị cụ thể
-if not ELEVENLABS_API_KEY:
-    ELEVENLABS_API_KEY = "sk_0e8cd650f678d27d45ce5fa94b246b722684ebf8836ec94a"
-
+# --- KIỂM TRA CÁC KEY QUAN TRỌNG VÀ BÁO LỖI NẾU THIẾU ---
+missing_keys = []
 if not OPENAI_API_KEY:
-    OPENAI_API_KEY = "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"
+    missing_keys.append('OPENAI_API_KEY')
+# Bỏ comment nếu bạn dùng ElevenLabs thay vì OpenAI TTS
+# if not ELEVENLABS_API_KEY:
+#     missing_keys.append('ELEVENLABS_API_KEY')
+if not SERPER_API_KEY:
+    missing_keys.append('SERPER_API_KEY')
+if not PEXELS_API_KEY:
+    missing_keys.append('PEXELS_API_KEY')
+if not PIXABAY_API_KEY:
+    missing_keys.append('PIXABAY_API_KEY')
+
+if missing_keys:
+    error_message = (
+        f"Lỗi: Các API key sau không được tìm thấy trong file .env hoặc biến môi trường: "
+        f"{', '.join(missing_keys)}. Vui lòng tạo file .env ở thư mục gốc và thêm các key cần thiết."
+    )
+    logger.error(error_message)
+    # Raise lỗi để dừng chương trình nếu thiếu key quan trọng
+    # Hoặc bạn có thể chỉ cảnh báo nếu muốn chương trình cố gắng chạy tiếp với một số tính năng bị hạn chế
+    raise ValueError(error_message)
+else:
+    logger.info("Tất cả các API keys cần thiết đã được load thành công từ môi trường.")
+
+# --- XÓA BỎ HOÀN TOÀN CÁC KHỐI if not ...: API_KEY = "..." ---
+# Ví dụ:
+# # if not ELEVENLABS_API_KEY:
+# #     ELEVENLABS_API_KEY = "sk_0e8cd650f678d27d45ce5fa94b246b722684ebf8836ec94a" # <--- XÓA DÒNG NÀY
+#
+# # if not OPENAI_API_KEY:
+# #     OPENAI_API_KEY = "sk-proj-..." # <--- XÓA DÒNG NÀY
