@@ -150,7 +150,21 @@ def main():
         json.dump(script, f, ensure_ascii=False, indent=2)
     
     logger.info(f"Saved script at: {script_path}")
+
+    ### --- KHỐI TẠO VOICE ---
+    # Generate voice for script
+    voice_generator = VoiceGenerator()
+    audio_files = voice_generator.generate_audio_for_script(script)
     
+    logger.info(f"Generated {len(audio_files)} audio files for script")
+    
+    # --- THÊM KIỂM TRA audio_files ---
+    if not audio_files:
+        logger.error("Audio generation failed or returned empty list. Cannot proceed with image/video generation.")
+        return # Thoát nếu không có audio
+    ### --- KẾT THÚC KHỐI TẠO VOICE ---
+
+    ###--- KHỐI TẠO IMAGE---
     # Generate images for script
     image_generator = ImageGenerator()
     
@@ -176,18 +190,7 @@ def main():
         json.dump(image_info, f, ensure_ascii=False, indent=2)
     
     logger.info(f"Saved image information at: {images_path}")
-    
-    # Generate voice for script
-    voice_generator = VoiceGenerator()
-    audio_files = voice_generator.generate_audio_for_script(script)
-    
-    logger.info(f"Generated {len(audio_files)} audio files for script")
-    
-    # --- THÊM KIỂM TRA audio_files ---
-    if not audio_files:
-        logger.error("Audio generation failed or returned empty list. Cannot proceed with image/video generation.")
-        return # Thoát nếu không có audio
-
+    ###---KẾT THÚC KHỐI TẠO IMAGE---
 
     # Save project information
     project_info = {

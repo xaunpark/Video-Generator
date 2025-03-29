@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # API Keys - cách 1: từ biến môi trường
-OPENAI_API_KEY = os.getenv('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')
+OPENAI_API_KEY = os.getenv('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')
 ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
 YOUTUBE_CLIENT_ID = os.getenv('YOUTUBE_CLIENT_ID')
 YOUTUBE_CLIENT_SECRET = os.getenv('YOUTUBE_CLIENT_SECRET')
@@ -19,4 +19,4 @@ if not ELEVENLABS_API_KEY:
     ELEVENLABS_API_KEY = "sk_0e8cd650f678d27d45ce5fa94b246b722684ebf8836ec94a"
 
 if not OPENAI_API_KEY:
-    OPENAI_API_KEY = "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"
+    OPENAI_API_KEY = "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"
