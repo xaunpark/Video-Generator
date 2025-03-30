@@ -120,7 +120,7 @@ def main():
     
     for category in priority_categories:
         if categorized.get(category) and len(categorized[category]) > 0:
-            selected_article = categorized[category][1]
+            selected_article = categorized[category][0]
             logger.info(f"Selected article from {category} category: {selected_article['title']}")
             break
     
@@ -233,11 +233,30 @@ def main():
         #logger.info(f"Successfully created video: {output_path}")
         
         # Create output path
+        # Create output path
         def sanitize_filename(filename):
             """Remove invalid characters from filename"""
-            invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+            import unicodedata
+            # Normalize và loại bỏ dấu
+            filename = unicodedata.normalize('NFKD', filename)
+            filename = ''.join([c for c in filename if not unicodedata.combining(c)])
+            
+            # Xử lý các ký tự không hợp lệ
+            invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*', "'"]
             for char in invalid_chars:
                 filename = filename.replace(char, '_')
+            
+            # Loại bỏ khoảng trắng đầu/cuối
+            filename = filename.strip()
+            
+            # Thay thế nhiều khoảng trắng liên tiếp bằng một dấu gạch dưới
+            import re
+            filename = re.sub(r'\s+', '_', filename)
+            
+            # Giới hạn độ dài tên file
+            if len(filename) > 100:
+                filename = filename[:97] + "..."
+            
             return filename
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

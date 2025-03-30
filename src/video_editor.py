@@ -26,7 +26,7 @@ from src.fix_pillow import *
 
 # Import cấu hình từ project
 from config.settings import (
-    TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS, FFPROBE_EXECUTABLE_PATH # Import thêm
+    TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS, FFPROBE_EXECUTABLE_PATH, OUTPUT_DIR
 )
 
 # Cấu hình logging
@@ -90,6 +90,41 @@ class VideoEditor:
         logger.info(f"VideoEditor đã khởi tạo. Kích thước video: {self.width}x{self.height}, FPS: {self.fps}")
         logger.info(f"Hiệu ứng ảnh: {self.image_animation}, Cường độ: {self.animation_intensity}")
 
+    # Đặt tên file đơn giản
+    def sanitize_filename(self, filename):
+        """
+        Tạo tên file an toàn không chứa ký tự đặc biệt.
+        
+        Args:
+            filename (str): Tên file gốc
+            
+        Returns:
+            str: Tên file đã được xử lý
+        """
+        # Loại bỏ các ký tự không hợp lệ
+        invalid_chars = ['\\', '/', ':', '*', '?', '"', '<', '>', '|', "'"]
+        for char in invalid_chars:
+            filename = filename.replace(char, '_')
+        
+        # Xử lý dấu và ký tự đặc biệt
+        import unicodedata
+        # Chuyển về dạng không dấu
+        filename = unicodedata.normalize('NFKD', filename)
+        filename = ''.join([c for c in filename if not unicodedata.combining(c)])
+        
+        # Loại bỏ khoảng trắng đầu/cuối
+        filename = filename.strip()
+        
+        # Thay thế nhiều khoảng trắng liên tiếp bằng một dấu gạch dưới
+        import re
+        filename = re.sub(r'\s+', '_', filename)
+        
+        # Giới hạn độ dài tên file
+        if len(filename) > 100:
+            filename = filename[:97] + "..."
+        
+        return filename
+
     # --- THÊM HÀM HELPER ĐỂ LẤY VIDEO DURATION BẰNG FFPROBE ---
     def _get_video_duration_ffprobe(self, video_path):
         """Lấy thời lượng video bằng ffprobe."""
@@ -111,7 +146,7 @@ class VideoEditor:
             return None
     # --- KẾT THÚC HÀM HELPER ---
 
-    def create_video(self, script, media_items, audio_dir, output_path):
+    def create_video(self, script, media_items, audio_dir, output_path, project_id=None):
         """
         Tạo video hoàn chỉnh từ script, media và audio.
         
@@ -127,8 +162,10 @@ class VideoEditor:
         logger.info(f"Bắt đầu tạo video cho: '{script['title']}'")
         
         # Tạo thư mục tạm cho các scene videos
-        timestamp = int(time.time())
-        project_id = f"{timestamp}_{hash(script['title']) % 10000:04d}"
+        if not output_path:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            sanitized_title = self.sanitize_filename(script['title'][:50])
+            output_path = os.path.join(OUTPUT_DIR, f"{timestamp}_{sanitized_title}.mp4")
         temp_scene_dir = os.path.join(self.temp_video_dir, f"project_{project_id}")
         os.makedirs(temp_scene_dir, exist_ok=True)
         
@@ -254,18 +291,26 @@ class VideoEditor:
             except Exception as e:
                 logger.warning(f"Lỗi khi dọn dẹp thư mục tạm: {str(e)}")
 
+        # Thêm phụ đề nếu được bật trong cài đặt
         if VIDEO_SETTINGS.get("enable_subtitles", False):
-            logger.info(f"Thêm phụ đề vào video")
-            audio_dir = os.path.dirname(os.path.dirname(scene_videos[0])) if scene_videos else None
-            subtitle_output_path = os.path.splitext(output_path)[0] + "_with_subs" + os.path.splitext(output_path)[1]
+            logger.info("Bắt đầu thêm phụ đề vào video...")
             try:
-                final_video = self.add_subtitles_to_video(output_path, script, audio_dir, subtitle_output_path)
-                logger.info(f"Đã thêm phụ đề vào video: {final_video}")
-                return final_video  # Trả về video có phụ đề
+                subtitle_output_path = os.path.splitext(output_path)[0] + "_with_subs" + os.path.splitext(output_path)[1]
+                subtitled_video = self.add_subtitles_to_video(
+                    video_path=output_path,
+                    script=script,
+                    audio_dir=audio_dir, 
+                    output_path=subtitle_output_path
+                )
+                if subtitled_video and os.path.exists(subtitled_video) and subtitled_video != output_path:
+                    logger.info(f"Đã thêm phụ đề thành công vào video: {os.path.basename(subtitled_video)}")
+                    return subtitled_video
+                else:
+                    logger.warning("Không thể thêm phụ đề. Trả về video gốc không có phụ đề.")
             except Exception as e:
                 logger.error(f"Lỗi khi thêm phụ đề: {str(e)}")
-                # Vẫn trả về video gốc nếu có lỗi
-    
+                logger.warning("Trả về video gốc không có phụ đề.")
+
         return output_path
     
     def process_scene_media(self, media_item, audio_path, output_path):
@@ -709,227 +754,7 @@ class VideoEditor:
                 os.remove(concat_list)
                 
             raise
-    
-    def add_subtitles_to_video(self, video_path, script, audio_dir=None, output_path=None):
-        """
-        Thêm phụ đề vào video dựa trên script và tính toán thời điểm chính xác cho từng scene.
-        
-        Args:
-            video_path (str): Đường dẫn video gốc
-            script (dict): Script với nội dung từng scene
-            audio_dir (str, optional): Thư mục chứa các file audio để tính thời gian chính xác
-            output_path (str, optional): Đường dẫn video đầu ra với phụ đề
-        
-        Returns:
-            str: Đường dẫn đến video có phụ đề
-        """
-        if output_path is None:
-            base, ext = os.path.splitext(video_path)
-            output_path = f"{base}_with_subs{ext}"
-        
-        logger.info(f"Thêm phụ đề vào video: {os.path.basename(video_path)}")
-        
-        # Đọc video gốc
-        video = VideoFileClip(video_path)
-        video_duration = video.duration
-        logger.info(f"Thời lượng video: {video_duration:.2f}s")
-        
-        # Tính toán thời điểm bắt đầu và kết thúc của từng scene
-        scene_timings = self._calculate_scene_timings(script, video_duration, audio_dir)
-        
-        # Tạo phụ đề cho từng scene
-        subtitle_clips = []
-        
-        for scene_info in scene_timings:
-            scene_number = scene_info["number"]
-            content = scene_info["content"]
-            start_time = scene_info["start_time"]
-            end_time = scene_info["end_time"]
-            
-            # Tạo nội dung hiển thị ngắn gọn hơn (có thể cần cải thiện)
-            display_text = self._format_subtitle_text(content)
-            
-            # Tạo TextClip cho phụ đề
-            try:
-                txt_clip = TextClip(
-                    display_text, 
-                    font='Arial', 
-                    fontsize=24,
-                    color='white',
-                    bg_color='rgba(0,0,0,0.5)',  # Nền đen trong suốt
-                    method='caption',
-                    size=(video.w * 0.8, None)  # 80% chiều rộng video
-                )
-                
-                # Đặt vị trí phụ đề ở dưới cùng và đặt thời gian hiển thị
-                txt_clip = txt_clip.set_position(('center', 'bottom')).set_start(start_time).set_end(end_time)
-                
-                # Thêm vào danh sách
-                subtitle_clips.append(txt_clip)
-                logger.info(f"Thêm phụ đề cho scene {scene_number}: {start_time:.2f}s - {end_time:.2f}s")
-            except Exception as e:
-                logger.error(f"Lỗi khi tạo phụ đề cho scene {scene_number}: {str(e)}")
-        
-        # Tạo video mới với phụ đề
-        final_video = CompositeVideoClip([video] + subtitle_clips)
-        
-        # Xuất video
-        try:
-            final_video.write_videofile(
-                output_path,
-                codec='libx264',
-                audio_codec='aac',
-                fps=self.fps,
-                preset='medium',
-                threads=4,
-                ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
-            )
-            logger.info(f"Đã thêm phụ đề vào video: {output_path}")
-        except Exception as e:
-            logger.error(f"Lỗi khi xuất video với phụ đề: {str(e)}")
-        finally:
-            # Đóng clips
-            video.close()
-            final_video.close()
-            
-            # Đóng tất cả các clips con
-            for clip in subtitle_clips:
-                if clip:
-                    try:
-                        clip.close()
-                    except:
-                        pass
-        
-        return output_path
 
-    def _calculate_scene_timings(self, script, video_duration, audio_dir=None):
-        """
-        Tính toán thời điểm bắt đầu và kết thúc của từng scene.
-        
-        Args:
-            script (dict): Script với nội dung từng scene
-            video_duration (float): Thời lượng video tổng thể
-            audio_dir (str, optional): Thư mục chứa các file audio để tính thời gian chính xác
-            
-        Returns:
-            list: Danh sách các scene với thông tin thời gian
-        """
-        scenes = script.get('scenes', [])
-        if not scenes:
-            return []
-            
-        scene_timings = []
-        total_scenes = len(scenes)
-        
-        # Phương pháp 1: Nếu có audio_dir, sử dụng thời lượng audio để tính chính xác
-        if audio_dir and os.path.exists(audio_dir):
-            try:
-                # Tìm thời lượng intro (nếu có)
-                intro_duration = 0
-                intro_file = os.path.join(audio_dir, "intro.mp3")
-                if os.path.exists(intro_file):
-                    intro_audio = mutagen.mp3.MP3(intro_file)
-                    intro_duration = intro_audio.info.length
-                    
-                # Tính thời điểm bắt đầu của từng scene (sau intro)
-                current_time = intro_duration
-                
-                for scene in scenes:
-                    scene_number = scene.get('number', 0)
-                    content = scene.get('content', '')
-                    
-                    # Tìm file audio tương ứng
-                    audio_file = os.path.join(audio_dir, f"scene_{scene_number}.mp3")
-                    
-                    if os.path.exists(audio_file):
-                        # Lấy thời lượng thực tế từ file audio
-                        audio = mutagen.mp3.MP3(audio_file)
-                        scene_duration = audio.info.length
-                    else:
-                        # Ước tính thời lượng dựa trên số từ (3 từ/giây)
-                        words = content.split()
-                        scene_duration = len(words) / 3.0
-                    
-                    # Thêm thông tin thời gian
-                    scene_info = {
-                        "number": scene_number,
-                        "content": content,
-                        "start_time": current_time,
-                        "end_time": current_time + scene_duration,
-                        "duration": scene_duration
-                    }
-                    
-                    scene_timings.append(scene_info)
-                    current_time += scene_duration
-                
-                logger.info(f"Đã tính toán thời gian cho {len(scene_timings)} scenes dựa trên audio files")
-                return scene_timings
-                    
-            except Exception as e:
-                logger.error(f"Lỗi khi tính thời gian từ audio: {str(e)}")
-                # Fallback to method 2
-                
-        # Phương pháp 2: Chia đều thời lượng video cho các scene (trừ intro và outro)
-        try:
-            # Ước tính thời lượng intro/outro
-            intro_outro_duration = video_duration * 0.1  # 10% cho intro và outro
-            content_duration = video_duration - intro_outro_duration
-            
-            # Chia đều thời gian cho các scene
-            scene_average_duration = content_duration / total_scenes
-            
-            # Tính thời điểm bắt đầu của từng scene
-            intro_duration = intro_outro_duration / 2
-            current_time = intro_duration
-            
-            for scene in scenes:
-                scene_number = scene.get('number', 0)
-                content = scene.get('content', '')
-                
-                # Thêm thông tin thời gian
-                scene_info = {
-                    "number": scene_number,
-                    "content": content,
-                    "start_time": current_time,
-                    "end_time": current_time + scene_average_duration,
-                    "duration": scene_average_duration
-                }
-                
-                scene_timings.append(scene_info)
-                current_time += scene_average_duration
-            
-            logger.info(f"Đã tính toán thời gian cho {len(scene_timings)} scenes dựa trên phân bổ đều")
-            return scene_timings
-            
-        except Exception as e:
-            logger.error(f"Lỗi khi tính thời gian: {str(e)}")
-            return []
-
-    def _format_subtitle_text(self, text):
-        """
-        Định dạng lại nội dung phụ đề cho dễ đọc.
-        
-        Args:
-            text (str): Nội dung gốc
-            
-        Returns:
-            str: Nội dung đã được định dạng lại
-        """
-        # Giới hạn độ dài
-        if len(text) > 100:
-            # Chia thành 2 dòng
-            words = text.split()
-            middle = len(words) // 2
-            formatted_text = ' '.join(words[:middle]) + '\n' + ' '.join(words[middle:])
-            
-            # Nếu vẫn quá dài, cắt bớt
-            if len(formatted_text) > 150:
-                formatted_text = formatted_text[:147] + '...'
-        else:
-            formatted_text = text
-            
-        return formatted_text
-    
     def create_simple_video(self, title, media_paths, audio_paths, output_path):
         """
         Tạo một video đơn giản từ danh sách media và audio.
@@ -1067,6 +892,349 @@ class VideoEditor:
             logger.error(f"Lỗi khi trích xuất thumbnail: {str(e)}")
             return None
 
+    ###---- SUBTITLE  ----###
+    def add_subtitles_to_video(self, video_path, script=None, audio_dir=None, output_path=None):
+        """
+        Thêm phụ đề cứng (hard subtitles) vào video bằng cách sử dụng Whisper và FFmpeg.
+        """
+        if output_path is None:
+            base, ext = os.path.splitext(video_path)
+            output_path = f"{base}_with_subs{ext}"
+        
+        logger.info(f"Thêm phụ đề vào video: {os.path.basename(video_path)}")
+        
+        try:
+            # Lấy thư mục output
+            output_dir = os.path.dirname(output_path)
+            video_filename = os.path.basename(video_path)
+            output_filename = os.path.basename(output_path)
+            
+            # Tạo thư mục tạm riêng nhưng ở bên trong thư mục output để dễ truy cập
+            temp_subtitle_dir = os.path.join(output_dir, f"sub_temp_{int(time.time())}")
+            os.makedirs(temp_subtitle_dir, exist_ok=True)
+            
+            # Tìm file audio tổng của video
+            full_audio_path = self._find_audio_file(video_path, audio_dir)
+            if not full_audio_path:
+                logger.error("Không thể tìm thấy hoặc trích xuất audio từ video")
+                # Dọn dẹp thư mục tạm
+                shutil.rmtree(temp_subtitle_dir, ignore_errors=True)
+                return video_path
+            
+            # Tạo file SRT trong thư mục tạm
+            srt_path = os.path.join(temp_subtitle_dir, "subtitle.srt")
+            generated_srt = self.generate_subtitles_with_whisper(
+                full_audio_path, 
+                srt_path, 
+                model=VIDEO_SETTINGS.get("subtitle_whisper_model", "base"), 
+                language=VIDEO_SETTINGS.get("subtitle_language", "en")
+            )
+            
+            if not generated_srt or not os.path.exists(generated_srt):
+                logger.error("Không thể tạo phụ đề với Whisper")
+                # Dọn dẹp thư mục tạm
+                shutil.rmtree(temp_subtitle_dir, ignore_errors=True)
+                return video_path
+            
+            # Lấy đường dẫn tuyệt đối của ffmpeg.exe
+            ffmpeg_absolute_path = os.path.abspath(self.ffmpeg_path)
+            logger.info(f"Đường dẫn tuyệt đối ffmpeg: {ffmpeg_absolute_path}")
+            
+            # Tạo batch file đơn giản để chạy từ thư mục output
+            batch_file = os.path.join(temp_subtitle_dir, "add_subs.bat")
+            
+            temp_dir_name = os.path.basename(temp_subtitle_dir)
+            
+            with open(batch_file, 'w', encoding='utf-8') as f:
+                f.write('@echo off\n')
+                f.write(f'cd "{output_dir}"\n')
+                f.write(f'"{ffmpeg_absolute_path}" -y -i "{video_filename}" -vf "subtitles={temp_dir_name}/subtitle.srt" -c:a copy "{output_filename}"\n')
+                f.write('echo Completed successfully!\n')
+            
+            # Chạy batch file
+            logger.info(f"Chạy batch file: {batch_file}")
+            try:
+                result = subprocess.run(batch_file, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                stdout_output = result.stdout.decode('utf-8', errors='ignore')
+                stderr_output = result.stderr.decode('utf-8', errors='ignore')
+                
+                logger.info(f"Batch execution stdout: {stdout_output}")
+                logger.info(f"Batch execution stderr: {stderr_output}")
+                
+                if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+                    logger.info(f"Thêm phụ đề thành công: {output_path}")
+                    # Dọn dẹp thư mục tạm sau khi thành công
+                    shutil.rmtree(temp_subtitle_dir, ignore_errors=True)
+                    logger.info(f"Đã dọn dẹp thư mục tạm: {temp_subtitle_dir}")
+                    return output_path
+                else:
+                    logger.error(f"Không thể thêm phụ đề. Mã lỗi: {result.returncode}")
+                    # Giữ lại thư mục tạm trong trường hợp lỗi để debug (tuỳ chọn)
+                    # Nếu muốn luôn dọn dẹp, hãy bỏ comment dòng dưới đây
+                    # shutil.rmtree(temp_subtitle_dir, ignore_errors=True)
+                    return video_path
+            except Exception as e:
+                logger.error(f"Lỗi khi chạy batch file: {str(e)}")
+                # Giữ lại thư mục tạm trong trường hợp lỗi để debug (tuỳ chọn)
+                # Nếu muốn luôn dọn dẹp, hãy bỏ comment dòng dưới đây
+                # shutil.rmtree(temp_subtitle_dir, ignore_errors=True)
+                return video_path
+        except Exception as e:
+            logger.error(f"Lỗi khi thêm phụ đề: {str(e)}")
+            # Dọn dẹp thư mục tạm nếu có
+            if 'temp_subtitle_dir' in locals():
+                shutil.rmtree(temp_subtitle_dir, ignore_errors=True)
+                logger.info(f"Đã dọn dẹp thư mục tạm: {temp_subtitle_dir}")
+            return video_path
+
+    def _find_audio_file(self, video_path, audio_dir=None):
+        """
+        Tìm file audio phù hợp hoặc trích xuất audio từ video nếu cần.
+        """
+        # Tìm file audio tổng trong audio_dir
+        full_audio_path = None
+        if audio_dir and os.path.exists(audio_dir):
+            # Tìm file audio tổng
+            for filename in ["full_audio.mp3", "all_audio.mp3", "complete_audio.mp3"]:
+                potential_path = os.path.join(audio_dir, filename)
+                if os.path.exists(potential_path):
+                    full_audio_path = potential_path
+                    logger.info(f"Tìm thấy file audio tổng: {full_audio_path}")
+                    break
+            
+            if not full_audio_path:
+                # Tìm theo tên khác nếu có
+                import glob
+                potential_paths = glob.glob(os.path.join(audio_dir, "*.mp3"))
+                if potential_paths:
+                    # Lấy file có kích thước lớn nhất
+                    largest_file = max(potential_paths, key=os.path.getsize)
+                    full_audio_path = largest_file
+                    logger.info(f"Tìm thấy file audio lớn nhất: {full_audio_path}")
+        
+        # Trích xuất audio từ video nếu không tìm thấy
+        if not full_audio_path:
+            logger.info("Không tìm thấy file audio đầy đủ. Trích xuất audio từ video...")
+            temp_audio_path = os.path.join(self.temp_dir, f"extracted_audio_{int(time.time())}.mp3")
+            try:
+                cmd = [
+                    self.ffmpeg_path, "-y",
+                    "-i", video_path,
+                    "-q:a", "0",
+                    "-map", "a",
+                    temp_audio_path
+                ]
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                full_audio_path = temp_audio_path
+                logger.info(f"Đã trích xuất audio từ video: {full_audio_path}")
+            except Exception as e:
+                logger.error(f"Lỗi khi trích xuất audio: {str(e)}")
+                return None
+        
+        # Sửa lỗi: Nếu full_audio_path là một đối tượng Path, chuyển đổi thành str
+        if full_audio_path:
+            # Đảm bảo full_audio_path là chuỗi
+            full_audio_path = str(full_audio_path)
+            
+            # Kiểm tra đúng khi dọn dẹp file tạm
+            temp_dir_str = str(self.temp_dir)
+            if full_audio_path.startswith(temp_dir_str) and os.path.exists(full_audio_path):
+                logger.debug(f"Audio path {full_audio_path} nằm trong thư mục tạm {temp_dir_str}")
+        
+        return full_audio_path
+
+    def generate_subtitles_with_whisper(self, audio_path, output_srt_path=None, model="base", language="en"):
+        """
+        Sử dụng Whisper để tạo file phụ đề SRT từ audio, với fallback từ faster-whisper sang whisper tiêu chuẩn.
+        
+        Args:
+            audio_path (str): Đường dẫn đến file audio
+            output_srt_path (str, optional): Đường dẫn đầu ra cho file SRT
+            model (str): Tên mô hình Whisper (tiny, base, small, medium, large)
+            language (str): Ngôn ngữ của audio (auto để tự động phát hiện)
+            
+        Returns:
+            str: Đường dẫn đến file SRT đã tạo
+        """
+        if not audio_path or not os.path.exists(audio_path):
+            logger.error(f"Không tìm thấy file audio: {audio_path}")
+            return None
+            
+        if output_srt_path is None:
+            output_srt_path = os.path.splitext(audio_path)[0] + ".srt"
+        
+        logger.info(f"Tạo phụ đề từ file audio: {audio_path} với mô hình: {model}")
+        
+        # Thử sử dụng faster-whisper trước
+        try:
+            logger.info("Thử sử dụng faster-whisper...")
+            from faster_whisper import WhisperModel
+            
+            # Tải mô hình
+            logger.info(f"Đang tải mô hình faster-whisper: {model}")
+            whisper_model = WhisperModel(model, device="cpu", compute_type="float32")
+            
+            # Transcribe audio
+            logger.info("Đang xử lý audio với faster-whisper...")
+            transcribe_options = {
+                "language": language if language != "auto" else None,
+                "task": "transcribe"
+            }
+            segments, info = whisper_model.transcribe(audio_path, **transcribe_options)
+            
+            # Tạo file SRT
+            with open(output_srt_path, "w", encoding="utf-8") as f:
+                i = 1
+                for segment in segments:
+                    # Chuyển đổi thời gian
+                    start = self._format_srt_time(segment.start)
+                    end = self._format_srt_time(segment.end)
+                    
+                    # Ghi định dạng SRT
+                    f.write(f"{i}\n{start} --> {end}\n{segment.text.strip()}\n\n")
+                    i += 1
+            
+            logger.info(f"Đã tạo file phụ đề SRT với faster-whisper: {output_srt_path}")
+            return output_srt_path
+                
+        except ImportError as e:
+            logger.warning(f"Không thể import faster-whisper: {str(e)}. Thử fallback sang whisper tiêu chuẩn...")
+            # Fallback sang whisper tiêu chuẩn
+            try:
+                import whisper
+                
+                # Tải mô hình
+                logger.info(f"Đang tải mô hình whisper tiêu chuẩn: {model}")
+                whisper_model = whisper.load_model(model)
+                
+                # Transcribe audio
+                logger.info("Đang xử lý audio với whisper tiêu chuẩn...")
+                transcribe_options = {"language": language if language != "auto" else None}
+                result = whisper_model.transcribe(audio_path, **transcribe_options)
+                
+                # Tạo file SRT
+                with open(output_srt_path, "w", encoding="utf-8") as f:
+                    for i, segment in enumerate(result["segments"], 1):
+                        # Chuyển đổi thời gian
+                        start = self._format_srt_time(segment["start"])
+                        end = self._format_srt_time(segment["end"])
+                        
+                        # Ghi định dạng SRT
+                        f.write(f"{i}\n{start} --> {end}\n{segment['text'].strip()}\n\n")
+                
+                logger.info(f"Đã tạo file phụ đề SRT với whisper tiêu chuẩn: {output_srt_path}")
+                return output_srt_path
+                
+            except ImportError as e2:
+                logger.error(f"Không thể import whisper tiêu chuẩn: {str(e2)}")
+                logger.error("Cả hai thư viện faster-whisper và whisper đều không khả dụng.")
+                logger.error("Hãy cài đặt ít nhất một trong hai: pip install faster-whisper HOẶC pip install openai-whisper")
+                return None
+        
+        except Exception as e:
+            logger.error(f"Lỗi khi tạo phụ đề với faster-whisper: {str(e)}")
+            
+            # Thử fallback sang whisper tiêu chuẩn nếu lỗi không phải ImportError
+            try:
+                logger.info("Thử fallback sang whisper tiêu chuẩn...")
+                import whisper
+                
+                # Tải mô hình
+                logger.info(f"Đang tải mô hình whisper tiêu chuẩn: {model}")
+                whisper_model = whisper.load_model(model)
+                
+                # Transcribe audio
+                logger.info("Đang xử lý audio với whisper tiêu chuẩn...")
+                transcribe_options = {"language": language if language != "auto" else None}
+                result = whisper_model.transcribe(audio_path, **transcribe_options)
+                
+                # Tạo file SRT
+                with open(output_srt_path, "w", encoding="utf-8") as f:
+                    for i, segment in enumerate(result["segments"], 1):
+                        # Chuyển đổi thời gian
+                        start = self._format_srt_time(segment["start"])
+                        end = self._format_srt_time(segment["end"])
+                        
+                        # Ghi định dạng SRT
+                        f.write(f"{i}\n{start} --> {end}\n{segment['text'].strip()}\n\n")
+                
+                logger.info(f"Đã tạo file phụ đề SRT với whisper tiêu chuẩn: {output_srt_path}")
+                return output_srt_path
+                
+            except Exception as e2:
+                logger.error(f"Cả faster-whisper và whisper tiêu chuẩn đều lỗi: {str(e)} / {str(e2)}")
+                return None
+
+    def _generate_subtitles_with_standard_whisper(self, audio_path, output_srt_path, model="base", language="en"):
+        """
+        Sử dụng OpenAI Whisper tiêu chuẩn để tạo SRT.
+        """
+        import whisper
+        
+        # Tải mô hình (lần đầu sẽ tải về, lần sau sẽ dùng cache)
+        logger.info(f"Đang tải mô hình Whisper: {model}")
+        whisper_model = whisper.load_model(model)
+        
+        # Transcribe audio
+        logger.info("Đang xử lý audio với Whisper...")
+        transcribe_options = {"language": language if language != "auto" else None}
+        result = whisper_model.transcribe(audio_path, **transcribe_options)
+        
+        # Tạo file SRT
+        with open(output_srt_path, "w", encoding="utf-8") as f:
+            for i, segment in enumerate(result["segments"], 1):
+                # Chuyển đổi thời gian
+                start = self._format_srt_time(segment["start"])
+                end = self._format_srt_time(segment["end"])
+                
+                # Ghi định dạng SRT
+                f.write(f"{i}\n{start} --> {end}\n{segment['text'].strip()}\n\n")
+        
+        logger.info(f"Đã tạo file phụ đề SRT: {output_srt_path}")
+        return output_srt_path
+
+    def _generate_subtitles_with_faster_whisper(self, audio_path, output_srt_path, model="base", language="en"):
+        """
+        Sử dụng faster-whisper để tạo SRT (nhanh hơn, hỗ trợ GPU tốt hơn).
+        """
+        from faster_whisper import WhisperModel
+        
+        # Tải mô hình
+        logger.info(f"Đang tải mô hình faster-whisper: {model}")
+        whisper_model = WhisperModel(model, device="auto", compute_type="auto")
+        
+        # Transcribe audio
+        logger.info("Đang xử lý audio với faster-whisper...")
+        transcribe_options = {
+            "language": language if language != "auto" else None,
+            "task": "transcribe"
+        }
+        segments, info = whisper_model.transcribe(audio_path, **transcribe_options)
+        
+        # Tạo file SRT
+        with open(output_srt_path, "w", encoding="utf-8") as f:
+            i = 1
+            for segment in segments:
+                # Chuyển đổi thời gian
+                start = self._format_srt_time(segment.start)
+                end = self._format_srt_time(segment.end)
+                
+                # Ghi định dạng SRT
+                f.write(f"{i}\n{start} --> {end}\n{segment.text.strip()}\n\n")
+                i += 1
+        
+        logger.info(f"Đã tạo file phụ đề SRT với faster-whisper: {output_srt_path}")
+        return output_srt_path
+
+    def _format_srt_time(self, seconds):
+        """
+        Chuyển đổi thời gian từ giây sang định dạng SRT (HH:MM:SS,mmm)
+        """
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = seconds % 60
+        millisecs = int((secs - int(secs)) * 1000)
+        return f"{hours:02d}:{minutes:02d}:{int(secs):02d},{millisecs:03d}"
 
 # Kiểm tra module khi chạy trực tiếp
 if __name__ == "__main__":
