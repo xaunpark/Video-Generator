@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
+#delete later
 """
 video_generator.py - Module để tạo video từ ảnh, video clips và audio
 """
@@ -14,6 +14,7 @@ import json
 import math
 import subprocess
 import tempfile
+import mutagen
 
 from moviepy.editor import (
     VideoFileClip, ImageClip, AudioFileClip, CompositeVideoClip, 
@@ -252,7 +253,19 @@ class VideoEditor:
                 self._cleanup_old_temp_dirs(days=1)
             except Exception as e:
                 logger.warning(f"Lỗi khi dọn dẹp thư mục tạm: {str(e)}")
-        
+
+        if VIDEO_SETTINGS.get("enable_subtitles", False):
+            logger.info(f"Thêm phụ đề vào video")
+            audio_dir = os.path.dirname(os.path.dirname(scene_videos[0])) if scene_videos else None
+            subtitle_output_path = os.path.splitext(output_path)[0] + "_with_subs" + os.path.splitext(output_path)[1]
+            try:
+                final_video = self.add_subtitles_to_video(output_path, script, audio_dir, subtitle_output_path)
+                logger.info(f"Đã thêm phụ đề vào video: {final_video}")
+                return final_video  # Trả về video có phụ đề
+            except Exception as e:
+                logger.error(f"Lỗi khi thêm phụ đề: {str(e)}")
+                # Vẫn trả về video gốc nếu có lỗi
+    
         return output_path
     
     def process_scene_media(self, media_item, audio_path, output_path):
@@ -697,13 +710,14 @@ class VideoEditor:
                 
             raise
     
-    def add_subtitles_to_video(self, video_path, script, output_path=None):
+    def add_subtitles_to_video(self, video_path, script, audio_dir=None, output_path=None):
         """
-        Thêm phụ đề vào video dựa trên script.
+        Thêm phụ đề vào video dựa trên script và tính toán thời điểm chính xác cho từng scene.
         
         Args:
             video_path (str): Đường dẫn video gốc
             script (dict): Script với nội dung từng scene
+            audio_dir (str, optional): Thư mục chứa các file audio để tính thời gian chính xác
             output_path (str, optional): Đường dẫn video đầu ra với phụ đề
         
         Returns:
@@ -717,54 +731,204 @@ class VideoEditor:
         
         # Đọc video gốc
         video = VideoFileClip(video_path)
+        video_duration = video.duration
+        logger.info(f"Thời lượng video: {video_duration:.2f}s")
+        
+        # Tính toán thời điểm bắt đầu và kết thúc của từng scene
+        scene_timings = self._calculate_scene_timings(script, video_duration, audio_dir)
         
         # Tạo phụ đề cho từng scene
         subtitle_clips = []
         
-        for scene in script.get('scenes', []):
-            scene_number = scene.get('number', 0)
-            content = scene.get('content', '')
+        for scene_info in scene_timings:
+            scene_number = scene_info["number"]
+            content = scene_info["content"]
+            start_time = scene_info["start_time"]
+            end_time = scene_info["end_time"]
             
-            # TODO: Cần tính toán thời điểm bắt đầu và kết thúc của scene trong video
-            # Hiện tại chỉ là đơn giản hóa, cần thêm logic tính thời gian chính xác
+            # Tạo nội dung hiển thị ngắn gọn hơn (có thể cần cải thiện)
+            display_text = self._format_subtitle_text(content)
             
             # Tạo TextClip cho phụ đề
-            txt_clip = TextClip(
-                content, 
-                font='Arial', 
-                fontsize=24,
-                color='white',
-                bg_color='black',
-                method='caption',
-                size=(video.w, None)
-            )
-            
-            # Đặt vị trí phụ đề ở dưới cùng
-            txt_clip = txt_clip.set_position(('center', 'bottom'))
-            
-            # Thêm vào danh sách
-            subtitle_clips.append(txt_clip)
+            try:
+                txt_clip = TextClip(
+                    display_text, 
+                    font='Arial', 
+                    fontsize=24,
+                    color='white',
+                    bg_color='rgba(0,0,0,0.5)',  # Nền đen trong suốt
+                    method='caption',
+                    size=(video.w * 0.8, None)  # 80% chiều rộng video
+                )
+                
+                # Đặt vị trí phụ đề ở dưới cùng và đặt thời gian hiển thị
+                txt_clip = txt_clip.set_position(('center', 'bottom')).set_start(start_time).set_end(end_time)
+                
+                # Thêm vào danh sách
+                subtitle_clips.append(txt_clip)
+                logger.info(f"Thêm phụ đề cho scene {scene_number}: {start_time:.2f}s - {end_time:.2f}s")
+            except Exception as e:
+                logger.error(f"Lỗi khi tạo phụ đề cho scene {scene_number}: {str(e)}")
         
         # Tạo video mới với phụ đề
         final_video = CompositeVideoClip([video] + subtitle_clips)
         
         # Xuất video
-        final_video.write_videofile(
-            output_path,
-            codec='libx264',
-            audio_codec='aac',
-            fps=self.fps,
-            preset='medium',
-            threads=4,
-            ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
-        )
+        try:
+            final_video.write_videofile(
+                output_path,
+                codec='libx264',
+                audio_codec='aac',
+                fps=self.fps,
+                preset='medium',
+                threads=4,
+                ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
+            )
+            logger.info(f"Đã thêm phụ đề vào video: {output_path}")
+        except Exception as e:
+            logger.error(f"Lỗi khi xuất video với phụ đề: {str(e)}")
+        finally:
+            # Đóng clips
+            video.close()
+            final_video.close()
+            
+            # Đóng tất cả các clips con
+            for clip in subtitle_clips:
+                if clip:
+                    try:
+                        clip.close()
+                    except:
+                        pass
         
-        # Đóng clips
-        video.close()
-        final_video.close()
-        
-        logger.info(f"Đã thêm phụ đề vào video: {output_path}")
         return output_path
+
+    def _calculate_scene_timings(self, script, video_duration, audio_dir=None):
+        """
+        Tính toán thời điểm bắt đầu và kết thúc của từng scene.
+        
+        Args:
+            script (dict): Script với nội dung từng scene
+            video_duration (float): Thời lượng video tổng thể
+            audio_dir (str, optional): Thư mục chứa các file audio để tính thời gian chính xác
+            
+        Returns:
+            list: Danh sách các scene với thông tin thời gian
+        """
+        scenes = script.get('scenes', [])
+        if not scenes:
+            return []
+            
+        scene_timings = []
+        total_scenes = len(scenes)
+        
+        # Phương pháp 1: Nếu có audio_dir, sử dụng thời lượng audio để tính chính xác
+        if audio_dir and os.path.exists(audio_dir):
+            try:
+                # Tìm thời lượng intro (nếu có)
+                intro_duration = 0
+                intro_file = os.path.join(audio_dir, "intro.mp3")
+                if os.path.exists(intro_file):
+                    intro_audio = mutagen.mp3.MP3(intro_file)
+                    intro_duration = intro_audio.info.length
+                    
+                # Tính thời điểm bắt đầu của từng scene (sau intro)
+                current_time = intro_duration
+                
+                for scene in scenes:
+                    scene_number = scene.get('number', 0)
+                    content = scene.get('content', '')
+                    
+                    # Tìm file audio tương ứng
+                    audio_file = os.path.join(audio_dir, f"scene_{scene_number}.mp3")
+                    
+                    if os.path.exists(audio_file):
+                        # Lấy thời lượng thực tế từ file audio
+                        audio = mutagen.mp3.MP3(audio_file)
+                        scene_duration = audio.info.length
+                    else:
+                        # Ước tính thời lượng dựa trên số từ (3 từ/giây)
+                        words = content.split()
+                        scene_duration = len(words) / 3.0
+                    
+                    # Thêm thông tin thời gian
+                    scene_info = {
+                        "number": scene_number,
+                        "content": content,
+                        "start_time": current_time,
+                        "end_time": current_time + scene_duration,
+                        "duration": scene_duration
+                    }
+                    
+                    scene_timings.append(scene_info)
+                    current_time += scene_duration
+                
+                logger.info(f"Đã tính toán thời gian cho {len(scene_timings)} scenes dựa trên audio files")
+                return scene_timings
+                    
+            except Exception as e:
+                logger.error(f"Lỗi khi tính thời gian từ audio: {str(e)}")
+                # Fallback to method 2
+                
+        # Phương pháp 2: Chia đều thời lượng video cho các scene (trừ intro và outro)
+        try:
+            # Ước tính thời lượng intro/outro
+            intro_outro_duration = video_duration * 0.1  # 10% cho intro và outro
+            content_duration = video_duration - intro_outro_duration
+            
+            # Chia đều thời gian cho các scene
+            scene_average_duration = content_duration / total_scenes
+            
+            # Tính thời điểm bắt đầu của từng scene
+            intro_duration = intro_outro_duration / 2
+            current_time = intro_duration
+            
+            for scene in scenes:
+                scene_number = scene.get('number', 0)
+                content = scene.get('content', '')
+                
+                # Thêm thông tin thời gian
+                scene_info = {
+                    "number": scene_number,
+                    "content": content,
+                    "start_time": current_time,
+                    "end_time": current_time + scene_average_duration,
+                    "duration": scene_average_duration
+                }
+                
+                scene_timings.append(scene_info)
+                current_time += scene_average_duration
+            
+            logger.info(f"Đã tính toán thời gian cho {len(scene_timings)} scenes dựa trên phân bổ đều")
+            return scene_timings
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi tính thời gian: {str(e)}")
+            return []
+
+    def _format_subtitle_text(self, text):
+        """
+        Định dạng lại nội dung phụ đề cho dễ đọc.
+        
+        Args:
+            text (str): Nội dung gốc
+            
+        Returns:
+            str: Nội dung đã được định dạng lại
+        """
+        # Giới hạn độ dài
+        if len(text) > 100:
+            # Chia thành 2 dòng
+            words = text.split()
+            middle = len(words) // 2
+            formatted_text = ' '.join(words[:middle]) + '\n' + ' '.join(words[middle:])
+            
+            # Nếu vẫn quá dài, cắt bớt
+            if len(formatted_text) > 150:
+                formatted_text = formatted_text[:147] + '...'
+        else:
+            formatted_text = text
+            
+        return formatted_text
     
     def create_simple_video(self, title, media_paths, audio_paths, output_path):
         """
