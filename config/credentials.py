@@ -43,12 +43,4 @@ if missing_keys:
     # Hoặc bạn có thể chỉ cảnh báo nếu muốn chương trình cố gắng chạy tiếp với một số tính năng bị hạn chế
     raise ValueError(error_message)
 else:
-    logger.info("Tất cả các API keys cần thiết đã được load thành công từ môi trường.")
-
-# --- XÓA BỎ HOÀN TOÀN CÁC KHỐI if not ...: API_KEY = "..." ---
-# Ví dụ:
-# # if not ELEVENLABS_API_KEY:
-# #     ELEVENLABS_API_KEY = "sk_0e8cd650f678d27d45ce5fa94b246b722684ebf8836ec94a" # <--- XÓA DÒNG NÀY
-#
-# # if not OPENAI_API_KEY:
-# #     OPENAI_API_KEY = "sk-proj-..." # <--- XÓA DÒNG NÀY
+    logger.info("Tất cả các API keys cần thiết đã được load thành công từ môi trường.") 
