@@ -11,10 +11,12 @@ import shutil
 import glob
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
+import subprocess
 
 # Import API keys and settings
 from config.credentials import SERPER_API_KEY, OPENAI_API_KEY
 from config.settings import TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS
+from src.video_clip_finder import VideoClipFinder
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -157,134 +159,126 @@ class ImageGenerator:
         # --- 3. Images/Videos for Each Scene ---
         for scene in script.get('scenes', []):
             scene_number = scene.get('number', 'unknown')
-            scene_content = scene.get('content', '').strip() # Thêm strip()
-            prefer_video = scene.get('prefer_video', False)
-            video_reason = scene.get('video_reason', 'Không rõ')
+            scene_content = scene.get('content', '').strip()
+            prefer_video_flag = scene.get('prefer_video', False) # Lấy flag từ script
             search_query_used = "N/A"
-            media_found_for_scene = False # Cờ kiểm tra
-            media_path_for_scene = None # Lưu đường dẫn media tìm được
-            media_type_for_scene = "unknown" # Lưu loại media (image/video)
+            media_path_for_scene = None
+            media_type_for_scene = "unknown"
+            final_media_duration = None
 
-            # Lấy thời lượng audio
             scene_audio_info = audio_lookup.get(scene_number)
-            actual_scene_duration = scene_audio_info.get("duration") if scene_audio_info else None
-            if actual_scene_duration is None or actual_scene_duration <= 0:
-                 logger.warning(f"Scene {scene_number}: Invalid audio duration. Using default: {VIDEO_SETTINGS['image_duration']}s")
-                 actual_scene_duration = VIDEO_SETTINGS["image_duration"]
+            target_duration = scene_audio_info.get("duration") if scene_audio_info else None
 
-            try:
-                logger.info(f"--- Processing Scene {scene_number} (Audio Duration: {actual_scene_duration:.2f}s) ---")
-                if not scene_content:
-                    logger.warning(f"Scene {scene_number}: Empty content. Skipping media generation.")
-                    continue
+            if target_duration is None or target_duration <= 0:
+                 logger.warning(f"Scene {scene_number}: Invalid audio duration {target_duration}. Using default image duration.")
+                 target_duration = VIDEO_SETTINGS["image_duration"]
+            final_media_duration = target_duration # Duration cho media item cuối cùng
 
-                # Tạo query tìm kiếm
-                search_query = self._create_search_query_with_openai(scene_content, script['title'])
-                search_query_used = search_query
+            logger.info(f"--- Processing Scene {scene_number} (Target Duration: {target_duration:.2f}s) ---")
+            if not scene_content:
+                 logger.warning(f"Scene {scene_number}: Empty content. Skipping.")
+                 continue
 
-                # Tạo đường dẫn file
-                scene_image_filename = f"scene_{scene_number}.jpg"
-                scene_video_filename = f"scene_{scene_number}.mp4"
-                scene_text_image_filename = f"scene_{scene_number}_text.png" # Cho fallback text
-                image_output_path = os.path.join(project_dir, scene_image_filename)
-                video_output_path = os.path.join(project_dir, scene_video_filename)
-                text_image_output_path = os.path.join(project_dir, scene_text_image_filename) # Đường dẫn ảnh text
+            search_query = self._create_search_query_with_openai(scene_content, script['title'])
+            search_query_used = search_query
 
-                # --- Ưu tiên tìm Video Clip ---
-                if prefer_video and VIDEO_SETTINGS.get("enable_video_clips", False):
-                    logger.info(f"Scene {scene_number}: Attempting to find video clip...")
-                    try:
-                        if self.video_finder is None:
-                            from src.video_clip_finder import VideoClipFinder # Import JIT
-                            self.video_finder = VideoClipFinder()
-                            logger.info("Initialized VideoClipFinder.")
+            scene_base_filename = f"scene_{scene_number}"
+            # Chỉ cần đường dẫn output tiềm năng cho video và ảnh text fallback
+            temp_video_output_path = os.path.join(project_dir, f"{scene_base_filename}.mp4")
+            temp_image_output_path = os.path.join(project_dir, f"{scene_base_filename}.jpg")
+            text_image_output_path = os.path.join(project_dir, f"{scene_base_filename}_text.png")
 
-                        if self.video_finder:
-                             clip_path = self.video_finder.find_video_clip(
-                                 search_query,
-                                 scene_content,
-                                 video_output_path, # Lưu vào đường dẫn video
-                                 target_duration=actual_scene_duration
-                             )
-                             if clip_path:
-                                 logger.info(f"Scene {scene_number}: Found video clip: {os.path.basename(clip_path)}")
-                                 media_path_for_scene = clip_path
-                                 media_type_for_scene = "video"
-                                 media_found_for_scene = True
-                             else:
-                                 logger.info(f"Scene {scene_number}: No suitable video clip found. Proceeding to find image.")
-                    except ImportError as ie:
-                         logger.error(f"Cannot import VideoClipFinder: {ie}. Disabling video clips for this run.")
-                         VIDEO_SETTINGS["enable_video_clips"] = False # Tắt cho lần chạy này
-                    except Exception as video_err:
-                         logger.warning(f"Scene {scene_number}: Error finding video clip: {video_err}. Proceeding to find image.")
+            use_image_fallback = False # Mặc định không fallback
 
-                # --- Tìm Ảnh (Nếu không ưu tiên video hoặc tìm video thất bại) ---
-                if not media_found_for_scene:
-                    logger.info(f"Scene {scene_number}: Attempting to find image...")
-                    try:
-                        # 1. Thử tìm ảnh online (qua cache hoặc download)
-                        image_path = self._get_cached_or_download_image(search_query, image_output_path)
-                        if image_path:
-                             logger.info(f"Scene {scene_number}: Found online image: {os.path.basename(image_path)}")
-                             media_path_for_scene = image_path
-                             media_type_for_scene = "image"
-                             media_found_for_scene = True
+            # --- SỬA LOGIC GỌI VIDEOCLIPFINDER ---
+            if prefer_video_flag and VIDEO_SETTINGS.get("enable_video_clips", False):
+                logger.info(f"Scene {scene_number}: Flag 'prefer_video' is True. Attempting find_video_clip...")
+                try:
+                    if self.video_finder is None:
+                        self.video_finder = VideoClipFinder()
+                        logger.info("Initialized VideoClipFinder.")
 
-                    except Exception as img_err:
-                         logger.warning(f"Scene {scene_number}: Error finding online image: {img_err}. Trying local fallback.")
+                    if self.video_finder:
+                        # Gọi phương thức công khai find_video_clip
+                        processed_clip_path = self.video_finder.find_video_clip(
+                            query=search_query,
+                            scene_content=scene_content, # Có thể cần hoặc không tùy logic find_video_clip
+                            output_path=temp_video_output_path, # Nơi lưu video ĐÃ xử lý
+                            target_duration=target_duration     # TRUYỀN TARGET DURATION VÀO ĐÂY
+                        )
 
-                    # 2. Thử fallback ảnh local (nếu tìm online thất bại)
-                    if not media_found_for_scene:
-                        logger.debug(f"Scene {scene_number}: Trying local fallback image...")
-                        try:
-                            local_fallback_path = self._use_local_fallback_image(search_query, image_output_path) # Lưu đè nếu thành công
-                            if local_fallback_path:
-                                logger.info(f"Scene {scene_number}: Used local fallback image: {os.path.basename(local_fallback_path)}")
-                                media_path_for_scene = local_fallback_path
-                                media_type_for_scene = "image"
-                                media_found_for_scene = True
-                        except Exception as local_err:
-                            logger.warning(f"Scene {scene_number}: Error using local fallback image: {local_err}. Trying text-only fallback.")
+                        if processed_clip_path:
+                            # Kiểm tra lại lần cuối xem video trả về có ổn không (tùy chọn)
+                            # Ví dụ: kiểm tra size hoặc duration thực tế nếu cần
+                            logger.info(f"Scene {scene_number}: VideoClipFinder returned processed clip: {os.path.basename(processed_clip_path)}")
+                            media_path_for_scene = processed_clip_path
+                            media_type_for_scene = "video"
+                        else:
+                            # find_video_clip trả về None -> không tìm thấy hoặc xử lý lỗi
+                            logger.warning(f"Scene {scene_number}: find_video_clip did not return a suitable video. FALLING BACK TO IMAGE SEARCH.")
+                            use_image_fallback = True
+                    else: # Trường hợp self.video_finder không được khởi tạo đúng
+                         logger.error("Scene {scene_number}: Video finder not initialized correctly. Falling back.")
+                         use_image_fallback = True
 
-                    # 3. Fallback cuối cùng: Tạo ảnh chỉ có text (nếu tất cả các bước trên thất bại)
-                    if not media_found_for_scene:
-                         logger.warning(f"Scene {scene_number}: All image/video searches failed. Creating text-only fallback image.")
-                         try:
-                             # Sử dụng nội dung scene làm text
-                             text_fallback_path = self._create_text_only_image(scene_content, text_image_output_path) # Lưu vào file text .png
-                             if text_fallback_path:
-                                 logger.info(f"Scene {scene_number}: Created text-only fallback image: {os.path.basename(text_fallback_path)}")
-                                 media_path_for_scene = text_fallback_path
-                                 media_type_for_scene = "image" # Vẫn coi là ảnh
-                                 media_found_for_scene = True
-                             else:
-                                 logger.error(f"Scene {scene_number}: CRITICAL - Failed even to create text-only fallback.")
-                         except Exception as text_err:
-                              logger.error(f"Scene {scene_number}: CRITICAL - Error creating text-only fallback: {text_err}", exc_info=True)
+                except ImportError as ie:
+                     logger.error(f"Cannot import VideoClipFinder: {ie}. Disabling video clips.")
+                     VIDEO_SETTINGS["enable_video_clips"] = False
+                     use_image_fallback = True
+                except Exception as video_err:
+                     logger.warning(f"Scene {scene_number}: Error during find_video_clip call: {video_err}. FALLING BACK TO IMAGE SEARCH.", exc_info=True)
+                     use_image_fallback = True
+            else:
+                 logger.info(f"Scene {scene_number}: Not attempting video search (prefer_video={prefer_video_flag}, enable_clips={VIDEO_SETTINGS.get('enable_video_clips', False)}).")
+                 use_image_fallback = True
+            # --- KẾT THÚC SỬA LOGIC GỌI ---
 
-
-                # --- Thêm media tìm được vào danh sách ---
-                if media_found_for_scene and media_path_for_scene:
-                    media_items.append({
-                        "type": media_type_for_scene, # 'image' hoặc 'video'
-                        "media_type": "scene",
-                        "number": scene_number,
-                        "path": media_path_for_scene,
-                        "duration": actual_scene_duration, # Luôn dùng duration của audio
-                        "content": scene_content,
-                        "search_query": search_query_used
-                    })
-                    logger.info(f"Scene {scene_number}: Added {media_type_for_scene} media with duration {actual_scene_duration:.2f}s.")
-                else:
-                    # Lỗi nghiêm trọng nếu đến đây mà không có media
-                    logger.error(f"Scene {scene_number}: FAILED TO ADD ANY MEDIA. This scene will be missing visuals!")
+            # --- XỬ LÝ ẢNH (NẾU FALLBACK) ---
+            if use_image_fallback:
+                 logger.info(f"Scene {scene_number}: Searching for static image...")
+                 try:
+                     # Tìm ảnh online -> lưu vào temp_image_output_path
+                     image_path = self._get_cached_or_download_image(search_query, temp_image_output_path)
+                     if image_path:
+                          logger.info(f"Scene {scene_number}: Found online image: {os.path.basename(image_path)}")
+                          media_path_for_scene = image_path
+                          media_type_for_scene = "image"
+                     else:
+                          # Fallback ảnh local -> lưu vào temp_image_output_path
+                          logger.debug(f"Scene {scene_number}: Online image search failed. Trying local fallback...")
+                          local_fallback_path = self._use_local_fallback_image(search_query, temp_image_output_path)
+                          if local_fallback_path:
+                               logger.info(f"Scene {scene_number}: Used local fallback image: {os.path.basename(local_fallback_path)}")
+                               media_path_for_scene = local_fallback_path
+                               media_type_for_scene = "image"
+                          else:
+                               # Fallback ảnh text -> lưu vào text_image_output_path
+                               logger.warning(f"Scene {scene_number}: All image searches failed. Creating text-only fallback image.")
+                               text_fallback_path = self._create_text_only_image(scene_content, text_image_output_path)
+                               if text_fallback_path:
+                                   logger.info(f"Scene {scene_number}: Created text-only fallback image: {os.path.basename(text_fallback_path)}")
+                                   media_path_for_scene = text_fallback_path
+                                   media_type_for_scene = "image"
+                               else:
+                                   logger.error(f"Scene {scene_number}: CRITICAL - Failed even to create text-only fallback.")
+                 except Exception as img_err:
+                      logger.error(f"Scene {scene_number}: Error during image fallback process: {img_err}", exc_info=True)
 
 
-            except Exception as e:
-                # Lỗi không mong muốn trong quá trình xử lý scene
-                logger.error(f"Unhandled error processing scene {scene_number}: {str(e)}", exc_info=True)
-                # Có thể thêm fallback khẩn cấp cuối cùng ở đây nếu muốn
+            # --- Thêm media tìm được vào danh sách ---
+            if media_path_for_scene and media_type_for_scene != "unknown":
+                media_items.append({
+                    "type": media_type_for_scene,
+                    "media_type": "scene",
+                    "number": scene_number,
+                    "path": media_path_for_scene,
+                    "duration": final_media_duration, # Luôn là duration của audio
+                    "content": scene_content,
+                    "search_query": search_query_used
+                })
+                logger.info(f"Scene {scene_number}: Added {media_type_for_scene} media with duration {final_media_duration:.2f}s.")
+            else:
+                 logger.error(f"Scene {scene_number}: FAILED TO ADD ANY MEDIA!")
 
         # --- 4. Outro Card ---
         try:
@@ -314,35 +308,23 @@ class ImageGenerator:
         return media_items
 
     def _save_media_info(self, media_items, title, project_dir):
-        """Lưu metadata về các media (ảnh và video) được tạo.
-        
-        Args:
-            media_items (list): Danh sách thông tin các media
-            title (str): Tiêu đề của dự án
-            project_dir (str): Đường dẫn thư mục dự án
-        """
-        if not media_items:
-            logger.warning("Không có media nào được tạo, bỏ qua việc tạo file metadata.")
-            return
-
+        """Lưu metadata về các media (ảnh và video) được tạo."""
+        # ... (logic tính relative_path giữ nguyên) ...
+        # Đảm bảo lưu đúng thông tin cần thiết, bao gồm cả 'type'
         media_metadata = []
         for item in media_items:
             item_copy = item.copy()
-            
-            # Tạo đường dẫn tương đối từ thư mục dự án
             try:
                 rel_path = os.path.relpath(item['path'], project_dir)
-                item_copy['relative_path'] = rel_path.replace('\\', '/')  # Đảm bảo dùng forward slashes
-            except ValueError:  # Xử lý trường hợp khác ổ đĩa trên Windows
+                item_copy['relative_path'] = rel_path.replace('\\', '/')
+            except ValueError:
                 item_copy['relative_path'] = os.path.basename(item['path'])
 
-            # Xóa đường dẫn tuyệt đối nếu không cần
-            if 'path' in item_copy:
-                del item_copy['path']
+            # Giữ lại các trường quan trọng cho metadata
+            keys_to_keep = ['type', 'media_type', 'number', 'relative_path', 'duration', 'search_query', 'content']
+            metadata_entry = {k: item_copy.get(k) for k in keys_to_keep if k in item_copy}
+            media_metadata.append(metadata_entry)
 
-            media_metadata.append(item_copy)
-
-        # Cấu trúc cho output JSON
         output_data = {
             'project_title': title,
             'creation_timestamp': time.strftime("%Y-%m-%d %H:%M:%S %Z"),
@@ -353,14 +335,13 @@ class ImageGenerator:
         }
 
         # Đổi tên file từ image_info.json sang media_info.json
-        output_file = os.path.join(project_dir, "media_info.json")
-
+        output_file = os.path.join(project_dir, "media_info.json") # Đổi tên file cho nhất quán
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(output_data, f, ensure_ascii=False, indent=4)
-            logger.info(f"Đã lưu metadata tới: {output_file}")
+            logger.info(f"Saved media metadata to: {output_file}")
         except Exception as e:
-            logger.error(f"Lỗi khi lưu metadata tới {output_file}: {e}", exc_info=True)
+            logger.error(f"Failed to save media metadata to {output_file}: {e}", exc_info=True)
 
     def _search_and_download_image(self, query, output_path):
         """Searches for and downloads an image using the Serper.dev API for US/English results.
