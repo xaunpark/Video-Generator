@@ -18,3 +18,5 @@ output/
 # Cấu hình IDE/Editor
 .vscode/
 .idea/
+
+.history/

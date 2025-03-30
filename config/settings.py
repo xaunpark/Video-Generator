@@ -88,7 +88,10 @@ VIDEO_SETTINGS = {
     "slow_motion_min_ratio": 0.8,
     # ------------------------------------
     "enable_subtitles": True,  # Bật/tắt phụ đề
-    "subtitle_font_size": 24    # Kích thước font chữ phụ đề
+    "subtitle_font_size": 24,    # Kích thước font chữ phụ đề
+    "subtitle_whisper_model": "base",    # Mô hình whisper: tiny, base, small, medium, large
+    "subtitle_language": "en",           # Ngôn ngữ phụ đề (auto để tự động phát hiện)
+    "subtitle_style": "Alignment=2,OutlineColour=&H80000000,BorderStyle=3,Outline=1" # Style cho FFmpeg
 }
 
 # Cấu hình YouTube
