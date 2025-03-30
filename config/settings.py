@@ -85,8 +85,10 @@ VIDEO_SETTINGS = {
     "enable_slow_motion_fallback": True, # Bật/tắt tính năng này
     # Tỷ lệ thời lượng tối thiểu của video so với audio để áp dụng slow motion
     # Ví dụ: 0.8 nghĩa là video phải dài ít nhất 80% audio duration
-    "slow_motion_min_ratio": 0.8
+    "slow_motion_min_ratio": 0.8,
     # ------------------------------------
+    "enable_subtitles": True,  # Bật/tắt phụ đề
+    "subtitle_font_size": 24    # Kích thước font chữ phụ đề
 }
 
 # Cấu hình YouTube
