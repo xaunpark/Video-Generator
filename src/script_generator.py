@@ -92,7 +92,7 @@ class ScriptGenerator:
                 6. Include multiple perspectives with escalating tension throughout
                 7. End with a provocative question that encourages viewers to comment
                 8. Keep each scene short and intense (1-2 sentences)
-                9. Create as many scenes as needed to fully explore the controversy
+                9. Create ONLY 3 SCENES FOR VIDEO (NOT CREATE MORE THAN 3 SCENES)
                                 
                 Format the script with the following structure (important: maintain this exact format):
                                 

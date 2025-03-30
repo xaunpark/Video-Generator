@@ -75,7 +75,7 @@ class VideoEditor:
         # Cài đặt hiệu ứng cho video
         self.enable_transitions = VIDEO_SETTINGS.get("enable_transitions", True)
         self.transition_types = VIDEO_SETTINGS.get("transition_types", ["fade"])
-        self.transition_duration = VIDEO_SETTINGS.get("transition_duration", 0.8)
+        self.transition_duration = VIDEO_SETTINGS.get("transition_duration", 0.5)
         
         # Cài đặt hiệu ứng cho ảnh tĩnh
         self.image_animation = VIDEO_SETTINGS.get("image_animation", "zoom")
@@ -190,14 +190,30 @@ class VideoEditor:
         if not scene_videos:
             raise Exception("Không có scene video nào được tạo thành công.")
         
-        # Nối tất cả scene videos lại với nhau
-        logger.info(f"Đang nối {len(scene_videos)} scene videos thành video cuối cùng")
-        try:
-            final_video = self.concatenate_scene_videos(scene_videos, output_path)
-            logger.info(f"Đã tạo video hoàn thành: {output_path}")
-        except Exception as e:
-            logger.error(f"Lỗi khi nối các scene videos: {str(e)}", exc_info=True)
-            raise
+        # --- KIỂM TRA CÀI ĐẶT TRANSITION ---
+        logger.info(f"Kiểm tra điều kiện transition: enable={self.enable_transitions}, types={self.transition_types}, debug_disable={getattr(self, 'debug_disable_effects', False)}")
+        
+        # Nối tất cả scene videos lại với nhau (ÁP DỤNG FADE NẾU ĐƯỢC BẬT)
+        if (not getattr(self, 'debug_disable_effects', False) and 
+            self.enable_transitions and 
+            self.transition_types and 
+            "fade" in self.transition_types):
+            logger.info(f"Áp dụng hiệu ứng fade với thời lượng {self.transition_duration}s khi nối {len(scene_videos)} scene videos")
+            try:
+                final_video = self.concatenate_scene_videos_with_fade(scene_videos, output_path, self.transition_duration)
+                logger.info(f"Đã tạo video hoàn thành với hiệu ứng fade: {output_path}")
+            except Exception as e:
+                logger.error(f"Lỗi khi nối các scene videos với fade: {str(e)}", exc_info=True)
+                logger.info("Fallback: Nối video không có hiệu ứng")
+                final_video = self.concatenate_scene_videos(scene_videos, output_path)
+        else:
+            logger.info(f"Nối {len(scene_videos)} scene videos không có hiệu ứng fade")
+            try:
+                final_video = self.concatenate_scene_videos(scene_videos, output_path)
+                logger.info(f"Đã tạo video hoàn thành: {output_path}")
+            except Exception as e:
+                logger.error(f"Lỗi khi nối các scene videos: {str(e)}", exc_info=True)
+                raise
         
         # Ghi metadata về video (tùy chọn)
         try:
@@ -211,7 +227,10 @@ class VideoEditor:
                 'has_intro': len(intro_items) > 0,
                 'has_outro': len(outro_items) > 0,
                 'num_video_clips': num_videos,
-                'num_images': num_images
+                'num_images': num_images,
+                'transition_applied': (not getattr(self, 'debug_disable_effects', False) and 
+                                    self.enable_transitions and self.transition_types and 
+                                    "fade" in self.transition_types)
             }
             
             metadata_file = os.path.splitext(output_path)[0] + ".json"
@@ -407,7 +426,178 @@ class VideoEditor:
              if os.path.exists(temp_video): os.remove(temp_video)
              if os.path.exists(output_path): os.remove(output_path)
              raise
-    
+
+    def concatenate_scene_videos_with_fade(self, scene_videos, output_path, fade_duration=0.5):
+        """
+        Nối các scene videos với hiệu ứng fade giữa các scenes.
+        
+        Args:
+            scene_videos (list): Danh sách đường dẫn đến các scene videos
+            output_path (str): Đường dẫn đến file video đầu ra
+            fade_duration (float): Thời lượng fade (giây)
+            
+        Returns:
+            str: Đường dẫn đến video kết quả
+        """
+        if not scene_videos:
+            raise ValueError("Không có scene videos để nối")
+        
+        if len(scene_videos) == 1:
+            # Nếu chỉ có 1 video, copy trực tiếp
+            shutil.copy(scene_videos[0], output_path)
+            return output_path
+            
+        logger.info(f"Nối {len(scene_videos)} video scenes với hiệu ứng fade")
+        
+        # Tạo thư mục tạm cho xử lý
+        temp_dir = os.path.join(self.temp_dir, f"fade_process_{int(time.time())}")
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        # Xác nhận các video đầu vào hợp lệ
+        valid_videos = []
+        for video_path in scene_videos:
+            if os.path.exists(video_path) and os.path.getsize(video_path) > 1000:  # Giảm ngưỡng xuống 1KB
+                valid_videos.append(video_path)
+            else:
+                logger.warning(f"Bỏ qua video không hợp lệ: {video_path} (kích thước: {os.path.getsize(video_path) if os.path.exists(video_path) else 'không tồn tại'})")
+        
+        if not valid_videos:
+            raise ValueError("Không có video hợp lệ để nối")
+            
+        try:
+            # Phương pháp 1: Xử lý từng video riêng lẻ, sau đó nối - Đơn giản và ổn định hơn
+            processed_videos = []
+            
+            for i, video_path in enumerate(valid_videos):
+                processed_path = os.path.join(temp_dir, f"processed_{i}.mp4")
+                
+                # Thêm fade in/out cho video
+                if i == 0:
+                    # Video đầu tiên: chỉ thêm fade out
+                    video_duration = self._get_video_duration(video_path)
+                    vf_filter = f"fade=t=out:st={video_duration - fade_duration}:d={fade_duration}"
+                elif i == len(valid_videos) - 1:
+                    # Video cuối: chỉ thêm fade in
+                    vf_filter = f"fade=t=in:st=0:d={fade_duration}"
+                else:
+                    # Video ở giữa: thêm cả fade in và fade out
+                    video_duration = self._get_video_duration(video_path)
+                    vf_filter = f"fade=t=in:st=0:d={fade_duration},fade=t=out:st={video_duration - fade_duration}:d={fade_duration}"
+                
+                # Xử lý video
+                cmd = [
+                    self.ffmpeg_path, "-y",
+                    "-i", video_path,
+                    "-vf", vf_filter,
+                    "-c:a", "copy",
+                    processed_path
+                ]
+                
+                logger.info(f"Xử lý fade cho video {i+1}: {' '.join(cmd)}")
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                
+                if os.path.exists(processed_path) and os.path.getsize(processed_path) > 10000:
+                    processed_videos.append(processed_path)
+                else:
+                    logger.warning(f"Xử lý fade cho video {i+1} thất bại, sử dụng video gốc")
+                    processed_videos.append(video_path)
+            
+            # Nối các video đã xử lý fade
+            concat_list = os.path.join(temp_dir, "concat_list.txt")
+            with open(concat_list, 'w', encoding='utf-8') as f:
+                for video in processed_videos:
+                    # Escape path for ffmpeg
+                    escaped_path = video.replace('\\', '/')
+                    f.write(f"file '{escaped_path}'\n")
+            
+            # Sử dụng phương pháp concat để nối video
+            cmd = [
+                self.ffmpeg_path, "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_list,
+                "-c", "copy",  # Chỉ copy không encode lại
+                output_path
+            ]
+            
+            logger.info(f"Nối video với ffmpeg: {' '.join(cmd)}")
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            # Xóa file danh sách tạm và các video đã xử lý
+            os.remove(concat_list)
+            for video in processed_videos:
+                if os.path.exists(video) and video not in valid_videos:  # Chỉ xóa các file tạm
+                    os.remove(video)
+            
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+                logger.info(f"Đã tạo video với hiệu ứng fade thành công: {output_path}")
+                return output_path
+            else:
+                raise Exception("Video đầu ra không hợp lệ hoặc quá nhỏ")
+        
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Lỗi ffmpeg khi thêm fade: {e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)}")
+            # Fallback về phương pháp nối đơn giản
+            logger.info("Fallback: Nối video không có hiệu ứng fade")
+            return self.concatenate_scene_videos(scene_videos, output_path)
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi thêm hiệu ứng fade: {str(e)}")
+            # Fallback về phương pháp nối đơn giản
+            logger.info("Fallback: Nối video không có hiệu ứng fade")
+            return self.concatenate_scene_videos(scene_videos, output_path)
+            
+        finally:
+            # Dọn dẹp
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+    def add_fade_to_scene(self, input_video, output_video, fade_duration=0.5):
+        """
+        Thêm fade in/out cho một scene video.
+        
+        Args:
+            input_video (str): Đường dẫn video đầu vào
+            output_video (str): Đường dẫn video đầu ra với hiệu ứng fade
+            fade_duration (float): Thời lượng fade (giây)
+            
+        Returns:
+            str: Đường dẫn video đã xử lý
+        """
+        try:
+            video_duration = self._get_video_duration(input_video)
+            
+            # Nếu video quá ngắn cho fade in/out
+            if video_duration <= fade_duration * 2:
+                fade_duration = video_duration / 4  # Giảm thời lượng fade nếu video quá ngắn
+                logger.warning(f"Video quá ngắn ({video_duration}s), giảm thời lượng fade xuống {fade_duration}s")
+            
+            cmd = [
+                self.ffmpeg_path, "-y",
+                "-i", input_video,
+                "-vf", f"fade=t=in:st=0:d={fade_duration},fade=t=out:st={video_duration - fade_duration}:d={fade_duration}",
+                "-c:a", "copy",
+                output_video
+            ]
+            
+            logger.info(f"Thêm fade in/out cho video: {' '.join(cmd)}")
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            if os.path.exists(output_video) and os.path.getsize(output_video) > 10000:
+                logger.info(f"Đã thêm fade in/out cho video thành công: {output_video}")
+                return output_video
+            else:
+                logger.warning(f"File đầu ra không hợp lệ. Sử dụng video gốc.")
+                shutil.copy(input_video, output_video)
+                return output_video
+                
+        except Exception as e:
+            logger.error(f"Lỗi khi thêm fade in/out cho video: {str(e)}")
+            # Nếu lỗi, copy file gốc
+            if not os.path.exists(output_video) or os.path.getsize(output_video) < 10000:
+                shutil.copy(input_video, output_video)
+            return output_video
+
     def concatenate_scene_videos(self, scene_videos, output_path):
         """
         Nối tất cả video của các scene thành một video liên tục.
@@ -421,10 +611,10 @@ class VideoEditor:
         # Tạo file danh sách chứa các video hợp lệ
         valid_videos = []
         for video_path in scene_videos:
-            if os.path.exists(video_path) and os.path.getsize(video_path) > 10000:
+            if os.path.exists(video_path) and os.path.getsize(video_path) > 1000:  # Giảm ngưỡng xuống 1KB
                 valid_videos.append(video_path)
             else:
-                logger.warning(f"Bỏ qua video không hợp lệ: {video_path}")
+                logger.warning(f"Bỏ qua video không hợp lệ: {video_path} (kích thước: {os.path.getsize(video_path) if os.path.exists(video_path) else 'không tồn tại'})")
         
         if not valid_videos:
             raise ValueError("Không có video hợp lệ để nối")
@@ -441,7 +631,7 @@ class VideoEditor:
             # Sử dụng phương pháp concat để nối video
             # Cách này đơn giản nhất và ít lỗi nhất
             cmd = [
-                "ffmpeg", "-y",
+                self.ffmpeg_path, "-y",
                 "-f", "concat",
                 "-safe", "0",
                 "-i", concat_list,
@@ -455,7 +645,7 @@ class VideoEditor:
             # Xóa file danh sách tạm
             os.remove(concat_list)
             
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:  # Giảm ngưỡng xuống 1KB
                 logger.info(f"Đã tạo video cuối cùng thành công: {output_path}")
                 return output_path
             else:
@@ -634,7 +824,13 @@ class VideoEditor:
         
         # Nối các scene videos
         logger.info(f"Nối {len(scene_videos)} scene videos thành video cuối cùng")
-        final_video = self.concatenate_scene_videos(scene_videos, output_path)
+        logger.info(f"Điều kiện transition: enable={self.enable_transitions}, types={self.transition_types}, 'fade' in types={('fade' in self.transition_types) if self.transition_types else False}")
+        if self.enable_transitions and self.transition_types and "fade" in self.transition_types:
+            logger.info(f"Áp dụng hiệu ứng chuyển cảnh fade với thời lượng {self.transition_duration}s")
+            final_video = self.concatenate_scene_videos_with_fade(scene_videos, output_path, self.transition_duration)
+        else:
+            logger.info(f"Nối video không có hiệu ứng chuyển cảnh")
+            final_video = self.concatenate_scene_videos(scene_videos, output_path)
         
         # Dọn dẹp
         if VIDEO_SETTINGS.get("cleanup_temp_files", True):
