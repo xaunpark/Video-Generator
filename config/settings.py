@@ -35,7 +35,13 @@ NEWS_SOURCES = [
         "url": "https://techcrunch.com/feed/",
         "type": "rss",
         "language": "en"
-    }
+    },
+    #{
+    #    "name": "VnExpress",
+    #    "url": "https://vnexpress.net/rss/giai-tri.rss",
+    #    "type": "rss",
+    #    "language": "vi"
+    #}
 ]
 
 # Danh mục tin tức tiếng Anh
