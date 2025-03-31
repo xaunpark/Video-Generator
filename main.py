@@ -278,7 +278,8 @@ def main():
             script=script,                 # First parameter should be the script
             media_items=images,            # Sử dụng biến images (giờ chứa cả video clips)
             audio_dir=audio_dir,           # Third parameter should be the audio directory
-            output_path=output_path        # output_path đã tính toán trước đó
+            output_path=output_path,        # output_path đã tính toán trước đó
+            background_music_path=background_music
         )
 
         # Added completion message

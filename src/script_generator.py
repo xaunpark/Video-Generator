@@ -77,66 +77,88 @@ class ScriptGenerator:
             # Tạo prompt dựa vào phong cách được chọn
             if style == "controversial":
                 prompt = f"""
-                Create a highly controversial news script based on the following article. The script should generate debate, provoke strong reactions, and maximize viewer engagement:
-                
+                Create a highly controversial, fast-paced news script in VIETNAMESE based on the following article. The script must generate debate, provoke strong reactions, and maximize viewer engagement with a dynamic rhythm:
+
                 TITLE: {title}
-                                
+
                 CONTENT: {content}
-                                
-                Script requirements:
-                1. Start with a shocking statement or question that challenges mainstream views
-                2. Frame the topic as a heated debate between opposing sides
-                3. Use emotionally charged language while maintaining factual accuracy
-                4. Highlight the most divisive aspects of the story
-                5. Emphasize how this topic affects different groups in conflicting ways
-                6. Include multiple perspectives with escalating tension throughout
-                7. End with a provocative question that encourages viewers to comment
-                8. Keep each scene short and intense (1-2 sentences)
-                9. Create ONLY 3 SHORT SCENES FOR VIDEO (EACH SCENE ONLY 30 characters) (NOT CREATE MORE THAN 3 SCENES)
-                                
-                Format the script with the following structure (important: maintain this exact format):
-                                
+
+                **CRITICAL Script Requirements (Follow Strictly):**
+                1.  **Ultra-short Scenes:** Each scene MUST contain **only ONE impactful sentence**, maximum two extremely short ones if absolutely necessary. Aim for a rapid-fire feel.
+                2.  **Shocking Opener:** Start immediately with the single most shocking or challenging statement/question from the article. No slow introduction.
+                3.  **Intensify Debate:** Immediately frame the topic as a fierce conflict or dilemma. Use strong, emotionally charged words (but factually grounded).
+                4.  **Highlight Division:** Focus exclusively on the most polarizing aspects and conflicting viewpoints.
+                5.  **Rapid-Fire Questions:** **Frequently inject short, sharp rhetorical or direct questions** aimed at the viewer or challenging the stated facts/opinions.
+                6.  **Contrasting Snippets:** **Extract or paraphrase very short, punchy quotes/statements** representing opposing sides. Place them in consecutive or nearby scenes for maximum contrast and whiplash effect.
+                7.  **Escalate Tension:** Ensure the sequence of scenes builds tension or highlights the irresolvable nature of the conflict.
+                8.  **More Scenes, Shorter Content:** **Generate MANY short scenes.** Break down complex arguments or information into multiple quick, distinct scenes rather than packing info into one. Prioritize rhythm over detail in each scene.
+                9.  **Provocative Closer:** End with a single, extremely provocative question that forces viewers to take a side or question everything.
+
+                **Formatting (Mandatory):**
+                - Use `#SCENE X#` markers for each scene number (X).
+                - Each scene marker must be on its own line.
+                - The single sentence (or max two short ones) for the scene follows the marker on the next line(s).
+                - Leave one empty line between the content of one scene and the marker for the next scene.
+
+                **Example Snippet Structure:**
                 #SCENE 1#
-                [First scene content - shocking opening]
-                                
+                [Single shocking sentence here.]
+
                 #SCENE 2#
-                [Next scene content]
+                [Short sentence presenting one extreme view.]
 
-                ... continue with additional scenes as needed to fully explore opposing viewpoints, escalating tensions, and conflicting expert opinions.
+                #SCENE 3#
+                [Short sentence presenting the opposing extreme view.]
 
-                End with a final scene that poses a provocative question to spark debate.
+                #SCENE 4#
+                [Sharp question challenging the situation?]
 
-                Each scene must be clearly numbered and separated by empty lines.
+                #SCENE 5#
+                [...]
+
+                **Language:** VIETNAMESE
+
+                **Goal:** Create a script that feels fast, intense, argumentative, and leaves the viewer feeling agitated and needing to comment. Maximize the number of scenes by keeping each one minimal.
                 """
             else:
-                # Prompt gốc cho các phong cách khác
+                # Prompt gốc cho các phong cách khác (ĐÃ SỬA ĐỔI)
                 prompt = f"""
-                Create a news script with a {style_prompt} tone based on the following article:
-                
+                Create a news script with a {style_prompt} tone based on the following article. The script should be concise and have a good pace.
+
                 TITLE: {title}
-                
+
                 CONTENT: {content}
-                
-                Script requirements:
-                1. Short introduction (15-20 words)
-                2. Main content (detailed and accurate, about 150-200 words)
-                3. Brief conclusion (15-20 words)
-                4. Divide into separate scenes, each scene 1-2 sentences
-                5. Keep important information: names, locations, numbers
-                6. Use standard English, suitable for a news presenter
-                
-                Format the script with the following structure (important: maintain this exact format):
-                
+
+                **Script Requirements (Follow Strictly):**
+                1.  **Concise Scenes:** Divide the content into multiple distinct scenes. Each scene should ideally contain **only ONE main idea or sentence**, maximum two short sentences.
+                2.  **Brisk Pace:** Aim for a steady, informative but not sluggish pace. More scenes with shorter content is preferred over fewer scenes with long content.
+                3.  **Clear Structure:** Short introduction (1 scene), main points (multiple scenes), brief conclusion (1 scene).
+                4.  **Accuracy:** Keep important information: names, locations, numbers, key facts.
+                5.  **Language:** Use clear {article.get('language', 'en')} suitable for the chosen style ({style_prompt}).
+
+                **Formatting (Mandatory):**
+                - Use `#SCENE X#` markers for each scene number (X).
+                - Each scene marker must be on its own line.
+                - The single sentence (or max two short ones) for the scene follows the marker on the next line(s).
+                - Leave one empty line between the content of one scene and the marker for the next scene.
+
+                **Example Snippet Structure:**
                 #SCENE 1#
-                [Scene 1 content]
-                
+                [Short introductory sentence.]
+
                 #SCENE 2#
-                [Scene 2 content]
-                
+                [Sentence for the first key point.]
+
                 #SCENE 3#
-                [Scene 3 content]
-                
-                ...and continue with additional scenes. Each scene must be clearly numbered and separated by empty lines.
+                [Sentence for the second key point.]
+
+                #SCENE 4#
+                [...]
+
+                #SCENE N#
+                [Short concluding sentence.]
+
+                **Goal:** A clear, well-paced script divided into minimal, single-idea scenes.
                 """
             
             # Gọi OpenAI API

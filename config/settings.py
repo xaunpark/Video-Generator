@@ -30,18 +30,24 @@ NEWS_SOURCES = [
     #    "type": "rss",
     #    "language": "en"
     #},
-    {
-        "name": "TechCrunch",
-        "url": "https://techcrunch.com/feed/",
-        "type": "rss",
-        "language": "en"
-    },
+    #{
+    #    "name": "TechCrunch",
+    #    "url": "https://techcrunch.com/feed/",
+    #    "type": "rss",
+    #    "language": "en"
+    #},
     #{
     #    "name": "VnExpress",
     #    "url": "https://vnexpress.net/rss/giai-tri.rss",
     #    "type": "rss",
     #    "language": "vi"
-    #}
+    #},
+    {
+        "name": "TuoiTre",
+        "url": "https://tuoitre.vn/rss/khoa-hoc.rss",
+        "type": "rss",
+        "language": "vi"
+    }
 ]
 
 # Danh mục tin tức tiếng Anh
@@ -90,7 +96,7 @@ VIDEO_SETTINGS = {
     "enable_subtitles": True,  # Bật/tắt phụ đề
     "subtitle_font_size": 24,    # Kích thước font chữ phụ đề
     "subtitle_whisper_model": "base",    # Mô hình whisper: tiny, base, small, medium, large
-    "subtitle_language": "en",           # Ngôn ngữ phụ đề (auto để tự động phát hiện)
+    "subtitle_language": "auto",           # Ngôn ngữ phụ đề (auto để tự động phát hiện)
     "subtitle_style": "Alignment=2,OutlineColour=&H80000000,BorderStyle=3,Outline=1" # Style cho FFmpeg
 }
 
