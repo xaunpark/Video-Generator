@@ -146,7 +146,7 @@ class VideoEditor:
             return None
     # --- KẾT THÚC HÀM HELPER ---
 
-    def create_video(self, script, media_items, audio_dir, output_path, project_id=None):
+    def create_video(self, script, media_items, audio_dir, output_path, background_music_path=None, project_id=None):
         """
         Tạo video hoàn chỉnh từ script, media và audio.
         
@@ -290,6 +290,111 @@ class VideoEditor:
                 self._cleanup_old_temp_dirs(days=1)
             except Exception as e:
                 logger.warning(f"Lỗi khi dọn dẹp thư mục tạm: {str(e)}")
+
+        final_video_path = output_path # Đường dẫn video đã nối (chứa narration)
+
+        # --- BẮT ĐẦU THÊM NHẠC NỀN ---
+# --- BẮT ĐẦU THÊM NHẠC NỀN ---
+        if background_music_path and os.path.exists(background_music_path) and self.enable_background_music:
+            logger.info(f"Thêm nhạc nền từ: {os.path.basename(background_music_path)}")
+            video_clip = None # Khởi tạo để đảm bảo có thể đóng trong finally
+            music_clip_original = None
+            original_audio = None
+            final_audio = None
+            adjusted_music = None
+            video_clip_with_music = None
+            try:
+                # Tạo đường dẫn file output tạm thời cho video có nhạc nền
+                output_path_with_music = os.path.splitext(final_video_path)[0] + "_music" + os.path.splitext(final_video_path)[1]
+
+                # Tải video đã nối (đã có giọng đọc)
+                video_clip = VideoFileClip(final_video_path)
+                video_duration = video_clip.duration
+
+                # Tải file nhạc nền gốc
+                music_clip_original = AudioFileClip(background_music_path)
+                music_duration = music_clip_original.duration
+
+                # Điều chỉnh âm lượng trước
+                music_volumed = music_clip_original.volumex(self.music_volume)
+
+                # Lặp lại hoặc cắt nhạc nền cho vừa thời lượng video
+                if music_duration < video_duration:
+                    # Nếu nhạc ngắn hơn video -> Lặp lại nhạc
+                    logger.info(f"Nhạc nền ({music_duration:.2f}s) ngắn hơn video ({video_duration:.2f}s). Sử dụng hiệu ứng lặp (loop).")
+                    # Sử dụng fx(vfx.loop) để lặp lại
+                    adjusted_music = music_volumed.fx(vfx.loop, duration=video_duration)
+                else:
+                    # Nếu nhạc dài hơn hoặc bằng video -> Cắt nhạc
+                    logger.info(f"Nhạc nền ({music_duration:.2f}s) dài hơn hoặc bằng video ({video_duration:.2f}s). Cắt nhạc nền.")
+                    adjusted_music = music_volumed.subclip(0, video_duration)
+
+                # Lấy audio gốc của video (giọng đọc)
+                original_audio = video_clip.audio
+                if original_audio is None:
+                     logger.warning("Video gốc không có audio track (narration). Chỉ thêm nhạc nền.")
+                     final_audio = adjusted_music
+                else:
+                    # Trộn audio gốc với nhạc nền đã điều chỉnh
+                    logger.info("Trộn giọng đọc gốc với nhạc nền đã điều chỉnh.")
+                    final_audio = CompositeAudioClip([original_audio, adjusted_music])
+
+                # Gán audio đã trộn vào video clip
+                video_clip_with_music = video_clip.set_audio(final_audio)
+
+                # Ghi file video mới với nhạc nền
+                logger.info(f"Đang ghi video cuối cùng với nhạc nền vào: {output_path_with_music}")
+                video_clip_with_music.write_videofile(
+                    output_path_with_music,
+                    codec='libx264',
+                    audio_codec='aac',
+                    temp_audiofile='temp-audio.m4a',
+                    remove_temp=True,
+                    fps=self.fps,
+                    preset='medium', # Tăng tốc độ ghi một chút so với 'slow'
+                    threads=os.cpu_count() or 4, # Sử dụng nhiều core hơn
+                    logger='bar', # Hiển thị thanh tiến trình
+                    ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
+                )
+
+                # Cập nhật output_path để trả về file có nhạc nền
+                if os.path.exists(output_path_with_music):
+                     logger.info(f"Đã tạo thành công video với nhạc nền: {output_path_with_music}")
+                     # Cân nhắc xóa file video gốc không có nhạc nếu bạn muốn tiết kiệm dung lượng
+                     # try:
+                     #    os.remove(final_video_path)
+                     #    logger.info(f"Đã xóa file gốc không có nhạc: {final_video_path}")
+                     # except OSError as rm_err:
+                     #    logger.warning(f"Không thể xóa file gốc {final_video_path}: {rm_err}")
+                     output_path = output_path_with_music
+                else:
+                     logger.error("Ghi video với nhạc nền thất bại.")
+
+            except Exception as e:
+                logger.error(f"Lỗi khi thêm nhạc nền: {str(e)}", exc_info=True)
+                logger.warning("Video cuối cùng sẽ không có nhạc nền.")
+
+            finally:
+                # --- ĐÓNG TẤT CẢ CÁC CLIP ĐỂ GIẢI PHÓNG TÀI NGUYÊN ---
+                # Việc này rất quan trọng để tránh lỗi file bị khóa hoặc rò rỉ bộ nhớ
+                logger.debug("Đang đóng các clip MoviePy...")
+                if video_clip: video_clip.close()
+                if music_clip_original: music_clip_original.close()
+                if original_audio: original_audio.close()
+                # adjusted_music không cần đóng trực tiếp vì nó là kết quả của phép biến đổi
+                if final_audio: final_audio.close()
+                if video_clip_with_music: video_clip_with_music.close()
+                logger.debug("Đã đóng các clip MoviePy.")
+
+        else:
+            # Các trường hợp không thêm nhạc nền (log như cũ)
+            if not self.enable_background_music:
+                logger.info("Nhạc nền đang bị tắt trong cài đặt.")
+            elif not background_music_path:
+                logger.info("Không có đường dẫn nhạc nền được cung cấp.")
+            elif not os.path.exists(background_music_path):
+                 logger.warning(f"File nhạc nền không tồn tại: {background_music_path}")
+        # --- KẾT THÚC THÊM NHẠC NỀN ---
 
         # Thêm phụ đề nếu được bật trong cài đặt
         if VIDEO_SETTINGS.get("enable_subtitles", False):
