@@ -2,7 +2,6 @@
 
 import os
 import requests
-import logging
 import time
 import json
 import random
@@ -13,14 +12,13 @@ from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 import subprocess
 
+from src.logger_config import setup_logger
+logger = setup_logger(__name__)
+
 # Import API keys and settings
 from config.credentials import SERPER_API_KEY, OPENAI_API_KEY
 from config.settings import TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS
 from src.video_clip_finder import VideoClipFinder
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 class ImageGenerator:
     def __init__(self):
@@ -1246,7 +1244,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n--- An error occurred during the test ---")
         # Log the full traceback for debugging
-        logging.exception("Test execution failed")
+        logger.exception("Test execution failed")
         print(f"Error details: {str(e)}")
 
     end_time = time.time()

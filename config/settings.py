@@ -18,12 +18,12 @@ for dir_path in [TEMP_DIR, OUTPUT_DIR, ASSETS_DIR, MUSIC_DIR, TEMPLATES_DIR, FON
 
 # Cấu hình các nguồn tin tức tiếng Anh
 NEWS_SOURCES = [
-    #{
-    #    "name": "CNN",
-    #    "url": "http://rss.cnn.com/rss/edition_world.rss",
-    #    "type": "rss",
-    #    "language": "en"
-    #},
+    {
+        "name": "CNN",
+        "url": "http://rss.cnn.com/rss/edition_world.rss",
+        "type": "rss",
+        "language": "en"
+    },
     #{
     #    "name": "The New York Times",
     #    "url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
@@ -35,19 +35,19 @@ NEWS_SOURCES = [
     #    "url": "https://techcrunch.com/feed/",
     #    "type": "rss",
     #    "language": "en"
-    #},
+    #}
     #{
     #    "name": "VnExpress",
     #    "url": "https://vnexpress.net/rss/giai-tri.rss",
     #    "type": "rss",
     #    "language": "vi"
     #},
-    {
-        "name": "TuoiTre",
-        "url": "https://tuoitre.vn/rss/khoa-hoc.rss",
-        "type": "rss",
-        "language": "vi"
-    }
+    #{
+    #    "name": "TuoiTre",
+    #    "url": "https://tuoitre.vn/rss/khoa-hoc.rss",
+    #    "type": "rss",
+    #    "language": "vi"
+    #}
 ]
 
 # Danh mục tin tức tiếng Anh
