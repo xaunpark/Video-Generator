@@ -3,13 +3,12 @@ import requests
 import feedparser
 from bs4 import BeautifulSoup
 from newspaper import Article
-import logging
 import time
 from datetime import datetime
 from config.settings import NEWS_SOURCES, NEWS_CATEGORIES
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+from src.logger_config import setup_logger
+logger = setup_logger(__name__)
 
 class NewsScraper:
     def __init__(self):

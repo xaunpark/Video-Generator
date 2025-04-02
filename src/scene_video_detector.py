@@ -1,18 +1,16 @@
 import os
 import json
-import logging
 import hashlib
 import time
 import requests
 from typing import Dict, List, Tuple, Any, Optional
 
+from src.logger_config import setup_logger
+logger = setup_logger(__name__)
+
 # Import OpenAI API key
 from config.credentials import OPENAI_API_KEY
 from config.settings import VIDEO_SETTINGS
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 class SceneVideoDetector:
     """

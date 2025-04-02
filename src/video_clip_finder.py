@@ -1,7 +1,6 @@
 import os
 import requests
 import json
-import logging
 import random
 import hashlib
 import time
@@ -10,13 +9,12 @@ from urllib.parse import urlparse
 from moviepy.editor import VideoFileClip, concatenate_videoclips, vfx
 from src.fix_pillow import *
 
+from src.logger_config import setup_logger
+logger = setup_logger(__name__)
+
 # Import API keys and settings
 from config.credentials import PEXELS_API_KEY, PIXABAY_API_KEY
 from config.settings import TEMP_DIR, VIDEO_SETTINGS
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 # --- THÊM HẰNG SỐ CHO NGƯỠNG THỜI LƯỢNG ---
 # Tỷ lệ thời lượng tối thiểu chấp nhận được so với target_duration
@@ -624,16 +622,18 @@ class VideoClipFinder:
 # --- CODE KIỂM THỬ DƯỚI ĐÂY ---
 # --- CHẠY BẰNG LỆNH: python -m src.video_clip_finder ---
 if __name__ == "__main__":
-    import logging
+    from src.logger_config import setup_logger
+    logger = setup_logger(__name__)
+    
     import pprint # Để in kết quả đẹp hơn
 
-    # --- Cấu hình Logging để thấy DEBUG messages ---
+    # --- Cấu hình Logger để thấy DEBUG messages ---
     # Thay đổi level thành DEBUG để xem log chi tiết về chấm điểm
-    logging.basicConfig(
-        level=logging.DEBUG, # ĐẶT LÀ DEBUG
+    logger.basicConfig(
+        level=logger.DEBUG, # ĐẶT LÀ DEBUG
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    logger = logging.getLogger("VideoClipFinderTest")
+    logger = logger.getLogger("VideoClipFinderTest")
     # ----------------------------------------------
 
     logger.info("--- Bắt đầu kiểm tra VideoClipFinder ---")

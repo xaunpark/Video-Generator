@@ -6,7 +6,6 @@ video_generator.py - Module để tạo video từ ảnh, video clips và audio
 """
 
 import os
-import logging
 import shutil
 import random
 import time
@@ -16,22 +15,21 @@ import subprocess
 import tempfile
 import mutagen
 
+from src.logger_config import setup_logger
+logger = setup_logger(__name__)
+
 from moviepy.editor import (
     VideoFileClip, ImageClip, AudioFileClip, CompositeVideoClip, 
     concatenate_videoclips, TextClip
 )
 import moviepy.video.fx.all as vfx
-from moviepy.audio.AudioClip import CompositeAudioClip
+from moviepy.audio.AudioClip import (CompositeAudioClip, concatenate_audioclips)
 from src.fix_pillow import *
 
 # Import cấu hình từ project
 from config.settings import (
     TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS, FFPROBE_EXECUTABLE_PATH, OUTPUT_DIR
 )
-
-# Cấu hình logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 class VideoEditor:
     """
@@ -321,9 +319,39 @@ class VideoEditor:
                 # Lặp lại hoặc cắt nhạc nền cho vừa thời lượng video
                 if music_duration < video_duration:
                     # Nếu nhạc ngắn hơn video -> Lặp lại nhạc
-                    logger.info(f"Nhạc nền ({music_duration:.2f}s) ngắn hơn video ({video_duration:.2f}s). Sử dụng hiệu ứng lặp (loop).")
-                    # Sử dụng fx(vfx.loop) để lặp lại
-                    adjusted_music = music_volumed.fx(vfx.loop, duration=video_duration)
+                    logger.info(f"Nhạc nền ({music_duration:.2f}s) ngắn hơn video ({video_duration:.2f}s). Sử dụng phương pháp lặp an toàn.")
+                    
+                    try:
+                        # Phương pháp 1: Cách an toàn bằng cách nối nhiều clip
+                        num_loops = math.ceil(video_duration / music_duration)
+                        logger.info(f"Nối {num_loops} bản sao của file nhạc nền")
+                        
+                        music_clips = []
+                        for i in range(num_loops):
+                            # Sử dụng copy() để tránh lỗi tham chiếu
+                            clip_copy = music_volumed.copy()
+                            music_clips.append(clip_copy)
+                        
+                        # Nối các clip âm thanh
+                        adjusted_music = concatenate_audioclips(music_clips)
+                        # Cắt đến đúng thời lượng video
+                        adjusted_music = adjusted_music.subclip(0, video_duration)
+                        
+                    except Exception as loop_err:
+                        logger.error(f"Lỗi khi lặp nhạc với phương pháp nối clip: {loop_err}")
+                        logger.info("Thử phương pháp dự phòng - lặp với vfx.loop")
+                        
+                        try:
+                            # Phương pháp 2: Sử dụng vfx.loop (giữ lại như phương pháp dự phòng)
+                            adjusted_music = music_volumed.fx(vfx.loop, duration=video_duration)
+                        except Exception as e:
+                            logger.error(f"Cả hai phương pháp lặp nhạc đều thất bại. Sử dụng nhạc nền không lặp: {e}")
+                            # Nếu cả hai phương pháp đều thất bại, sử dụng nhạc gốc và cắt hoặc lặp lại
+                            if music_duration >= 10:  # Nếu nhạc đủ dài để nghe được
+                                adjusted_music = music_volumed.subclip(0, min(music_duration, video_duration))
+                            else:
+                                logger.warning("Nhạc quá ngắn và không thể lặp. Video có thể thiếu nhạc nền.")
+                                adjusted_music = music_volumed
                 else:
                     # Nếu nhạc dài hơn hoặc bằng video -> Cắt nhạc
                     logger.info(f"Nhạc nền ({music_duration:.2f}s) dài hơn hoặc bằng video ({video_duration:.2f}s). Cắt nhạc nền.")
@@ -381,6 +409,15 @@ class VideoEditor:
                 if video_clip: video_clip.close()
                 if music_clip_original: music_clip_original.close()
                 if original_audio: original_audio.close()
+                
+                # Đóng các clip âm thanh đã tạo
+                if 'music_clips' in locals() and music_clips:
+                    for clip in music_clips:
+                        try:
+                            if clip: clip.close()
+                        except:
+                            pass
+                
                 # adjusted_music không cần đóng trực tiếp vì nó là kết quả của phép biến đổi
                 if final_audio: final_audio.close()
                 if video_clip_with_music: video_clip_with_music.close()
