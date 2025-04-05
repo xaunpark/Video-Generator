@@ -4,7 +4,7 @@ import sys
 import time
 import json
 import requests
-import datetime # Đảm bảo import datetime
+import datetime
 from dotenv import load_dotenv
 
 from src.logger_config import setup_logger
@@ -42,11 +42,11 @@ class ScriptGenerator:
         payload = {
             "model": "gpt-4o-mini", # Hoặc model khác
             "messages": [
-                {"role": "system", "content": "You are a helpful assistant designed to output JSON."},
+                {"role": "system", "content": "You are a helpful assistant designed to output JSON. Respond ONLY with the valid JSON object requested, without any introductory text, explanations, or markdown formatting."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7,
-            "max_tokens": 4000,
+            "max_tokens": 20000,
             "response_format": {"type": "json_object"}
         }
         url = f"{self.base_url}/chat/completions"
@@ -54,64 +54,84 @@ class ScriptGenerator:
         while attempt < max_retries:
             attempt += 1
             try:
-                # Sử dụng biến request_timeout đã truyền vào
+                logger.debug(f"Calling OpenAI API (Attempt {attempt}/{max_retries}, Timeout: {request_timeout}s)...")
+                # Sử dụng biến request_timeout đã truyền vào thay vì giá trị cứng
                 response = requests.post(url, headers=self.headers, json=payload, timeout=request_timeout)
                 response.raise_for_status()
                 data = response.json()
                 if 'choices' in data and data['choices']:
                     json_string = data['choices'][0]['message']['content'].strip()
-                    # Kiểm tra cơ bản
+                    # Kiểm tra cơ bản (có thể thêm kiểm tra JSON hợp lệ ở đây nếu muốn)
                     if json_string.startswith('{') and json_string.endswith('}'):
+                        logger.debug(f"API call successful (Attempt {attempt}).")
                         return json_string
                     else:
                         logger.warning(f"API response doesn't look like JSON (Attempt {attempt}/{max_retries}): {json_string[:100]}...")
                 else:
                     logger.warning(f"Invalid API response structure (Attempt {attempt}/{max_retries}): {data}")
 
-            # Bắt lỗi Timeout riêng biệt để log rõ ràng hơn
             except requests.exceptions.Timeout:
                 logger.warning(f"OpenAI API call timed out after {request_timeout}s (Attempt {attempt}/{max_retries}). Retrying...")
             except requests.exceptions.RequestException as e:
                  logger.error(f"OpenAI API request error (Attempt {attempt}/{max_retries}): {e}")
                  if hasattr(e, 'response') and e.response is not None:
                       logger.error(f"Response status: {e.response.status_code}, text: {e.response.text[:200]}...")
-                 # Không retry nếu lỗi client (4xx) trừ 429 (rate limit)
-                 if e.response is not None and 400 <= e.response.status_code < 500 and e.response.status_code != 429:
+                 # Không retry nếu lỗi client (4xx) trừ 429 (rate limit) và 401/403 (key lỗi)
+                 if e.response is not None and 400 <= e.response.status_code < 500 and e.response.status_code not in [429, 401, 403]:
+                      logger.error("Client error detected, stopping retries.")
                       break
             except Exception as e:
                 logger.error(f"Unexpected error calling OpenAI API (Attempt {attempt}/{max_retries}): {e}", exc_info=True)
 
             if attempt < max_retries:
-                time.sleep(2 ** attempt) # Exponential backoff
+                wait_time = 2 ** attempt # Exponential backoff
+                logger.info(f"Waiting {wait_time}s before retrying...")
+                time.sleep(wait_time)
 
         logger.error("Failed to get valid JSON response from OpenAI API after multiple retries.")
         return None
 
     # --- Bước 1 - Tạo Script với Câu Hoàn Chỉnh ---
-    def _generate_initial_script_sentences(self, style_config, article=None, keyword=None, language="en"):
-        """Tạo script ban đầu với các scene là các câu hoàn chỉnh."""
+    def _generate_initial_script_sentences(self, style_config, article=None, keyword=None, transcript_text=None, language="en", context_hint=None):
+        """Tạo script ban đầu với các scene là các câu hoàn chỉnh, hỗ trợ nhiều loại input."""
         logger.info("Step 1: Generating initial script with full sentences...")
+        
         # --- Xây dựng Prompt cho Bước 1 ---
         prompt_step1 = "Create a script based on the provided context.\n"
         prompt_step1 += f"Style Requirements: Tone should be {style_config['tone']}. Follow these instructions:\n"
         for instr in style_config['instructions']:
-             prompt_step1 += f"- {instr}\n"
+            prompt_step1 += f"- {instr}\n"
 
+        # Determine input type and build context
+        input_type = "Unknown"
         if article:
-            prompt_step1 += f"\nARTICLE TITLE: {article.get('title', '')}\n"
+            input_type = "Article"
+            prompt_step1 += f"\nCONTEXT TYPE: News Article\n"
+            prompt_step1 += f"ARTICLE TITLE: {article.get('title', '')}\n"
             prompt_step1 += f"ARTICLE CONTENT:\n{safe_truncate(article.get('content', ''))}\n"
             prompt_step1 += "\nInstructions: Generate a script summarizing the article."
         elif keyword:
+            input_type = "Keyword"
             lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
-            prompt_step1 += f"\nTOPIC: \"{keyword}\"\n"
+            prompt_step1 += f"\nCONTEXT TYPE: Keyword/Topic\n"
+            prompt_step1 += f"TOPIC: \"{keyword}\"\n"
             prompt_step1 += f"\nInstructions: Generate a script {lang_instruction} about the topic."
+        elif transcript_text: # <--- Added transcript handling
+            input_type = "YouTube Transcript"
+            lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
+            prompt_step1 += f"\nCONTEXT TYPE: YouTube Video Transcript {f'({context_hint})' if context_hint else ''}\n"
+            prompt_step1 += f"TRANSCRIPT CONTENT:\n{safe_truncate(transcript_text, 12000)}\n" # Allow longer transcript context
+            prompt_step1 += f"\nInstructions: Create a compelling, concise script {lang_instruction} summarizing and restructuring the key points from the transcript. DO NOT just copy the transcript. Adapt it to the requested style and break it into logical sentences."
         else:
-            return None # Không có context
+            logger.error("Step 1 Failed: No valid input (article, keyword, or transcript) provided.")
+            return None
+
+        logger.info(f"Generating initial script based on: {input_type}")
 
         prompt_step1 += "\n\nOutput Requirements:\n"
         prompt_step1 += "- Return ONLY a valid JSON object.\n"
-        prompt_step1 += "- The JSON object must have a 'title' (string) and 'initial_scenes' (list of strings).\n"
-        prompt_step1 += "- Each string in 'initial_scenes' should be one or more complete, natural-sounding sentences covering a part of the topic/article.\n"
+        prompt_step1 += f"- The JSON object must have a 'title' (string, suitable for the {input_type} and {style_config['tone']} style) and 'initial_scenes' (list of strings).\n"
+        prompt_step1 += "- Each string in 'initial_scenes' should be one or more complete, natural-sounding sentences covering a part of the topic/article/transcript.\n"
         prompt_step1 += "- Example Format:\n"
         prompt_step1 += '{\n'
         prompt_step1 += f'  "title": "{style_config["title_hint"]}",\n'
@@ -123,7 +143,7 @@ class ScriptGenerator:
         prompt_step1 += '}'
 
         # --- Gọi API cho Bước 1 ---
-        response_json_str = self._call_openai_api(prompt_step1)
+        response_json_str = self._call_openai_api(prompt_step1, request_timeout=120) # Increase timeout for potentially longer processing
         if not response_json_str:
             logger.error("Step 1 Failed: No response from API for initial script generation.")
             return None
@@ -137,8 +157,8 @@ class ScriptGenerator:
                 logger.error(f"Step 1 Failed: Invalid JSON structure received: {data_step1}")
                 return None
             if not data_step1["initial_scenes"]:
-                 logger.error("Step 1 Failed: 'initial_scenes' list is empty.")
-                 return None
+                logger.error("Step 1 Failed: 'initial_scenes' list is empty.")
+                return None
 
             logger.info(f"Step 1 Success: Generated {len(data_step1['initial_scenes'])} initial sentence-based scenes.")
             return data_step1
@@ -147,13 +167,14 @@ class ScriptGenerator:
             logger.debug(f"Received content: {response_json_str}")
             return None
         except Exception as e:
-             logger.error(f"Step 1 Failed: Unexpected error parsing result: {e}", exc_info=True)
-             return None
+            logger.error(f"Step 1 Failed: Unexpected error parsing result: {e}", exc_info=True)
+            return None
 
     # --- Bước 2 - Chia Câu thành Shots ---
     def _breakdown_sentence_into_shots(self, sentence_text, target_style_tone):
         """Yêu cầu OpenAI chia một câu/đoạn văn thành các shots ngắn."""
         logger.debug(f"Step 2: Breaking down sentence: '{sentence_text[:100]}...'")
+        
         # --- Xây dựng Prompt cho Bước 2 ---
         prompt_step2 = f"""
         Break down the following text into short visual "shots" for an engaging video.
@@ -344,7 +365,7 @@ class ScriptGenerator:
 
         return enhanced_script
 
-    # --- Hàm generate_script_from_keyword (cần được sửa tương tự) ---
+    # --- Hàm generate_script_from_keyword ---
     def generate_script_from_keyword(self, keyword, style="informative", language=None):
         """
         Tạo kịch bản từ từ khóa sử dụng quy trình 2 bước.
@@ -428,6 +449,101 @@ class ScriptGenerator:
                  logger.info(f"Video analysis result (keyword): {video_shots}/{len(script_result['scenes'])} shots marked for video.")
              except Exception as e:
                  logger.error(f"Error during video analysis (keyword): {str(e)}", exc_info=True)
+                 enhanced_script = script_result
+        elif not enhance_script_with_video_annotations:
+             logger.warning("Skipping video shot analysis (detector module missing).")
+        else:
+            logger.info("Video clip analysis is disabled in settings.")
+            for scene in enhanced_script.get('scenes', []):
+                 scene['prefer_video'] = False
+
+        return enhanced_script
+
+    # --- NEW Main function for TRANSCRIPT/TEXT input ---
+    def generate_script_from_text(self, input_text, style="informative", language="en", context_hint=None):
+        """
+        Generates a script from raw text (like a transcript) using the 2-step process.
+        """
+        # Generate a project ID based on the text's beginning
+        project_id_hint = context_hint if context_hint else input_text[:50]
+        project_id = generate_project_id(project_id_hint)
+        logger.info(f"Generating script from text (Style: {style}, Lang: {language}, Hint: {context_hint or 'N/A'})")
+
+        if style not in cfg.style_configs:
+            logger.warning(f"Unknown style '{style}', defaulting to 'informative'.")
+            style = "informative"
+        style_config = cfg.style_configs[style]
+        # Language is passed directly
+
+        # --- Step 1: Generate initial script with full sentences ---
+        initial_script_data = self._generate_initial_script_sentences(
+            style_config=style_config,
+            transcript_text=input_text, # Pass transcript text
+            language=language,
+            context_hint=context_hint
+        )
+        if not initial_script_data:
+            return None
+
+        final_title = initial_script_data["title"]
+        initial_sentences = initial_script_data["initial_scenes"]
+
+        # --- Step 2: Breakdown sentences and build final structure ---
+        # (Identical logic to other generate functions)
+        final_scenes = []
+        final_speech_units = []
+        global_shot_number = 1
+        speech_unit_number = 1
+
+        logger.info("Step 2: Breaking down generated sentences into visual shots...")
+        for sentence in initial_sentences:
+            if not sentence.strip(): continue
+            shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
+            if shots_for_sentence:
+                shot_numbers_for_unit = []
+                for shot_content in shots_for_sentence:
+                    final_scenes.append({"number": global_shot_number, "content": shot_content.strip()})
+                    shot_numbers_for_unit.append(global_shot_number)
+                    global_shot_number += 1
+                final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": shot_numbers_for_unit})
+                speech_unit_number += 1
+            else: # Fallback
+                logger.warning(f"Could not break down sentence (text input), using full sentence as shot: '{sentence[:50]}...'")
+                final_scenes.append({"number": global_shot_number, "content": sentence.strip()})
+                final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": [global_shot_number]})
+                global_shot_number += 1
+                speech_unit_number += 1
+
+        if not final_scenes or not final_speech_units:
+            logger.error("Script generation failed (text input): No valid scenes or speech units created.")
+            return None
+
+        logger.info(f"Script generation complete (text input): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
+
+        # --- Final script object ---
+        script_result = {
+            "project_id": project_id,
+            "title": final_title,
+            "scenes": final_scenes,
+            "speech_units": final_speech_units,
+            "source": f"AI Generated from Text ({context_hint or 'Input Text'})",
+            "url": f"text://{project_id}", # Placeholder URL
+            "style": style,
+            "language": language,
+            "is_ai_generated": True,
+            "creation_timestamp": datetime.datetime.now().isoformat()
+        }
+
+        # --- Enhance with video annotations ---
+        enhanced_script = script_result
+        if enhance_script_with_video_annotations and VIDEO_SETTINGS.get("enable_video_clips", False):
+             try:
+                 logger.info(f"Analyzing {len(script_result['scenes'])} shots for video suitability (text input)...")
+                 enhanced_script = enhance_script_with_video_annotations(script_result.copy())
+                 video_shots = sum(1 for shot in enhanced_script.get('scenes', []) if shot.get('prefer_video', False))
+                 logger.info(f"Video analysis result (text input): {video_shots}/{len(script_result['scenes'])} shots marked for video.")
+             except Exception as e:
+                 logger.error(f"Error during video analysis (text input): {str(e)}", exc_info=True)
                  enhanced_script = script_result
         elif not enhance_script_with_video_annotations:
              logger.warning("Skipping video shot analysis (detector module missing).")
@@ -525,7 +641,13 @@ if __name__ == "__main__":
     }
     test_keyword_vi = "lợi ích của việc đọc sách"
     test_keyword_en = "impact of social media on teenagers"
-
+    test_transcript = """
+    Hello everyone, and welcome back to the channel. Today, we're diving deep into the world of sustainable gardening.
+    First, let's talk about composting. It's a fantastic way to reduce waste and enrich your soil naturally.
+    You can compost kitchen scraps like vegetable peelings and coffee grounds. Avoid meat and dairy products.
+    Another key aspect is water conservation. Using rain barrels and drip irrigation systems can save a lot of water compared to traditional sprinklers.
+    Choosing native plants is also crucial. They are adapted to the local climate and require less maintenance. That's all for today! Happy gardening!
+    """
     # --- Khởi tạo Generator và Thực hiện Test ---
     generator = None # Khởi tạo là None để đảm bảo nó nằm trong scope của finally
     try:
@@ -588,6 +710,21 @@ if __name__ == "__main__":
             print("\nFAILED to generate script from English keyword.")
             print("-" * 30)
 
+        # --- NEW Test 3: Transcript (En) ---
+        print("\n" + "="*10 + " Test 3: Transcript (English) - Informative " + "="*10)
+        script_transcript = generator.generate_script_from_text(test_transcript, "informative", "en", context_hint="Sustainable Gardening Tips")
+
+        if script_transcript:
+            print(f"\nSUCCESS: Generated script from transcript")
+            print(f"Title: {script_transcript.get('title')}")
+            print(f"Total Shots: {len(script_transcript.get('scenes', []))}")
+            print(f"Total Speech Units: {len(script_transcript.get('speech_units', []))}")
+            # ... (print more details as needed) ...
+            print("-" * 30)
+        else:
+            print("\nFAILED to generate script from transcript.")
+            print("-" * 30)
+
     except ValueError as ve:
          print(f"\nERROR: Configuration Error: {ve}")
     except Exception as e:
@@ -595,10 +732,7 @@ if __name__ == "__main__":
         import traceback
         print(traceback.format_exc())
     finally:
-        # --- KHÔI PHỤC LẠI CÀI ĐẶT GỐC ---
-        # Quan trọng nếu script còn làm việc khác sau block test này
         VIDEO_SETTINGS["enable_video_clips"] = original_enable_video_clips
         logger.info(f"--- Video analysis setting restored to: {original_enable_video_clips} ---")
-        # ---------------------------------
 
     print("\n--- Testing Finished ---")
