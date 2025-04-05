@@ -18,12 +18,12 @@ for dir_path in [TEMP_DIR, OUTPUT_DIR, ASSETS_DIR, MUSIC_DIR, TEMPLATES_DIR, FON
 
 # Cấu hình các nguồn tin tức tiếng Anh
 NEWS_SOURCES = [
-    {
-        "name": "CNN",
-        "url": "http://rss.cnn.com/rss/edition_world.rss",
-        "type": "rss",
-        "language": "en"
-    },
+    #{
+    #    "name": "CNN",
+    #    "url": "http://rss.cnn.com/rss/edition_world.rss",
+    #    "type": "rss",
+    #    "language": "en"
+    #},
     #{
     #    "name": "The New York Times",
     #    "url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
@@ -47,7 +47,13 @@ NEWS_SOURCES = [
     #    "url": "https://tuoitre.vn/rss/khoa-hoc.rss",
     #    "type": "rss",
     #    "language": "vi"
-    #}
+    #},
+    {
+        "name": "Theguardian Lifestyle",
+        "url": "https://www.theguardian.com/uk/lifeandstyle/rss",
+        "type": "rss",
+        "language": "en"
+    }    
 ]
 
 # Danh mục tin tức tiếng Anh
@@ -72,7 +78,7 @@ VIDEO_SETTINGS = {
     "background_music_volume": 0.1,
     "format": "mp4",
     "enable_video_clips": True,          # Bật/tắt tính năng video clips
-    "video_clip_duration": 7,            # Thời lượng mong muốn cho video clips (giây)
+    "video_clip_duration": 10,            # Thời lượng mong muốn cho video clips (giây)
     "video_clip_frequency": 0.4,         # Tỷ lệ scene nên dùng video (0.0-1.0)
     "min_scenes_between_videos": 1,      # Số scene tối thiểu giữa 2 video clips
     "openai_model_for_scene_analysis": "gpt-4o-mini",  # Model để phân tích scene

@@ -6,8 +6,11 @@ import hashlib
 import time
 import shutil
 from urllib.parse import urlparse
-from moviepy.editor import VideoFileClip, concatenate_videoclips, vfx
 from src.fix_pillow import *
+
+from moviepy import *
+#from moviepy.editor import VideoFileClip, concatenate_videoclips, vfx
+from moviepy import VideoFileClip
 
 from src.logger_config import setup_logger
 logger = setup_logger(__name__)
@@ -530,7 +533,7 @@ class VideoClipFinder:
                     start_time = 0
                     
                 logger.info(f"Cutting video from {start_time:.2f}s to {start_time + self.target_duration:.2f}s")
-                video = video.subclip(start_time, start_time + self.target_duration)
+                video = video.subclipped(start_time, start_time + self.target_duration)
             
             # Resize if needed
             if video.w != self.target_width or video.h != self.target_height:
@@ -540,18 +543,18 @@ class VideoClipFinder:
                 
                 if abs(video_ratio - target_ratio) < 0.1:
                     # Similar ratio, just resize
-                    video = video.resize((self.target_width, self.target_height))
+                    video = video.resized((self.target_width, self.target_height))
                 else:
                     # Different ratio, resize the correct dimension and crop the other
                     if video_ratio > target_ratio:
                         # Video is wider, resize height and crop width
                         new_height = self.target_height
                         new_width = int(video.w * (new_height / video.h))
-                        video = video.resize((new_width, new_height))
+                        video = video.resized((new_width, new_height))
                         
                         # Crop width
                         x_center = video.w / 2
-                        video = video.crop(x1=x_center - self.target_width/2, 
+                        video = video.cropped(x1=x_center - self.target_width/2, 
                                           y1=0, 
                                           x2=x_center + self.target_width/2, 
                                           y2=self.target_height)
@@ -563,7 +566,7 @@ class VideoClipFinder:
                         
                         # Crop height
                         y_center = video.h / 2
-                        video = video.crop(x1=0, 
+                        video = video.cropped(x1=0, 
                                           y1=y_center - self.target_height/2, 
                                           x2=self.target_width, 
                                           y2=y_center + self.target_height/2)
@@ -572,17 +575,26 @@ class VideoClipFinder:
             video = video.without_audio()
             
             # Add a subtle effect (makes it look more professional)
-            video = video.fx(vfx.colorx, 1.1)  # Slightly enhance colors
-            
+            #video = vfx.colorx(video, 1.1)  # Slightly enhance colors
+
             # Write to output file
+            #video.write_videofile(
+            #    output_path,
+            #    codec='libx264',
+            #    audio_codec='aac',
+            #    fps=24,
+            #    preset='medium',
+            #    ffmpeg_params=['-crf', '23']  # Controls quality
+            #)
+
             video.write_videofile(
                 output_path,
                 codec='libx264',
                 audio_codec='aac',
                 fps=24,
                 preset='medium',
-                ffmpeg_params=['-crf', '23']  # Controls quality
-            )
+                bitrate='5000k'  # Check documentation for current quality control parameters
+            )            
             
             # Close the video to free resources
             video.close()
@@ -629,11 +641,11 @@ if __name__ == "__main__":
 
     # --- Cấu hình Logger để thấy DEBUG messages ---
     # Thay đổi level thành DEBUG để xem log chi tiết về chấm điểm
-    logger.basicConfig(
-        level=logger.DEBUG, # ĐẶT LÀ DEBUG
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    logger = logger.getLogger("VideoClipFinderTest")
+    #logger.basicConfig(
+    #    level=logger.DEBUG, # ĐẶT LÀ DEBUG
+    #    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    #)
+    #logger = logger.getLogger("VideoClipFinderTest")
     # ----------------------------------------------
 
     logger.info("--- Bắt đầu kiểm tra VideoClipFinder ---")

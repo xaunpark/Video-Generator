@@ -453,11 +453,12 @@ def main():
         # Create video with correct parameter order
         logger.info("Bắt đầu quá trình chỉnh sửa và tạo video cuối cùng...")
         output_path_final = video_editor.create_video(
-            script=script,
-            media_items=images, # Biến images từ khối tạo image
-            audio_dir=audio_dir,
-            output_path=output_path, # Đường dẫn file output đã tính toán
-            background_music_path=background_music # Truyền đường dẫn nhạc nền
+            script=script,               # Script chứa scenes và speech_units
+            media_items=images,          # List media items cho từng scene/shot
+            audio_files_info=audio_files,# <--- TRUYỀN DANH SÁCH AUDIO INFO CỦA SPEECH UNITS
+            output_path=output_path,     # Đường dẫn output cuối cùng
+            background_music_path=background_music # Nhạc nền (tùy chọn)
+            # project_id=script.get('project_id') # Tùy chọn: truyền project_id nếu muốn dùng tên thư mục tạm khớp nhau
         )
 
         # Added completion message

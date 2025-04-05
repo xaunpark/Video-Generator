@@ -15,3 +15,26 @@ PIXABAY_API_KEY=""
 # YOUTUBE_REFRESH_TOKEN=""
 
 3. Thêm .env.example vào Git, nhưng .env thì không.
+
+-------------------
+
+Lần sau mỗi project, bạn nên có sẵn file:
+
+requirements.txt
+
+Hoặc mỗi khi thêm thư viện mới:
+
+pip freeze > requirements.txt
+
+Để sau này chỉ cần:
+
+pip install -r requirements.txt
+
+là đầy đủ lại y như cũ.
+
+-------------------
+
+MOVIEPY CÀI BẢN 1.0.3 
+
+pip uninstall moviepy
+pip install moviepy==1.0.3
