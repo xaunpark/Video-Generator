@@ -7,86 +7,51 @@ from src.utils import safe_truncate
 # Style Definitions
 # ----------------------------
 
+# Sử dụng scene_range đã tăng lên ở bước trước (ví dụ)
+# Bạn có thể điều chỉnh các giá trị này sau khi thử nghiệm
 style_configs = {
     "controversial": {
         "tone": "highly controversial, fast-paced",
-        "instructions": [
-            "Use emotional, polarizing, provocative, and impactful words.",
-            "Start with the most shocking or controversial fact or question.",
-            "Inject direct, sharp rhetorical questions.",
-            "Build tension progressively.",
-            "Use punchy contrasts and opposing viewpoints.",
-            "End with a provocative or open-ended question."
-        ],
+        "instructions": ["Use emotional, polarizing words.", "Start with shocking fact/question.", "Inject sharp questions.", "Build tension.", "Use punchy contrasts.", "End provocatively."],
         "title_hint": "A highly provocative and engaging title",
-        "scene_range": (15, 25),
+        "scene_range": (40, 80),
     },
     "informative": {
         "tone": "clear and informative",
-        "instructions": [
-            "Use clear, concise, and fact-based sentences.",
-            "Start with a clear introduction.",
-            "Divide into short, easy-to-follow key points.",
-            "End with a clear conclusion."
-        ],
+        "instructions": ["Use clear, concise segments.", "Start with intro phrase.", "Break down info into tiny visual chunks.", "End with conclusion phrase."],
         "title_hint": "An informative and clear title",
-        "scene_range": (15, 25),
+        "scene_range": (80, 150),
     },
-    "emotional": {
+    # ... (Giữ nguyên các style khác với scene_range đã tăng) ...
+     "emotional": {
         "tone": "deeply emotional and touching",
-        "instructions": [
-            "Use emotional, heartfelt, and vivid language.",
-            "Begin with a touching or emotionally strong statement.",
-            "Gradually deepen the emotional impact.",
-            "End with an uplifting, heartbreaking, or reflective closing."
-        ],
-        "title_hint": "An emotionally powerful and engaging title",
-        "scene_range": (15, 25),
+        "instructions": ["Use emotional, heartfelt snippets.", "Begin with touching fragment.", "Deepen impact via short phrases.", "End with reflective fragment."],
+        "title_hint": "An emotionally powerful title",
+        "scene_range": (40, 80),
     },
     "funny": {
         "tone": "funny and lighthearted",
-        "instructions": [
-            "Use humor, exaggeration, or satire.",
-            "Begin with a funny or unexpected statement.",
-            "Sprinkle in funny rhetorical questions.",
-            "End with a punchline or witty remark."
-        ],
+        "instructions": ["Use humor in short bursts.", "Begin with funny phrase.", "Sprinkle witty fragments.", "End with punchline fragment."],
         "title_hint": "A witty and humorous title",
-        "scene_range": (15, 25),
+        "scene_range": (40, 80),
     },
     "motivational": {
         "tone": "highly motivational and inspiring",
-        "instructions": [
-            "Use powerful, inspiring, and uplifting language.",
-            "Start with an attention-grabbing and inspiring statement.",
-            "Increase the intensity of inspiration as you progress.",
-            "End with a strong call to action or impactful quote."
-        ],
+        "instructions": ["Use powerful, uplifting snippets.", "Start with inspiring fragment.", "Increase intensity with impactful phrases.", "End with strong call to action fragment."],
         "title_hint": "A powerful and inspiring title",
-        "scene_range": (15, 25),
+        "scene_range": (40, 80),
     },
     "conversational": {
         "tone": "friendly and engaging",
-        "instructions": [
-            "Use a conversational and easy-to-understand style.",
-            "Ask rhetorical or direct questions.",
-            "Use simple and clear language.",
-            "Make the audience feel like you are talking directly to them."
-        ],
+        "instructions": ["Use conversational phrases.", "Use simple, clear snippets.", "Break down thoughts into small parts."],
         "title_hint": "A friendly and engaging title",
-        "scene_range": (15, 25),
+        "scene_range": (50, 100),
     },
     "dramatic": {
         "tone": "highly dramatic and impactful",
-        "instructions": [
-            "Use vivid, intense, and emotionally charged language.",
-            "Begin with a shocking or unexpected fact.",
-            "Keep tension high and build suspense throughout.",
-            "Use contrasts, cliffhangers, and rhetorical questions to engage the audience.",
-            "End with a powerful or thought-provoking statement."
-        ],
+        "instructions": ["Use vivid, intense fragments.", "Begin with shocking phrase.", "Keep tension high with short snippets.", "Use contrasts.", "End with powerful fragment."],
         "title_hint": "A dramatic and impactful title",
-        "scene_range": (15, 25),
+        "scene_range": (40, 80),
     }
 }
 
@@ -96,13 +61,33 @@ style_configs = {
 
 def generate_prompt(style, article=None, keyword=None, language="en"):
     """
-    Sinh prompt dùng chung cho cả bài báo hoặc từ khóa
+    Sinh prompt yêu cầu chia nhỏ thành shots (scenes) và nhóm thành speech_units.
     """
     if style not in cfg.AVAILABLE_STYLES:
         raise ValueError(f"Unknown style: {style}")
 
     config = style_configs[style]
     scene_min, scene_max = cfg.SCENE_RANGE[style]
+
+    # --- Định nghĩa lại khái niệm "Scene" (Shot) và "Speech Unit" ---
+    structure_definition = """
+    **Critical Output Structure Requirements:**
+
+    1.  **`scenes` (Visual Shots/Slides):**
+        *   This array defines the *visual* flow. Each element is a VERY SHORT text segment (a "shot" or "slide").
+        *   You MUST aggressively break down the original sentences into these tiny visual scenes/shots.
+        *   Focus on splitting based on distinct visual concepts, keywords, actions, or natural pauses.
+        *   Example: "They grow barley, wheat, dates, lotus, and apples." becomes multiple scenes: `{"number": 1, "content": "They grow"}, {"number": 2, "content": "barley, wheat"}, {"number": 3, "content": "dates"}, {"number": 4, "content": "lotus"}, {"number": 5, "content": "and apples."}`.
+        *   Scene numbers MUST be sequential starting from 1.
+
+    2.  **`speech_units` (Audio Segments):**
+        *   This array defines the *audio* flow for natural-sounding voice generation.
+        *   Each element groups one or more consecutive `scenes` into a logical, natural-sounding phrase or sentence.
+        *   The `text` field in each `speech_unit` MUST be the exact concatenation of the `content` from the scenes listed in its `scene_numbers` array, forming a complete, speakable unit.
+        *   The `scene_numbers` array lists the `number`s of the scenes belonging to this speech unit.
+        *   All scenes MUST be included in exactly one speech unit, and the units must cover the scenes sequentially without gaps or overlaps.
+        *   Example: If scenes 1-5 form a sentence, the speech unit would be `{"unit_number": 1, "text": "They grow barley, wheat, dates, lotus, and apples.", "scene_numbers": [1, 2, 3, 4, 5]}`.
+    """
 
     # --------- CASE 1: Article ---------
     if article is not None:
@@ -113,14 +98,19 @@ def generate_prompt(style, article=None, keyword=None, language="en"):
 
         prompt = f"""
         Create a {config['tone']} news script based on the following article.
-        The script must be continuous and divided into short sentences (called scenes) for fast-paced video editing.
+        The script must be meticulously structured into two parts as defined below:
+        1) Extremely short visual `scenes` (shots/slides).
+        2) Logical `speech_units` grouping these scenes for natural audio.
 
         ARTICLE TITLE: {article_title}
         ARTICLE CONTENT: {article_content}
 
-        **SCRIPT RULES:**
-        1. Each "scene" = short sentence/snippet (NOT a standalone scene).
-        2. The script must flow smoothly as one continuous story.
+        {structure_definition}
+
+        **Script Content Rules:**
+        *   Follow the {config['tone']} style.
+        *   Ensure the concatenated `speech_units.text` accurately reflects the core information of the article.
+        *   Generate between {scene_min} and {scene_max} SHORT visual scenes in total.
         """
 
     # --------- CASE 2: Keyword ---------
@@ -132,36 +122,48 @@ def generate_prompt(style, article=None, keyword=None, language="en"):
 
         prompt = f"""
         Create a {config['tone']} news script {lang_label} based on the topic: \"{keyword}\".
-        The script must be continuous and divided into short sentences (called scenes) for fast-paced video editing.
+        The script must be meticulously structured into two parts as defined below:
+        1) Extremely short visual `scenes` (shots/slides).
+        2) Logical `speech_units` grouping these scenes for natural audio.
 
-        **SCRIPT RULES:**
-        1. Each "scene" = short sentence/snippet (NOT a standalone scene).
-        2. The script must flow smoothly as one continuous story.
+        TOPIC: "{keyword}"
+
+        {structure_definition}
+
+        **Script Content Rules:**
+        *   Generate relevant content for the keyword in the specified {config['tone']} style.
+        *   Immediately break down the generated content into the required `scenes` and `speech_units`.
+        *   Generate between {scene_min} and {scene_max} SHORT visual scenes in total.
         """
-
     else:
         raise ValueError("Either article or keyword must be provided.")
 
-    # --------- Common rules ---------
-    for i, instruction in enumerate(config['instructions'], start=3):
-        prompt += f"\n{i}. {instruction}"
+    # --------- Common Style Instructions ---------
+    # Add specific style instructions subtly
+    prompt += "\n**Style Guidance:**\n"
+    for instruction in config['instructions']:
+         prompt += f"- {instruction}\n"
 
+    # --------- Output Format Reminder ---------
     prompt += f"""
-{len(config['instructions']) + 3}. Total: {scene_min} to {scene_max} scenes depending on topic complexity.
-{len(config['instructions']) + 4}. Each scene is typically 1 impactful sentence (max 2 very short).
-
-**Output Format (MANDATORY):**
+**Final Output Format (JSON ONLY - Adhere Strictly):**
 {{
   "title": "{config['title_hint']}",
   "scenes": [
-    {{"number": 1, "content": "Scene 1"}},
-    {{"number": 2, "content": "Scene 2"}},
-    ...
+    {{"number": 1, "content": "Short shot 1"}},
+    {{"number": 2, "content": "Next few words"}},
+    // ... more scenes ...
+  ],
+  "speech_units": [
+    {{
+      "unit_number": 1,
+      "text": "Concatenated text of scenes in this unit.",
+      "scene_numbers": [/* list of scene numbers */]
+    }},
+    // ... more speech units ...
   ]
 }}
 
-- Valid JSON only.
-- Write between {scene_min} and {scene_max} scenes.
+**REMEMBER:** Provide ONLY the valid JSON object. No introductory text, explanations, or code fences. Both `scenes` and `speech_units` arrays are mandatory. Ensure perfect sequential coverage of scenes by speech units.
     """
-
     return prompt.strip()

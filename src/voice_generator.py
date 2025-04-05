@@ -79,103 +79,89 @@ class VoiceGenerator:
             logger.error(f"Lỗi khi kết nối đến OpenAI TTS API: {str(e)}")
     
     def generate_audio_for_script(self, script):
-        """Tạo file âm thanh cho kịch bản và lấy thời lượng chính xác."""
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        project_dir = os.path.join(self.audio_dir, f"project_{timestamp}")
-        os.makedirs(project_dir, exist_ok=True)
-        
-        logger.info(f"Bắt đầu tạo giọng nói cho kịch bản: {script['title']}")
-        
-        audio_files = []
-        
-        # Tạo file âm thanh cho toàn bộ kịch bản
-        try:
-            full_script_content = self._extract_full_script_content(script)
-            full_audio_path = os.path.join(project_dir, "full_audio.mp3")
+            """Tạo file âm thanh cho từng speech_unit trong kịch bản."""
+            # Tạo thư mục project dựa trên project_id hoặc timestamp
+            project_id = script.get('project_id', f"project_{time.strftime('%Y%m%d%H%M%S')}")
+            project_audio_dir = os.path.join(self.audio_dir, project_id)
+            os.makedirs(project_audio_dir, exist_ok=True)
 
-            # Tạo file âm thanh
-            self._generate_audio(full_script_content, full_audio_path)
-            
-            # --- LẤY THỜI LƯỢNG THỰC TẾ CHO FULL AUDIO ---
-            actual_full_duration = 0.0
-            try:
-                # Kiểm tra file tồn tại trước khi đọc
-                if os.path.exists(full_audio_path):
-                    audio_info = mutagen.mp3.MP3(full_audio_path)
-                    actual_full_duration = audio_info.info.length # Thời lượng tính bằng giây
-                    logger.info(f"Thời lượng thực tế (mutagen) cho full audio: {actual_full_duration:.2f}s")
-                else:
-                    logger.warning(f"File {full_audio_path} không tồn tại sau khi tạo. Không thể lấy thời lượng.")
-                    actual_full_duration = self._estimate_duration(full_script_content) # Fallback estimation
+            logger.info(f"Bắt đầu tạo giọng nói cho script: '{script['title']}' (Project: {project_id}, theo speech units)")
 
-            except Exception as e:
-                logger.warning(f"Lỗi khi đọc thời lượng file {full_audio_path} bằng mutagen: {e}. Sử dụng ước tính.")
-                actual_full_duration = self._estimate_duration(full_script_content) # Fallback estimation
-            # --- KẾT THÚC LẤY THỜI LƯỢNG ---
+            # Danh sách lưu thông tin các file audio đã tạo
+            audio_files_info = []
 
-            # Ghi âm thành công, thêm thông tin vào danh sách với thời lượng thực tế
-            audio_files.append({
-                "type": "full",
-                "path": full_audio_path,
-                "duration": actual_full_duration, # <-- SỬ DỤNG THỜI LƯỢNG THỰC TẾ
-                "content": full_script_content
-            })
-            
-            logger.info(f"Đã tạo file âm thanh đầy đủ: {full_audio_path}")
-        except Exception as e:
-            logger.error(f"Lỗi khi tạo file âm thanh đầy đủ: {str(e)}")
-        
-        # Tạo file âm thanh cho từng phân cảnh
-        if script.get('scenes'):
-            for scene in script['scenes']:
+            # Kiểm tra xem script có speech_units không
+            if not script.get('speech_units'):
+                logger.error(f"Script cho project {project_id} không chứa 'speech_units'. Không thể tạo audio.")
+                return [] # Trả về list rỗng
+
+            # --- Lặp qua từng Speech Unit để tạo Audio ---
+            total_units = len(script['speech_units'])
+            for i, unit in enumerate(script['speech_units']):
+                unit_number = unit.get('unit_number')
+                unit_text = unit.get('text', '').strip()
+                scene_numbers_in_unit = unit.get('scene_numbers', [])
+
+                if unit_number is None:
+                    logger.warning(f"Bỏ qua speech unit không có 'unit_number': {unit}")
+                    continue
+                if not unit_text:
+                    logger.warning(f"Speech Unit {unit_number} có nội dung rỗng, bỏ qua.")
+                    continue
+
+                logger.info(f"Processing Speech Unit {unit_number}/{total_units}...")
+
                 try:
-                    scene_number = scene['number']
-                    content = scene['content']
+                    # Tạo tên file audio cho unit
+                    unit_audio_filename = f"unit_{unit_number}.mp3"
+                    unit_audio_path = os.path.join(project_audio_dir, unit_audio_filename)
 
-                    # Tên file
-                    scene_audio_filename = f"scene_{scene_number}.mp3"
-                    scene_audio_path = os.path.join(project_dir, scene_audio_filename)
+                    # Gọi hàm tạo audio (hàm này không đổi)
+                    self._generate_audio(unit_text, unit_audio_path)
 
-                    # Tạo file âm thanh
-                    self._generate_audio(content, scene_audio_path)
-
-                    # --- LẤY THỜI LƯỢNG THỰC TẾ CHO SCENE ---
-                    actual_scene_duration = 0.0
+                    # Lấy thời lượng thực tế của file audio vừa tạo
+                    actual_unit_duration = 0.0
                     try:
-                         # Kiểm tra file tồn tại trước khi đọc
-                        if os.path.exists(scene_audio_path):
-                            audio_info = mutagen.mp3.MP3(scene_audio_path)
-                            actual_scene_duration = audio_info.info.length # Thời lượng tính bằng giây
-                            logger.info(f"Thời lượng thực tế (mutagen) cho scene {scene_number}: {actual_scene_duration:.2f}s")
+                        if os.path.exists(unit_audio_path) and os.path.getsize(unit_audio_path) > 100: # Kiểm tra file hợp lệ
+                            audio_info_mutagen = mutagen.mp3.MP3(unit_audio_path)
+                            actual_unit_duration = audio_info_mutagen.info.length
+                            logger.info(f"  Speech Unit {unit_number}: Audio duration = {actual_unit_duration:.3f}s")
                         else:
-                            logger.warning(f"File {scene_audio_path} không tồn tại sau khi tạo. Không thể lấy thời lượng.")
-                            actual_scene_duration = self._estimate_duration(content) # Fallback estimation
-
+                            logger.warning(f"  Speech Unit {unit_number}: Audio file '{unit_audio_filename}' không hợp lệ sau khi tạo. Ước tính duration.")
+                            actual_unit_duration = self._estimate_duration(unit_text)
+                    except mutagen.MutagenError as me:
+                        logger.warning(f"  Speech Unit {unit_number}: Lỗi Mutagen khi đọc duration file '{unit_audio_filename}': {me}. Ước tính duration.")
+                        actual_unit_duration = self._estimate_duration(unit_text)
                     except Exception as e:
-                        logger.warning(f"Lỗi khi đọc thời lượng file {scene_audio_path} bằng mutagen: {e}. Sử dụng ước tính.")
-                        actual_scene_duration = self._estimate_duration(content) # Fallback estimation
-                    # --- KẾT THÚC LẤY THỜI LƯỢNG ---
+                        logger.warning(f"  Speech Unit {unit_number}: Lỗi không xác định khi đọc duration file '{unit_audio_filename}': {e}. Ước tính duration.")
+                        actual_unit_duration = self._estimate_duration(unit_text)
 
-                    # Ghi âm thành công, thêm thông tin vào danh sách với thời lượng thực tế
-                    audio_files.append({
-                        "type": "scene",
-                        "number": scene_number,
-                        "path": scene_audio_path,
-                        "duration": actual_scene_duration, # <-- SỬ DỤNG THỜI LƯỢNG THỰC TẾ
-                        "content": content
+                    # Thêm thông tin audio của unit vào danh sách kết quả
+                    audio_files_info.append({
+                        "type": "speech_unit", # Đánh dấu loại
+                        "unit_number": unit_number,
+                        "path": unit_audio_path, # Lưu đường dẫn đầy đủ để dùng ngay
+                        "duration": actual_unit_duration, # Thời lượng thực tế (hoặc ước tính)
+                        "content": unit_text, # Text gốc của unit
+                        "scene_numbers": scene_numbers_in_unit # Danh sách các scene (shots) thuộc unit này
                     })
 
-                    # Bỏ log cũ nếu không cần thiết nữa
-                    # logger.info(f"Đã tạo file âm thanh cho phân cảnh {scene_number}")
                 except Exception as e:
-                    logger.error(f"Lỗi khi tạo file âm thanh cho phân cảnh {scene.get('number', 'unknown')}: {str(e)}")
+                    logger.error(f"Lỗi khi tạo audio cho Speech Unit {unit_number}: {str(e)}", exc_info=True)
+                    # Có thể thêm xử lý lỗi khác ở đây nếu cần
 
-        # Lưu thông tin các file âm thanh (không cần sửa hàm này)
-        self._save_audio_info(audio_files, script['title'], project_dir)
+            # --- Kết thúc vòng lặp qua speech units ---
 
-        logger.info(f"Đã tạo {len(audio_files)} file âm thanh cho kịch bản (với thời lượng thực tế)")
+            # --- Lưu thông tin audio vào file JSON (sử dụng hàm đã sửa đổi) ---
+            if audio_files_info:
+                self._save_audio_info(audio_files_info, script['title'], project_audio_dir, project_id)
+                logger.info(f"Hoàn thành tạo {len(audio_files_info)} file âm thanh (speech units) cho project {project_id}.")
+            else:
+                logger.error(f"Không tạo được file audio nào cho project {project_id}.")
 
-        return audio_files
+
+            # Trả về danh sách thông tin các file audio đã tạo
+            return audio_files_info
     
     def _generate_audio(self, text, output_path):
         """Tạo file âm thanh từ văn bản sử dụng OpenAI TTS API"""
@@ -214,50 +200,53 @@ class VoiceGenerator:
             logger.error(f"Lỗi khi tạo âm thanh với OpenAI TTS: {str(e)}")
             raise
     
-    def _extract_full_script_content(self, script):
-        """Trích xuất nội dung đầy đủ từ kịch bản"""
-        if 'full_script' in script and script['full_script']:
-            # Xóa các tag #SCENE X# nếu có
-            content = script['full_script']
-            import re
-            content = re.sub(r'#SCENE \d+#', '', content)
-            return content.strip()
-        
-        # Nếu không có full_script, ghép nội dung từ các phân cảnh
-        if 'scenes' in script and script['scenes']:
-            scene_contents = [scene['content'] for scene in sorted(script['scenes'], key=lambda x: x['number'])]
-            return ' '.join(scene_contents)
-        
-        # Nếu không có cả hai, trả về tiêu đề
-        return script.get('title', '')
-    
     def _estimate_duration(self, text):
         """Ước tính thời lượng của đoạn âm thanh dựa trên số từ (DÙNG LÀM FALLBACK)"""
         # Tiếng Anh: trung bình 3 từ/giây khi đọc
         words = text.split()
         return len(words) / 3.0 if len(words) > 0 else 0.0
     
-    def _save_audio_info(self, audio_files, title, project_dir):
-        """Lưu thông tin âm thanh vào file JSON"""
-        # Tạo bản sao để tránh thay đổi dữ liệu gốc
-        audio_info = []
-        for audio in audio_files:
-            # Chỉ lưu đường dẫn tương đối để dễ di chuyển
-            audio_copy = audio.copy()
-            audio_copy['rel_path'] = os.path.basename(audio['path'])
-            audio_info.append(audio_copy)
-        
-        output_file = os.path.join(project_dir, "audio_info.json")
-        
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump({
-                'title': title,
-                'creation_time': time.strftime("%Y-%m-%d %H:%M:%S"),
-                'project_dir': os.path.basename(project_dir),
-                'audio_files': audio_info
-            }, f, ensure_ascii=False, indent=4)
-        
-        logger.info(f"Đã lưu thông tin âm thanh tại: {output_file}")
+    def _save_audio_info(self, audio_files_info, title, project_audio_dir, project_id):
+            """Lưu thông tin âm thanh (speech units) vào file JSON."""
+            if not audio_files_info:
+                logger.warning(f"Project {project_id}: Không có thông tin audio để lưu.")
+                return
+
+            audio_metadata = []
+            for audio_unit_info in audio_files_info:
+                # Chỉ lưu các thông tin cần thiết cho metadata
+                metadata_entry = {
+                    "type": audio_unit_info.get("type", "speech_unit"),
+                    "unit_number": audio_unit_info.get("unit_number"),
+                    # Lưu tên file thay vì đường dẫn đầy đủ trong metadata
+                    "filename": os.path.basename(audio_unit_info.get("path", "")),
+                    "duration": audio_unit_info.get("duration"),
+                    "scene_numbers": audio_unit_info.get("scene_numbers"),
+                    # "content": audio_unit_info.get("content") # Có thể bỏ content nếu không cần trong file info
+                }
+                # Bỏ qua các giá trị None nếu có
+                metadata_entry = {k: v for k, v in metadata_entry.items() if v is not None}
+                audio_metadata.append(metadata_entry)
+
+            # Tên file metadata
+            output_file = os.path.join(project_audio_dir, f"audio_info_{project_id}.json")
+
+            # Dữ liệu tổng hợp để lưu
+            output_data = {
+                'project_id': project_id,
+                'project_title': title,
+                'creation_timestamp': time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                'project_audio_folder': os.path.basename(project_audio_dir),
+                'total_speech_units_generated': len(audio_metadata),
+                'speech_unit_audio_files': audio_metadata # Đổi tên key cho rõ ràng
+            }
+
+            try:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(output_data, f, ensure_ascii=False, indent=2)
+                logger.info(f"Project {project_id}: Đã lưu thông tin audio tại: {output_file}")
+            except Exception as e:
+                logger.error(f"Project {project_id}: Lỗi khi lưu audio_info.json: {e}", exc_info=True)
     
     def set_voice(self, voice):
         """Thiết lập giọng đọc"""
