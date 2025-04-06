@@ -106,6 +106,25 @@ VIDEO_SETTINGS = {
     "subtitle_style": "Alignment=2,OutlineColour=&H80000000,BorderStyle=3,Outline=1" # Style cho FFmpeg
 }
 
+# DALL-E Settings
+DALLE_SETTINGS = {
+    "model": "dall-e-3",
+    "default_size": "1792x1024", # Landscape
+    "default_quality": "standard",
+    "default_style": "vivid"
+}
+
+# Cấu hình cho việc tạo ảnh bằng Google Imagen (qua Gemini API)
+IMAGEN_SETTINGS = {
+    "model": "imagen-3.0-generate-002", # Model Imagen muốn sử dụng
+    "number_of_images": 1,              # Số lượng ảnh tạo mỗi lần gọi (thường chỉ cần 1)
+    # Thêm các cấu hình khác của Imagen nếu cần (ví dụ: aspect_ratio, quality, style...)
+    # Tham khảo: https://ai.google.dev/api/python/google/genai/types/GenerateImagesConfig
+    "aspect_ratio": "16:9",          # Tỉ lệ khung hình mong muốn (ví dụ)
+    "quality": "standard",            # Có thể thêm các tùy chọn khác
+    "person_generation": "ALLOW_ADULT" # Hoặc "DONT_ALLOW"
+}
+
 # Cấu hình YouTube
 YOUTUBE_SETTINGS = {
     "category_id": "25",  # News & Politics

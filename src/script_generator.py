@@ -40,13 +40,13 @@ class ScriptGenerator:
     def _call_openai_api(self, prompt, max_retries=3, request_timeout=90): # <- THÊM request_timeout vào đây
         """Gọi OpenAI API, yêu cầu JSON, có retry đơn giản."""
         payload = {
-            "model": "gpt-4o-mini", # Hoặc model khác
+            "model": "gpt-4o", # Hoặc model khác
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant designed to output JSON. Respond ONLY with the valid JSON object requested, without any introductory text, explanations, or markdown formatting."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7,
-            "max_tokens": 20000,
+            "max_tokens": 200000,
             "response_format": {"type": "json_object"}
         }
         url = f"{self.base_url}/chat/completions"
@@ -93,54 +93,71 @@ class ScriptGenerator:
 
     # --- Bước 1 - Tạo Script với Câu Hoàn Chỉnh ---
     def _generate_initial_script_sentences(self, style_config, article=None, keyword=None, transcript_text=None, language="en", context_hint=None):
-        """Tạo script ban đầu với các scene là các câu hoàn chỉnh, hỗ trợ nhiều loại input."""
+        """Tạo script ban đầu với các scene là các câu hoàn chỉnh, bám sát context."""
         logger.info("Step 1: Generating initial script with full sentences...")
-        
-        # --- Xây dựng Prompt cho Bước 1 ---
+
         prompt_step1 = "Create a script based on the provided context.\n"
         prompt_step1 += f"Style Requirements: Tone should be {style_config['tone']}. Follow these instructions:\n"
         for instr in style_config['instructions']:
             prompt_step1 += f"- {instr}\n"
 
-        # Determine input type and build context
         input_type = "Unknown"
         if article:
             input_type = "Article"
             prompt_step1 += f"\nCONTEXT TYPE: News Article\n"
             prompt_step1 += f"ARTICLE TITLE: {article.get('title', '')}\n"
             prompt_step1 += f"ARTICLE CONTENT:\n{safe_truncate(article.get('content', ''))}\n"
-            prompt_step1 += "\nInstructions: Generate a script summarizing the article."
+            # --- PROMPT ĐÃ ĐƯỢC TỐI ƯU CHO ARTICLE ---
+            prompt_step1 += """
+    Instructions: 
+    Rewrite the provided news article into an engaging, emotionally compelling, and potentially viral video narration script (voice-over/subtitle). 
+
+    CRITICAL REQUIREMENTS:
+    1. Write ONLY narrative sentences suitable for voice-over or subtitles. Do NOT include any visual direction (such as "scene opens with," "camera zooms," "image shows," "hình ảnh," "cảnh quay," etc.).
+
+    2. Maintain a clear storytelling structure:
+    - Hook (opening): Start immediately with an intriguing, surprising, or shocking fact or question.
+    - Story (middle): Narrate key events, details, or developments in an engaging way.
+    - Conclusion (ending): End with a strong, reflective statement or question.
+
+    3. Use vivid, emotional, conversational language that naturally engages the audience.
+
+    4. Stay truthful and accurate: ONLY use facts and details provided by the article. Do NOT invent new information.
+    """
+
         elif keyword:
             input_type = "Keyword"
             lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
             prompt_step1 += f"\nCONTEXT TYPE: Keyword/Topic\n"
             prompt_step1 += f"TOPIC: \"{keyword}\"\n"
-            prompt_step1 += f"\nInstructions: Generate a script {lang_instruction} about the topic."
-        elif transcript_text: # <--- Added transcript handling
+            prompt_step1 += f"\nInstructions: Generate a relevant and engaging script {lang_instruction} *about* the topic '{keyword}'. Apply the requested style and structure the content into logical, complete sentences for the 'initial_scenes' array."
+
+        elif transcript_text:
             input_type = "YouTube Transcript"
             lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
             prompt_step1 += f"\nCONTEXT TYPE: YouTube Video Transcript {f'({context_hint})' if context_hint else ''}\n"
-            prompt_step1 += f"TRANSCRIPT CONTENT:\n{safe_truncate(transcript_text, 12000)}\n" # Allow longer transcript context
-            prompt_step1 += f"\nInstructions: Create a compelling, concise script {lang_instruction} summarizing and restructuring the key points from the transcript. DO NOT just copy the transcript. Adapt it to the requested style and break it into logical sentences."
+            prompt_step1 += f"TRANSCRIPT CONTENT:\n{safe_truncate(transcript_text, 12000)}\n"
+            prompt_step1 += f"\nInstructions: Generate a script {lang_instruction} that accurately summarizes and logically restructures the content *found within the provided transcript*. **Crucially, use ONLY information present in the transcript.** Rephrase sentences naturally where needed, apply the requested style ({style_config['tone']}), and organize the output into complete, speakable sentences for the 'initial_scenes' array. Do *not* add external information or significantly deviate from the transcript's topics."
+
         else:
-            logger.error("Step 1 Failed: No valid input (article, keyword, or transcript) provided.")
+            logger.error("Step 1 Failed: No valid input provided.")
             return None
 
         logger.info(f"Generating initial script based on: {input_type}")
 
-        prompt_step1 += "\n\nOutput Requirements:\n"
-        prompt_step1 += "- Return ONLY a valid JSON object.\n"
-        prompt_step1 += f"- The JSON object must have a 'title' (string, suitable for the {input_type} and {style_config['tone']} style) and 'initial_scenes' (list of strings).\n"
-        prompt_step1 += "- Each string in 'initial_scenes' should be one or more complete, natural-sounding sentences covering a part of the topic/article/transcript.\n"
-        prompt_step1 += "- Example Format:\n"
-        prompt_step1 += '{\n'
-        prompt_step1 += f'  "title": "{style_config["title_hint"]}",\n'
-        prompt_step1 += '  "initial_scenes": [\n'
-        prompt_step1 += '    "First complete sentence or two.",\n'
-        prompt_step1 += '    "Next logical sentence or paragraph fragment.",\n'
-        prompt_step1 += '    ...\n'
-        prompt_step1 += '  ]\n'
-        prompt_step1 += '}'
+        prompt_step1 += """\n\nOutput Requirements:
+    - Return ONLY a valid JSON object.
+    - The JSON object must have a 'title' (string) and 'initial_scenes' (list of strings).
+    - Each string in 'initial_scenes' should be one or more complete, natural-sounding sentences covering a part of the topic/article/transcript.
+    - Example Format:
+    {
+    "title": "{style_config['title_hint']}",
+    "initial_scenes": [
+        "First complete sentence or two.",
+        "Next logical sentence or paragraph fragment.",
+        ...
+    ]
+    }"""
 
         # --- Gọi API cho Bước 1 ---
         response_json_str = self._call_openai_api(prompt_step1, request_timeout=120) # Increase timeout for potentially longer processing
@@ -177,46 +194,60 @@ class ScriptGenerator:
         
         # --- Xây dựng Prompt cho Bước 2 ---
         prompt_step2 = f"""
-        Break down the following text into short visual "shots" for an engaging video.
+        Break down the provided text into short visual "shots" for an engaging video narration.
 
-        🧠 GOAL:
-        - Create a dynamic and visual video experience, but do not over-fragment the content.
-        - Only split a scene into multiple shots **if it contains multiple visual elements, ideas, or clauses**.
-        - If the text is already short (under 12 words), expresses one clear idea, and is easily representable by one image or video → **DO NOT split it**.
+        IMPORTANT – Follow these STRICT rules to avoid too many quick scene changes:
 
-        🔍 WHEN TO SPLIT:
-        - The sentence contains multiple distinct objects, actions, or concepts.
-        - There are natural pauses (commas, conjunctions).
-        - Multiple visual elements are mentioned that would be hard to capture in a single illustration.
+        1. Length-based splitting rules:
+        - If the text has fewer than 15 words → DO NOT SPLIT. Keep as one shot.
+        - If the text has 15-30 words → SPLIT INTO MAXIMUM 2 SHOTS.
+        - If the text has over 30 words → SPLIT INTO MAXIMUM 3 SHOTS.
 
-        ⛔ WHEN NOT TO SPLIT:
-        - The sentence is already short (under ~12 words).
-        - It conveys a single, clear, visualizable idea.
-        - It has no major punctuation or clause boundaries.
+        2. Intelligent distribution:
+        - If the previous sentence (scene) was already split into multiple shots (≥2 shots), strongly consider NOT splitting this current sentence unless absolutely necessary (extremely long or complex).
 
-        💡 OUTPUT FORMAT:
-        Return a JSON object like:
+        3. Shot length guidelines:
+        - Each shot ideally contains between 7 to 15 words.
+        - Shots shorter than 5 words should only appear if extremely necessary for dramatic emphasis.
+
+        4. Splitting logic:
+        - Split at natural grammatical pauses or logical concept boundaries (commas, conjunctions, punctuation).
+        - Do NOT break tightly connected phrases or compound nouns.
+
+        OUTPUT FORMAT:
+        Return ONLY a JSON object:
         {{
+        "shots": ["Shot 1 text", "Shot 2 text", ...]
+        }}
+
+        EXAMPLES:
+
+        Example 1 (short text - no split):
+        Input: "The sun quietly sets over the mountain peaks."
+        Output: {{
+        "shots": ["The sun quietly sets over the mountain peaks."]
+        }}
+
+        Example 2 (medium-length text - 2 shots max):
+        Input: "Local farmers rely on barley, wheat, dates, and apples as their main crops."
+        Output: {{
         "shots": [
-            "Shot 1 text",
-            "Shot 2 text",
-            ...
+            "Local farmers rely on barley and wheat,",
+            "dates and apples as their main crops."
         ]
         }}
 
-        📘 EXAMPLES:
+        Example 3 (long text - 3 shots max):
+        Input: "The ancient city was discovered in 1902, revealing countless artifacts, temples, and an impressive irrigation system that amazed archaeologists."
+        Output: {{
+        "shots": [
+            "The ancient city was discovered in 1902,",
+            "revealing countless artifacts and temples,",
+            "and an impressive irrigation system that amazed archaeologists."
+        ]
+        }}
 
-        Example 1:
-        Input: "The sun rises over the quiet hills."
-        Output:
-        {{ "shots": ["The sun rises over the quiet hills."] }}
-
-        Example 2:
-        Input: "They grow barley, wheat, dates, lotus, and apples."
-        Output:
-        {{ "shots": ["They grow barley and wheat,", "dates and lotus,", "and apples."] }}
-
-        Now break down this scene:
+        TEXT TO BREAK DOWN:
         "{sentence_text}"
         """
 
@@ -557,7 +588,7 @@ class ScriptGenerator:
     def _call_openai_api(self, prompt, max_retries=3, request_timeout=90):
         """Gọi OpenAI API, yêu cầu JSON, có retry đơn giản."""
         payload = {
-            "model": "gpt-4o-mini", # Hoặc model khác
+            "model": "gpt-4o", # Hoặc model khác
             "messages": [
                 # Sửa system prompt để phù hợp hơn với việc chỉ trả JSON
                 {"role": "system", "content": "You are a helpful assistant designed to output JSON. Respond ONLY with the valid JSON object requested, without any introductory text, explanations, or markdown formatting."},
