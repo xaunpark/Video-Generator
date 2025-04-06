@@ -233,6 +233,7 @@ def main():
     print("4. Tạo video từ phụ đề Video Youtube.")
 
     choice = ""
+    visual_source_choice = "search" # Default to search for images/videos to create video
 
     while choice not in ["1", "2", "3", "4"]:
         choice = input("Nhập lựa chọn của bạn (1, 2, 3 hoặc 4): ").strip()
@@ -242,6 +243,7 @@ def main():
 
     # Khởi tạo các biến chung
     selected_article = None
+    script_path = None
     script = None
     articles = []
     categorized = {}
@@ -448,6 +450,26 @@ def main():
         print(f"Số lượng speech units: {len(script.get('speech_units', []))}")
         print("="*50 + "\n")
 
+    # --- HỎI LỰA CHỌN NGUỒN VISUAL ---
+    print("\nChọn phương thức tạo hình ảnh/video minh họa:")
+    print("1. Tìm kiếm trên mạng (Serper, Pexels, Pixabay) - Mặc định")
+    print("2. Tạo ảnh bằng AI (Google Imagen 3)") # Specify model if known
+
+    vis_choice = ""
+    while vis_choice not in ["1", "2"]:
+        vis_choice = input("Nhập lựa chọn nguồn visual (1 hoặc 2, mặc định là 1): ").strip()
+        if not vis_choice:
+            vis_choice = "1"
+
+    if vis_choice == "2":
+        visual_source_choice = "ai"
+        logger.info("Đã chọn tạo ảnh bằng AI (Google Imagen 3).")
+        print("Lưu ý: Việc tạo ảnh AI có thể mất nhiều thời gian và chi phí hơn.")
+    else:
+        visual_source_choice = "search" # default
+        logger.info("Đã chọn tìm kiếm hình ảnh/video trên mạng.")
+    # --- KẾT THÚC HỎI NGUỒN VISUAL ---
+
     ### --- KHỐI TẠO VOICE ---
     # Generate voice for script
     logger.info("Generating voice for the script...")
@@ -477,7 +499,11 @@ def main():
 
     # Generate images (Truyền audio_files vào generate_images_for_script)
     # audio_files_info argument in ImageGenerator is mainly used for intro/outro timing now
-    images = image_generator.generate_images_for_script(script, audio_files_info=audio_files)
+    images = image_generator.generate_images_for_script(
+        script,
+        audio_files_info=audio_files,
+        visual_source=visual_source_choice
+    )
 
     logger.info(f"Generated {len(images)} images/videos for script")
     

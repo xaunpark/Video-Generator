@@ -18,6 +18,7 @@ YOUTUBE_REFRESH_TOKEN = os.getenv('YOUTUBE_REFRESH_TOKEN')
 SERPER_API_KEY = os.getenv('SERPER_API_KEY')
 PEXELS_API_KEY = os.getenv('PEXELS_API_KEY')
 PIXABAY_API_KEY = os.getenv('PIXABAY_API_KEY')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # --- KIỂM TRA CÁC KEY QUAN TRỌNG VÀ BÁO LỖI NẾU THIẾU ---
 missing_keys = []

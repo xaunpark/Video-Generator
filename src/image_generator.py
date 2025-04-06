@@ -17,9 +17,20 @@ from src.logger_config import setup_logger
 logger = setup_logger(__name__)
 
 # Import API keys and settings
-from config.credentials import SERPER_API_KEY, OPENAI_API_KEY
-from config.settings import TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS
+from config.credentials import SERPER_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
+from config.settings import TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS, DALLE_SETTINGS, IMAGEN_SETTINGS
 from src.video_clip_finder import VideoClipFinder
+from src import project_config as cfg
+
+# --- IMPORTS CHO GEMINI ---
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    from google.api_core import exceptions as google_exceptions # Để bắt lỗi API Google
+    GOOGLE_AI_AVAILABLE = True
+except ImportError:
+    logger.warning("google-generativeai library not found. AI image generation with Imagen will be disabled. Install with: pip install google-generativeai")
+    GOOGLE_AI_AVAILABLE = False
 
 class ImageGenerator:
     def __init__(self):
@@ -41,6 +52,30 @@ class ImageGenerator:
             "Content-Type": "application/json"
         }
         # --- End OpenAI Configuration ---
+
+        # --- KHỞI TẠO GEMINI CLIENT VÀ ĐỌC CẤU HÌNH IMAGEN ---
+        self.gemini_client = None
+        if GOOGLE_AI_AVAILABLE and GEMINI_API_KEY:
+            try:
+                # Sử dụng key trực tiếp khi khởi tạo client
+                self.gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+                logger.info("Google AI Client (for Imagen) initialized successfully.")
+                # Đọc cấu hình Imagen
+                self.imagen_model = IMAGEN_SETTINGS.get("model", "imagen-3.0-generate-002")
+                self.imagen_num_images = IMAGEN_SETTINGS.get("number_of_images", 1)
+                self.imagen_aspect_ratio = IMAGEN_SETTINGS.get("aspect_ratio", "16:9") # Đọc tỉ lệ
+                # self.imagen_quality = IMAGEN_SETTINGS.get("quality", None) # Đọc quality nếu có
+                # Có thể thêm các cấu hình khác ở đây
+                logger.info(f"Imagen settings loaded: Model={self.imagen_model}, Num={self.imagen_num_images}, AspectRatio={self.imagen_aspect_ratio}")
+
+            except Exception as e:
+                logger.error(f"Failed to initialize Google AI Client: {e}", exc_info=True)
+                self.gemini_client = None # Đặt lại là None nếu lỗi
+        elif not GOOGLE_AI_AVAILABLE:
+             logger.warning("Google AI library not installed, Imagen generation disabled.")
+        else: # GOOGLE_AI_AVAILABLE is True but no API key
+             logger.warning("GEMINI_API_KEY not found in environment variables. Imagen generation disabled.")
+        # --- KẾT THÚC KHỞI TẠO GEMINI ---
 
         self.temp_dir = TEMP_DIR
         self.assets_dir = ASSETS_DIR
@@ -77,7 +112,7 @@ class ImageGenerator:
         self.video_cache_dir = os.path.join(self.temp_dir, "video_cache")
         os.makedirs(self.video_cache_dir, exist_ok=True)
 
-    def generate_images_for_script(self, script, audio_files_info=None): # audio_files_info không còn dùng nhiều
+    def generate_images_for_script(self, script, audio_files_info=None, visual_source="search"):
             """Tạo ảnh hoặc video cho tất cả các scenes (shots) trong script.
             Không còn dựa vào audio_files_info để xác định target duration cho từng shot ở bước này.
 
@@ -91,18 +126,6 @@ class ImageGenerator:
                     Trường 'duration' trong kết quả chỉ là placeholder hoặc duration gốc,
                     sẽ bị ghi đè bởi video_editor.
             """
-
-            # --- Xóa bỏ phần xử lý audio_lookup ---
-            # logger.info("Processing audio info (if provided)...")
-            # audio_lookup = {}
-            # if audio_files_info:
-            #     for audio_item in audio_files_info:
-            #         # Chỉ lấy audio của scene (cấu trúc cũ, giờ không còn ý nghĩa)
-            #         if audio_item.get("type") == "scene" and "number" in audio_item and "duration" in audio_item:
-            #             audio_lookup[audio_item["number"]] = audio_item
-            #     logger.info(f"Audio info processed.")
-            # else:
-            #      logger.warning("No audio_files_info provided to ImageGenerator.")
 
             # Lấy các cài đặt cần thiết
             default_clip_target_duration = VIDEO_SETTINGS.get("video_clip_duration", 7) # Thời lượng mục tiêu cho video finder
@@ -164,7 +187,6 @@ class ImageGenerator:
             for i, scene in enumerate(script.get('scenes', [])):
                 scene_number = scene.get('number', 'unknown')
                 scene_content = scene.get('content', '').strip()
-                prefer_video_flag = scene.get('prefer_video', False)
                 search_query_used = "N/A"
                 media_path_for_scene = None
                 media_type_for_scene = "unknown"
@@ -196,82 +218,155 @@ class ImageGenerator:
                 search_query = self._create_search_query_with_openai(scene_content, script['title'])
                 search_query_used = search_query
 
+                # --- Tên file cơ sở ---
                 scene_base_filename = f"scene_{scene_number}"
                 temp_video_output_path = os.path.join(project_media_dir, f"{scene_base_filename}.mp4")
                 temp_image_output_path = os.path.join(project_media_dir, f"{scene_base_filename}.jpg")
                 text_image_output_path = os.path.join(project_media_dir, f"{scene_base_filename}_text.png")
+                temp_image_ai_output_path = os.path.join(project_media_dir, f"{scene_base_filename}_ai.jpg")
 
-                use_image_fallback = False
+                # ==============================================================
+                # === PHÂN NHÁNH DỰA TRÊN visual_source ===
+                # ==============================================================
+
+                # Option 1: Tìm kiếm ảnh/video từ Serper.dev API để tạo medio
+
+                if visual_source == "search":
+                    logger.debug(f"Scene {scene_number}: Using SEARCH method.")
+                    use_image_fallback = False
+                    prefer_video_flag = scene.get('prefer_video', False)
 
                 # --- Gọi Video Clip Finder với duration mặc định ---
-                if prefer_video_flag and VIDEO_SETTINGS.get("enable_video_clips", False):
-                    logger.info(f"Scene {scene_number}: Flag 'prefer_video' is True. Attempting find_video_clip (Target duration for search: {target_duration_for_finder:.1f}s)")
-                    try:
-                        if self.video_finder is None:
-                            self.video_finder = VideoClipFinder()
-                            logger.info("Initialized VideoClipFinder.")
+                    if prefer_video_flag and VIDEO_SETTINGS.get("enable_video_clips", False):
+                        logger.info(f"Scene {scene_number}: Flag 'prefer_video' is True. Attempting find_video_clip (Target duration for search: {target_duration_for_finder:.1f}s)")
+                        try:
+                            if self.video_finder is None:
+                                self.video_finder = VideoClipFinder()
+                                logger.info("Initialized VideoClipFinder.")
 
-                        if self.video_finder:
-                            # Gọi find_video_clip với default duration
-                            processed_clip_path = self.video_finder.find_video_clip(
-                                query=search_query,
-                                scene_content=scene_content,
-                                output_path=temp_video_output_path,
-                                target_duration=target_duration_for_finder # <--- TRUYỀN DURATION MẶC ĐỊNH/ƯỚC TÍNH
-                            )
+                            if self.video_finder:
+                                # Gọi find_video_clip với default duration
+                                processed_clip_path = self.video_finder.find_video_clip(
+                                    query=search_query,
+                                    scene_content=scene_content,
+                                    output_path=temp_video_output_path,
+                                    target_duration=target_duration_for_finder # <--- TRUYỀN DURATION MẶC ĐỊNH/ƯỚC TÍNH
+                                )
 
-                            if processed_clip_path:
-                                logger.info(f"Scene {scene_number}: VideoClipFinder returned processed clip: {os.path.basename(processed_clip_path)}")
-                                media_path_for_scene = processed_clip_path
-                                media_type_for_scene = "video"
+                                if processed_clip_path:
+                                    logger.info(f"Scene {scene_number}: VideoClipFinder returned processed clip: {os.path.basename(processed_clip_path)}")
+                                    media_path_for_scene = processed_clip_path
+                                    media_type_for_scene = "video"
+                                else:
+                                    logger.warning(f"Scene {scene_number}: find_video_clip did not return a suitable video. Falling back to image search.")
+                                    use_image_fallback = True
                             else:
-                                logger.warning(f"Scene {scene_number}: find_video_clip did not return a suitable video. Falling back to image search.")
+                                logger.error("Scene {scene_number}: Video finder not initialized. Falling back.")
                                 use_image_fallback = True
-                        else:
-                            logger.error("Scene {scene_number}: Video finder not initialized. Falling back.")
+
+                        except ImportError as ie:
+                            logger.error(f"Cannot import VideoClipFinder: {ie}. Disabling video clips.")
+                            VIDEO_SETTINGS["enable_video_clips"] = False
                             use_image_fallback = True
-
-                    except ImportError as ie:
-                        logger.error(f"Cannot import VideoClipFinder: {ie}. Disabling video clips.")
-                        VIDEO_SETTINGS["enable_video_clips"] = False
+                        except Exception as video_err:
+                            logger.warning(f"Scene {scene_number}: Error during find_video_clip: {video_err}. Falling back.", exc_info=True)
+                            use_image_fallback = True
+                    else:
+                        logger.info(f"Scene {scene_number}: Not attempting video search (prefer_video={prefer_video_flag}, enable_clips={VIDEO_SETTINGS.get('enable_video_clips', False)}).")
                         use_image_fallback = True
-                    except Exception as video_err:
-                        logger.warning(f"Scene {scene_number}: Error during find_video_clip: {video_err}. Falling back.", exc_info=True)
-                        use_image_fallback = True
-                else:
-                    logger.info(f"Scene {scene_number}: Not attempting video search (prefer_video={prefer_video_flag}, enable_clips={VIDEO_SETTINGS.get('enable_video_clips', False)}).")
-                    use_image_fallback = True
 
-                # --- Xử lý Ảnh Fallback (giữ nguyên) ---
-                if use_image_fallback:
-                    logger.info(f"Scene {scene_number}: Searching for static image...")
-                    try:
-                        image_path = self._get_cached_or_download_image(search_query, temp_image_output_path)
-                        if image_path:
-                            logger.info(f"Scene {scene_number}: Found online image: {os.path.basename(image_path)}")
-                            media_path_for_scene = image_path
-                            media_type_for_scene = "image"
-                        else:
-                            # ... (logic fallback ảnh local và ảnh text giữ nguyên) ...
-                            logger.debug(f"Scene {scene_number}: Online image search failed. Trying local fallback...")
-                            local_fallback_path = self._use_local_fallback_image(search_query, temp_image_output_path)
-                            if local_fallback_path:
-                                logger.info(f"Scene {scene_number}: Used local fallback image: {os.path.basename(local_fallback_path)}")
-                                media_path_for_scene = local_fallback_path
+                    # --- Xử lý Ảnh Fallback ---
+                    if use_image_fallback:
+                        logger.info(f"Scene {scene_number}: Searching for static image...")
+                        try:
+                            image_path = self._get_cached_or_download_image(search_query, temp_image_output_path)
+                            if image_path:
+                                logger.info(f"Scene {scene_number}: Found online image: {os.path.basename(image_path)}")
+                                media_path_for_scene = image_path
                                 media_type_for_scene = "image"
                             else:
-                                logger.warning(f"Scene {scene_number}: All image searches failed. Creating text-only fallback image.")
-                                text_fallback_path = self._create_text_only_image(scene_content, text_image_output_path)
-                                if text_fallback_path:
-                                    logger.info(f"Scene {scene_number}: Created text-only fallback image: {os.path.basename(text_fallback_path)}")
-                                    media_path_for_scene = text_fallback_path
+                                # ... (logic fallback ảnh local và ảnh text giữ nguyên) ...
+                                logger.debug(f"Scene {scene_number}: Online image search failed. Trying local fallback...")
+                                local_fallback_path = self._use_local_fallback_image(search_query, temp_image_output_path)
+                                if local_fallback_path:
+                                    logger.info(f"Scene {scene_number}: Used local fallback image: {os.path.basename(local_fallback_path)}")
+                                    media_path_for_scene = local_fallback_path
                                     media_type_for_scene = "image"
                                 else:
-                                    logger.error(f"Scene {scene_number}: CRITICAL - Failed even to create text-only fallback.")
+                                    logger.warning(f"Scene {scene_number}: All image searches failed. Creating text-only fallback image.")
+                                    text_fallback_path = self._create_text_only_image(scene_content, text_image_output_path)
+                                    if text_fallback_path:
+                                        logger.info(f"Scene {scene_number}: Created text-only fallback image: {os.path.basename(text_fallback_path)}")
+                                        media_path_for_scene = text_fallback_path
+                                        media_type_for_scene = "image"
+                                    else:
+                                        logger.error(f"Scene {scene_number}: CRITICAL - Failed even to create text-only fallback.")
 
-                    except Exception as img_err:
-                        logger.error(f"Scene {scene_number}: Error during image fallback process: {img_err}", exc_info=True)
+                        except Exception as img_err:
+                            logger.error(f"Scene {scene_number}: Error during image fallback process: {img_err}", exc_info=True)
 
+                # Option 2: Sử dụng AI Generation (Imagen 3) để tạo ảnh mới
+                elif visual_source == "ai":
+                    logger.debug(f"Scene {scene_number}: Using AI Generation (Imagen) method.")
+                    media_type_for_scene = "image"
+                    imagen_prompt = None # Đổi tên biến
+                    try:
+                        # 1. Tạo Imagen prompt
+                        # --- Đổi tên hàm gọi ---
+                        imagen_prompt = self._create_imagen_prompt(scene_content, script['title'], script.get('style', 'informative'))
+                        # ----------------------
+                        search_query_used = f"Imagen Prompt: {imagen_prompt[:100]}..." if imagen_prompt else "N/A"
+
+                        if imagen_prompt:
+                            # 2. Gọi API Imagen để tạo ảnh (trả về bytes)
+                            # --- Đổi tên hàm gọi ---
+                            generated_image_bytes = self._generate_image_with_imagen(prompt=imagen_prompt)
+                            # ----------------------
+
+                            if generated_image_bytes:
+                                # 3. Xử lý image bytes (không cần download)
+                                logger.info(f"Scene {scene_number}: Imagen generated image bytes obtained. Processing...")
+                                # --- XỬ LÝ BYTES ---
+                                try:
+                                    img = Image.open(BytesIO(generated_image_bytes))
+                                    if img.mode != 'RGB': img = img.convert('RGB')
+
+                                    # Resize/crop ảnh về kích thước video
+                                    processed_image = self._resize_image(img) # Dùng lại hàm resize cũ
+
+                                    # Lưu ảnh đã xử lý
+                                    processed_image.save(temp_image_ai_output_path, "JPEG", quality=90)
+                                    logger.info(f"Scene {scene_number}: Successfully processed and saved Imagen image.")
+                                    media_path_for_scene = temp_image_ai_output_path
+                                except Exception as proc_err:
+                                    logger.error(f"Scene {scene_number}: Failed to process Imagen image bytes: {proc_err}", exc_info=True)
+                                # --- KẾT THÚC XỬ LÝ BYTES ---
+                            else:
+                                logger.warning(f"Scene {scene_number}: Imagen API did not return valid image bytes.")
+                        else:
+                            logger.warning(f"Scene {scene_number}: Could not generate an Imagen prompt.")
+
+                    except Exception as ai_err:
+                        logger.error(f"Scene {scene_number}: Error during Imagen image generation pipeline: {ai_err}", exc_info=False)
+
+                    # --- Fallback cho AI Generation (nếu thất bại) ---
+                    if not media_path_for_scene:
+                        logger.warning(f"Scene {scene_number}: AI image generation failed. Creating text-only fallback.")
+                        text_fallback_path = self._create_text_only_image(scene_content, text_image_output_path)
+                        if text_fallback_path:
+                            logger.info(f"Scene {scene_number}: Created text-only fallback.")
+                            media_path_for_scene = text_fallback_path
+                            media_type_for_scene = "image"
+                        else:
+                            logger.error(f"Scene {scene_number}: CRITICAL - Failed text-only fallback after AI failure.")
+                    # --- Kết thúc fallback AI ---
+                    # ----------------------------------------------------------
+                    # --- KẾT THÚC LOGIC TẠO ẢNH AI ---
+                    # ----------------------------------------------------------
+
+                else: # Trường hợp visual_source không hợp lệ
+                    logger.error(f"Scene {scene_number}: Invalid visual_source '{visual_source}'. Skipping.")
+                    continue # Bỏ qua scene này
 
                 # --- Thêm media vào danh sách ---
                 if media_path_for_scene and media_type_for_scene != "unknown":
@@ -338,6 +433,127 @@ class ImageGenerator:
             logger.info(f"Hoàn thành tạo media: {len(media_items)} items ({image_count} ảnh, {video_count} video)")
 
             return media_items
+
+    def _create_imagen_prompt(self, scene_content, video_title, script_style):
+        """Uses OpenAI GPT to generate a descriptive Imagen prompt from scene content."""
+        if not self.openai_api_key:
+            logger.warning("OpenAI API key missing. Cannot generate Imagen prompts.")
+            # Simple fallback prompt
+            return f"Illustration for a news segment about: {scene_content[:100]}"
+
+        # Get style description
+        style_desc = cfg.style_configs.get(script_style, {}).get('tone', 'neutral')
+
+        gpt_prompt = f"""
+        You are an expert prompt engineer for text-to-image AI like Google Imagen 3.
+        Your task is to convert the following news video scene content into a detailed and effective prompt.
+
+        Consider these factors:
+        - The overall video title: "{video_title}"
+        - The desired video style/tone: "{style_desc}"
+        - The specific content of this scene: "{scene_content}"
+
+        IMPORTANT SAFETY GUIDELINES:
+        - NEVER generate prompts depicting children, minors, or family scenes with minors
+        - Replace any children in the scene with young adults (18+) or symbolic objects/animals
+        - Avoid depicting vulnerable populations or sensitive scenarios
+        - Avoid depicting realistic human faces in close detail
+
+        Instructions for the Imagen Prompt:
+        1. Be descriptive and specific about visual elements. Mention subjects, actions, setting, mood, and composition.
+        2. Incorporate the video's style/tone (e.g., if 'dramatic', use words like 'intense lighting', 'dynamic angle').
+        3. Aim for a prompt length suitable for Imagen (under 150 words).
+        4. Specify the image type (e.g., photorealistic, digital illustration, graphic art, cinematic shot).
+        5. AVOID mentioning text unless the scene is explicitly about text/code.
+        6. If the original scene involves children, REWRITE it with adults or symbolic representations.
+        7. For concepts involving children's activities, represent them with symbolic objects instead (e.g., "a toy left on a colorful playground" rather than "a child playing").
+
+        Output ONLY the generated Imagen prompt, with no extra explanations or quotation marks.
+        """
+
+        try:
+            url = f"{self.openai_base_url}/chat/completions"
+            payload = {
+                "model": "gpt-4o-mini", # Or gpt-3.5-turbo
+                "messages": [
+                    {"role": "system", "content": "You generate Imagen prompts for news video scenes."},
+                    {"role": "user", "content": gpt_prompt}
+                ],
+                "temperature": 0.6, # More creative for prompts
+                "max_tokens": 150
+            }
+            logger.debug(f"Generating DALL-E prompt for: '{scene_content[:80]}...'")
+            response = requests.post(url, headers=self.openai_headers, json=payload, timeout=25)
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get('choices'):
+                dalle_prompt = data['choices'][0]['message']['content'].strip().replace('"', '')
+                logger.info(f"Generated Imagen prompt: '{dalle_prompt[:100]}...'")
+                return dalle_prompt
+            else:
+                logger.error("OpenAI response for Imagen prompt generation is invalid.")
+                return f"Simple illustration: {scene_content[:100]}" # Fallback
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"OpenAI API error generating Imagen prompt: {e}")
+            return f"News photo: {scene_content[:100]}" # Fallback
+        except Exception as e:
+            logger.error(f"Unexpected error generating Imagen prompt: {e}", exc_info=True)
+            return f"Illustration: {scene_content[:100]}" # Fallback
+
+    def _generate_image_with_imagen(self, prompt):
+        """Generates an image using the Google Imagen API via Google AI Client."""
+        if not self.gemini_client:
+            logger.error("Google AI Client not initialized. Cannot generate Imagen images.")
+            return None
+
+        logger.info(f"Requesting Imagen image (Model: {self.imagen_model}) with prompt: {prompt[:80]}...")
+
+        try:
+            # Create config object using the correct class - REMOVE quality parameter
+            config = genai_types.GenerateImagesConfig(
+                number_of_images=self.imagen_num_images,
+                aspect_ratio=self.imagen_aspect_ratio
+                # Remove the quality parameter completely as it's not supported
+            )
+
+            # Make the API request following the working pattern
+            response = self.gemini_client.models.generate_images(
+                model=self.imagen_model,
+                prompt=prompt,
+                config=config
+            )
+
+            # Rest of the method remains the same
+            if hasattr(response, 'generated_images') and response.generated_images and len(response.generated_images) > 0:
+                # Get the first image from the response
+                generated_image_data = response.generated_images[0]
+                
+                # Extract image bytes
+                if hasattr(generated_image_data, 'image') and hasattr(generated_image_data.image, 'image_bytes'):
+                    image_bytes = generated_image_data.image.image_bytes
+                    if image_bytes:
+                        logger.info("Imagen image bytes received successfully.")
+                        return image_bytes
+                    else:
+                        logger.error("Imagen API response has empty image bytes.")
+                        return None
+                else:
+                    logger.error("Generated image data does not contain expected image bytes attribute.")
+                    return None
+            else:
+                logger.error(f"Imagen API response did not contain generated images: generated_images={getattr(response, 'generated_images', None)}")
+                
+                # Log additional information if available
+                if hasattr(response, 'safety_feedback') and response.safety_feedback:
+                    logger.warning(f"Safety feedback received: {response.safety_feedback}")
+                    
+                return None
+
+        except Exception as e:
+            logger.error(f"Unexpected error generating Imagen image: {e}", exc_info=True)
+            return None
 
     def _save_media_info(self, media_items, title, project_dir):
             """Lưu metadata về các media được tạo.
@@ -1291,3 +1507,139 @@ if __name__ == "__main__":
 
     end_time = time.time()
     print(f"\n--- Test finished in {end_time - start_time:.2f} seconds ---")
+
+
+###  CODE TEST IMAGEN 3 ###
+
+#!/usr/bin/env python3
+"""
+Test script for specifically testing the Imagen functionality in the ImageGenerator class.
+Run with: python -m src.image_generator
+"""
+
+import os
+import time
+import logging
+from io import BytesIO
+from PIL import Image
+
+# Configure logging to see detailed output
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Import the ImageGenerator class from your module
+from src.image_generator import ImageGenerator
+from config.settings import TEMP_DIR
+
+def test_imagen_generation():
+    """Test the Imagen image generation functionality specifically."""
+    print("\n=== IMAGEN GENERATION TEST ===")
+    
+    # Initialize the ImageGenerator (this will set up the Gemini client)
+    generator = ImageGenerator()
+    
+    # Check if Imagen is available
+    if not generator.gemini_client:
+        print("❌ ERROR: Gemini client not initialized. Check your API key and dependencies.")
+        return False
+    
+    # Create a test directory for output
+    test_output_dir = os.path.join(TEMP_DIR, "imagen_test")
+    os.makedirs(test_output_dir, exist_ok=True)
+    print(f"📁 Test images will be saved to: {test_output_dir}")
+    
+    # Test prompts that should be safer for Imagen (avoiding topics that trigger filters)
+    test_prompts = [
+        # Nature/Landscapes
+        "A serene mountain landscape at sunset with vibrant colors, photorealistic style",
+        
+        # Abstract/Conceptual
+        "An abstract digital illustration representing artificial intelligence technology with blue circuits",
+        
+        # Architecture
+        "A modern office building with glass facade in downtown business district, professional photography style",
+        
+        # Food
+        "A colorful arrangement of fresh fruits and vegetables on a rustic wooden table, top view photography",
+        
+        # Technology
+        "A closeup of computer circuit board with glowing components, macro photography"
+    ]
+    
+    success_count = 0
+    
+    # Test the prompt generation first
+    print("\n--- Testing Imagen Prompt Generation ---")
+    for i, base_prompt in enumerate(test_prompts, 1):
+        print(f"\n🔍 Test {i}/{len(test_prompts)}: Generating Imagen prompt")
+        
+        # Generate an enhanced prompt using the _create_imagen_prompt method
+        try:
+            enhanced_prompt = generator._create_imagen_prompt(
+                scene_content=base_prompt,
+                video_title="Test Video for Imagen",
+                script_style="informative"
+            )
+            
+            if enhanced_prompt:
+                print(f"✅ Successfully generated enhanced prompt:")
+                print(f"   Base: \"{base_prompt}\"")
+                print(f"   Enhanced: \"{enhanced_prompt[:100]}...\"")
+                
+                # Now test the actual image generation
+                print(f"\n🖼️ Testing image generation with this prompt...")
+                output_path = os.path.join(test_output_dir, f"imagen_test_{i}.jpg")
+                
+                # Generate the image
+                image_bytes = generator._generate_image_with_imagen(prompt=enhanced_prompt)
+                
+                if image_bytes:
+                    print(f"✅ Successfully received image bytes from Imagen API")
+                    
+                    # Process and save the image
+                    try:
+                        img = Image.open(BytesIO(image_bytes))
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        
+                        # Resize/crop image to match video dimensions
+                        processed_image = generator._resize_image(img)
+                        
+                        # Save the processed image
+                        processed_image.save(output_path, "JPEG", quality=90)
+                        print(f"✅ Successfully saved image to: {output_path}")
+                        success_count += 1
+                    except Exception as proc_err:
+                        print(f"❌ Error processing image bytes: {proc_err}")
+                else:
+                    print(f"❌ Failed to generate image with Imagen. Check logs for details.")
+            else:
+                print(f"❌ Failed to generate enhanced prompt")
+        
+        except Exception as e:
+            print(f"❌ Error during imagen prompt/image generation: {e}")
+    
+    # Display final summary
+    print(f"\n=== TEST RESULTS ===")
+    print(f"Total test cases: {len(test_prompts)}")
+    print(f"Successful generations: {success_count}")
+    print(f"Success rate: {success_count/len(test_prompts)*100:.1f}%")
+    
+    return success_count > 0
+
+if __name__ == "__main__":
+    start_time = time.time()
+    
+    try:
+        success = test_imagen_generation()
+        if success:
+            print("\n✅ IMAGEN TEST COMPLETED SUCCESSFULLY")
+        else:
+            print("\n⚠️ IMAGEN TEST FAILED OR PARTIALLY FAILED")
+    except Exception as e:
+        print(f"\n❌ TEST EXECUTION ERROR: {e}")
+    
+    end_time = time.time()
+    print(f"\nTest completed in {end_time - start_time:.2f} seconds")
