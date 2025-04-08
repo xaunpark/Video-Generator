@@ -13,12 +13,6 @@ logger = setup_logger(__name__)
 from src import project_config as cfg
 from src.utils import detect_language, safe_truncate, generate_project_id
 
-try:
-    from src.scene_video_detector import enhance_script_with_video_annotations
-except ImportError:
-    enhance_script_with_video_annotations = None
-    logger.warning("Could not import scene_video_detector. Video annotation unavailable.")
-
 from config.credentials import OPENAI_API_KEY
 from config.settings import TEMP_DIR, VIDEO_SETTINGS # Import VIDEO_SETTINGS here
 
@@ -381,75 +375,87 @@ class ScriptGenerator:
                 language=language
             )
             if not initial_script_data:
-                return None # Lỗi đã được log bên trong hàm con
+                return None # Lỗi đã được log
 
             final_title = initial_script_data["title"]
             initial_sentences = initial_script_data["initial_scenes"]
 
-            # --- Bước 2: Chia từng câu thành shots và xây dựng cấu trúc cuối cùng ---
-            final_scenes = [] # Danh sách các shots cuối cùng
-            final_speech_units = [] # Danh sách các speech units (tương ứng câu gốc)
+            # --- Bước 2: Xử lý sentences (chia thành shots hoặc không) ---
+            final_scenes = []
+            final_speech_units = []
             global_shot_number = 1
             speech_unit_number = 1
 
-            logger.info("Step 2: Breaking down sentences into visual shots...")
+            logger.info("Step 2 (Basic): Processing sentences...") # Đổi tên log
             for sentence in initial_sentences:
-                if not sentence.strip(): continue # Bỏ qua câu rỗng
+                original_sentence = sentence.strip() # Lưu câu gốc đã strip
+                if not original_sentence: continue # Bỏ qua câu rỗng ngay từ đầu
 
-                # Gọi API để chia câu này thành shots
-                shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
+                # --- Logic kiểm tra setting và tạo danh sách shots ---
+                enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
+                shots_for_sentence_content = [] # List chứa nội dung các shots
 
-                if shots_for_sentence:
-                    shot_numbers_for_unit = []
-                    # Thêm các shots vào danh sách cuối cùng với số thứ tự toàn cục
-                    for shot_content in shots_for_sentence:
+                if enable_breakdown:
+                    logger.debug(f"(Basic/Breakdown) Processing sentence '{original_sentence[:50]}...'")
+                    shots_for_sentence_content = self._breakdown_sentence_into_shots(original_sentence, style_config['tone'])
+                    if not shots_for_sentence_content: # Fallback nếu breakdown lỗi
+                        logger.warning(f"(Basic/Breakdown) Breakdown failed, using full sentence.")
+                        shots_for_sentence_content = [original_sentence]
+                else:
+                    logger.debug(f"(Basic/No Breakdown) Using full sentence as single shot.")
+                    shots_for_sentence_content = [original_sentence] # Chỉ một shot là câu gốc
+                # --- Kết thúc logic tạo danh sách shots ---
+
+                # --- Xử lý danh sách shots đã tạo ---
+                shot_numbers_for_this_unit = [] # Đổi tên biến cho rõ ràng
+                valid_shots_found = False # Cờ kiểm tra shot hợp lệ
+
+                if shots_for_sentence_content: # Chỉ xử lý nếu list shots không rỗng
+                    for shot_content in shots_for_sentence_content:
+                        shot_content_stripped = shot_content.strip()
+                        if not shot_content_stripped: continue # Bỏ qua shot rỗng
+
+                        # Tạo scene (Không có chapter info)
                         final_scenes.append({
                             "number": global_shot_number,
-                            "content": shot_content.strip() # Đảm bảo strip
+                            "content": shot_content_stripped
                         })
-                        shot_numbers_for_unit.append(global_shot_number)
+                        shot_numbers_for_this_unit.append(global_shot_number)
                         global_shot_number += 1
+                        valid_shots_found = True # Đánh dấu đã tìm thấy shot hợp lệ
 
-                    # Tạo speech unit tương ứng với câu gốc
+                # Tạo speech unit CHỈ KHI có ít nhất một scene hợp lệ được tạo
+                if valid_shots_found:
                     final_speech_units.append({
                         "unit_number": speech_unit_number,
-                        "text": sentence.strip(), # Giữ nguyên text của câu gốc
-                        "scene_numbers": shot_numbers_for_unit
+                        "text": original_sentence, # Dùng câu gốc đã strip cho TTS
+                        "scene_numbers": shot_numbers_for_this_unit
+                        # Không có chapter info
                     })
                     speech_unit_number += 1
-                else:
-                    # Nếu không chia được câu -> xem câu đó như 1 shot duy nhất (Fallback)
-                    logger.warning(f"Could not break down sentence, using the full sentence as a single shot: '{sentence[:50]}...'")
-                    final_scenes.append({
-                        "number": global_shot_number,
-                        "content": sentence.strip()
-                    })
-                    final_speech_units.append({
-                        "unit_number": speech_unit_number,
-                        "text": sentence.strip(),
-                        "scene_numbers": [global_shot_number]
-                    })
-                    global_shot_number += 1
-                    speech_unit_number += 1
+                elif original_sentence:
+                    logger.warning(f"No valid shots generated for non-empty sentence (Basic): '{original_sentence[:50]}...'. Skipping speech unit.")
+            # --- Kết thúc vòng lặp qua sentences ---
 
 
             # --- Kiểm tra kết quả cuối cùng ---
             if not final_scenes or not final_speech_units:
-                logger.error("Script generation failed: No valid scenes or speech units were created after breakdown.")
+                logger.error("Script generation failed (Basic): No valid scenes or speech units were created after breakdown.")
                 return None
 
-            logger.info(f"Script generation complete: {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
+            logger.info(f"Script generation complete (Basic): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
 
             # --- Tạo đối tượng script cuối cùng ---
             script_result = {
                 "project_id": project_id,
                 "title": final_title,
-                "scenes": final_scenes,           # Danh sách shots ngắn
-                "speech_units": final_speech_units, # Speech units là các câu gốc
+                "scenes": final_scenes,
+                "speech_units": final_speech_units,
                 "source": article.get('source', 'Unknown'),
                 "url": article.get('url', ''),
                 "style": style,
                 "language": language,
+                "script_mode": "basic", # Thêm mode vào metadata
                 "is_ai_generated": False,
                 "creation_timestamp": datetime.datetime.now().isoformat()
             }
@@ -472,25 +478,34 @@ class ScriptGenerator:
             return None
 
         # --- Gọi phân tích video (Enhance Script) ---
-        # Logic này hoạt động trên `scenes` (shots)
-        enhanced_script = script_result
-        if enhance_script_with_video_annotations and VIDEO_SETTINGS.get("enable_video_clips", False):
-             try:
-                 logger.info(f"Analyzing {len(script_result['scenes'])} shots for video suitability...")
-                 enhanced_script = enhance_script_with_video_annotations(script_result.copy())
-                 video_shots = sum(1 for shot in enhanced_script.get('scenes', []) if shot.get('prefer_video', False))
-                 logger.info(f"Video analysis result: {video_shots}/{len(script_result['scenes'])} shots marked for video.")
-             except Exception as e:
-                 logger.error(f"Error during video analysis: {str(e)}", exc_info=True)
-                 enhanced_script = script_result # Fallback to original if analysis fails
-        elif not enhance_script_with_video_annotations:
-            logger.warning("Skipping video shot analysis (detector module missing).")
-        else:
-            logger.info("Video clip analysis is disabled in settings.")
-            for scene in enhanced_script.get('scenes', []):
-                scene['prefer_video'] = False
+        if script_result and script_result.get('scenes'):
+            # Call the new batch analysis method
+            analysis_results_map = self._analyze_shots_for_video_batch(script_result['scenes'])
 
-        return enhanced_script
+            if analysis_results_map:
+                # Update the 'prefer_video' flag in the original script scenes
+                video_preferred_count = 0
+                for scene in script_result['scenes']:
+                    scene_num = scene.get('number')
+                    if scene_num in analysis_results_map:
+                        scene['prefer_video'] = analysis_results_map[scene_num]
+                        if scene['prefer_video']:
+                            video_preferred_count += 1
+                    else:
+                        scene['prefer_video'] = False # Default if somehow missing
+
+                total_scenes = len(script_result['scenes'])
+                logger.info(f"Applied batch video analysis results: {video_preferred_count}/{total_scenes} shots marked for video.")
+            else:
+                # If analysis failed or returned empty, ensure prefer_video is False
+                logger.warning("Batch video analysis did not return results. Setting all shots to prefer_video: false.")
+                for scene in script_result['scenes']:
+                    scene['prefer_video'] = False
+        elif script_result:
+            logger.warning("Script generated but contains no scenes to analyze for video suitability.")
+
+        # The final return statement
+        return script_result # Return the script with updated prefer_video flags
 
     # --- Hàm generate_script_from_keyword ---
     def generate_script_from_keyword(self, keyword, style="informative", language=None, video_mode="basic"):
@@ -514,7 +529,7 @@ class ScriptGenerator:
             # --- Bước 1: Tạo script với câu hoàn chỉnh ---
             initial_script_data = self._generate_initial_script_sentences(
                 style_config=style_config,
-                keyword=keyword, # Truyền keyword thay vì article
+                keyword=keyword,
                 language=language
             )
             if not initial_script_data:
@@ -523,37 +538,67 @@ class ScriptGenerator:
             final_title = initial_script_data["title"]
             initial_sentences = initial_script_data["initial_scenes"]
 
-            # --- Bước 2: Chia từng câu thành shots ---
+            # --- Bước 2: Xử lý sentences (chia thành shots hoặc không) ---
             final_scenes = []
             final_speech_units = []
             global_shot_number = 1
             speech_unit_number = 1
 
-            logger.info("Step 2: Breaking down generated sentences into visual shots...")
+            logger.info("Step 2 (Basic/Keyword): Processing sentences...") # Đổi tên log
             for sentence in initial_sentences:
-                # ... (Copy logic chia câu từ hàm generate_script) ...
-                if not sentence.strip(): continue
-                shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
-                if shots_for_sentence:
-                    shot_numbers_for_unit = []
-                    for shot_content in shots_for_sentence:
-                        final_scenes.append({"number": global_shot_number, "content": shot_content.strip()})
-                        shot_numbers_for_unit.append(global_shot_number)
-                        global_shot_number += 1
-                    final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": shot_numbers_for_unit})
-                    speech_unit_number += 1
+                original_sentence = sentence.strip()
+                if not original_sentence: continue
+
+                # --- Logic kiểm tra setting và tạo danh sách shots ---
+                enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
+                shots_for_sentence_content = []
+
+                if enable_breakdown:
+                    logger.debug(f"(Basic-KW/Breakdown) Processing sentence '{original_sentence[:50]}...'")
+                    shots_for_sentence_content = self._breakdown_sentence_into_shots(original_sentence, style_config['tone'])
+                    if not shots_for_sentence_content:
+                        logger.warning(f"(Basic-KW/Breakdown) Breakdown failed, using full sentence.")
+                        shots_for_sentence_content = [original_sentence]
                 else:
-                    logger.warning(f"Could not break down sentence (keyword), using full sentence as shot: '{sentence[:50]}...'")
-                    final_scenes.append({"number": global_shot_number, "content": sentence.strip()})
-                    final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": [global_shot_number]})
-                    global_shot_number += 1
+                    logger.debug(f"(Basic-KW/No Breakdown) Using full sentence as single shot.")
+                    shots_for_sentence_content = [original_sentence]
+                # --- Kết thúc logic tạo danh sách shots ---
+
+                # --- Xử lý danh sách shots đã tạo ---
+                shot_numbers_for_this_unit = []
+                valid_shots_found = False
+
+                if shots_for_sentence_content:
+                    for shot_content in shots_for_sentence_content:
+                        shot_content_stripped = shot_content.strip()
+                        if not shot_content_stripped: continue
+
+                        final_scenes.append({
+                            "number": global_shot_number,
+                            "content": shot_content_stripped
+                        })
+                        shot_numbers_for_this_unit.append(global_shot_number)
+                        global_shot_number += 1
+                        valid_shots_found = True
+
+                # Tạo speech unit nếu có scene hợp lệ
+                if valid_shots_found:
+                    final_speech_units.append({
+                        "unit_number": speech_unit_number,
+                        "text": original_sentence,
+                        "scene_numbers": shot_numbers_for_this_unit
+                    })
                     speech_unit_number += 1
+                elif original_sentence:
+                    logger.warning(f"No valid shots generated for non-empty sentence (Basic-KW): '{original_sentence[:50]}...'. Skipping speech unit.")
+            # --- Kết thúc vòng lặp sentences ---
+
 
             if not final_scenes or not final_speech_units:
-                logger.error("Script generation failed (keyword): No valid scenes or speech units created.")
+                logger.error("Script generation failed (Basic-Keyword): No valid scenes or speech units created.")
                 return None
 
-            logger.info(f"Script generation complete (keyword): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
+            logger.info(f"Script generation complete (Basic-Keyword): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
 
             # --- Tạo đối tượng script cuối cùng ---
             script_result = {
@@ -566,9 +611,10 @@ class ScriptGenerator:
                 "style": style,
                 "language": language,
                 "keyword": keyword,
+                "script_mode": "basic", # Thêm mode
                 "is_ai_generated": True,
                 "creation_timestamp": datetime.datetime.now().isoformat()
-            }
+             }
 
         elif video_mode == "advanced":
             logger.info("Generating keyword script in Advanced (Chapters) mode...")
@@ -594,25 +640,34 @@ class ScriptGenerator:
             return None
 
         # --- Gọi phân tích video (Enhance Script) ---
-        enhanced_script = script_result
-        # ... (Copy logic gọi enhance_script_with_video_annotations từ generate_script) ...
-        if enhance_script_with_video_annotations and VIDEO_SETTINGS.get("enable_video_clips", False):
-             try:
-                 logger.info(f"Analyzing {len(script_result['scenes'])} shots for video suitability (keyword)...")
-                 enhanced_script = enhance_script_with_video_annotations(script_result.copy())
-                 video_shots = sum(1 for shot in enhanced_script.get('scenes', []) if shot.get('prefer_video', False))
-                 logger.info(f"Video analysis result (keyword): {video_shots}/{len(script_result['scenes'])} shots marked for video.")
-             except Exception as e:
-                 logger.error(f"Error during video analysis (keyword): {str(e)}", exc_info=True)
-                 enhanced_script = script_result
-        elif not enhance_script_with_video_annotations:
-             logger.warning("Skipping video shot analysis (detector module missing).")
-        else:
-            logger.info("Video clip analysis is disabled in settings.")
-            for scene in enhanced_script.get('scenes', []):
-                 scene['prefer_video'] = False
+        if script_result and script_result.get('scenes'):
+            # Call the new batch analysis method
+            analysis_results_map = self._analyze_shots_for_video_batch(script_result['scenes'])
 
-        return enhanced_script
+            if analysis_results_map:
+                # Update the 'prefer_video' flag in the original script scenes
+                video_preferred_count = 0
+                for scene in script_result['scenes']:
+                    scene_num = scene.get('number')
+                    if scene_num in analysis_results_map:
+                        scene['prefer_video'] = analysis_results_map[scene_num]
+                        if scene['prefer_video']:
+                            video_preferred_count += 1
+                    else:
+                        scene['prefer_video'] = False # Default if somehow missing
+
+                total_scenes = len(script_result['scenes'])
+                logger.info(f"Applied batch video analysis results: {video_preferred_count}/{total_scenes} shots marked for video.")
+            else:
+                # If analysis failed or returned empty, ensure prefer_video is False
+                logger.warning("Batch video analysis did not return results. Setting all shots to prefer_video: false.")
+                for scene in script_result['scenes']:
+                    scene['prefer_video'] = False
+        elif script_result:
+            logger.warning("Script generated but contains no scenes to analyze for video suitability.")
+
+        # The final return statement
+        return script_result # Return the script with updated prefer_video flags
 
     # --- NEW Main function for TRANSCRIPT/TEXT input ---
     def generate_script_from_text(self, input_text, style="informative", language="en", context_hint=None, video_mode="basic"):
@@ -635,13 +690,12 @@ class ScriptGenerator:
 
         if video_mode == "basic":
             logger.info("Generating text script in Basic mode...")
-
             # --- Step 1: Generate initial script with full sentences ---
             initial_script_data = self._generate_initial_script_sentences(
-                style_config=style_config,
-                transcript_text=input_text, # Pass transcript text
-                language=language,
-                context_hint=context_hint
+                 style_config=style_config,
+                 transcript_text=input_text,
+                 language=language,
+                 context_hint=context_hint
             )
             if not initial_script_data:
                 return None
@@ -649,37 +703,67 @@ class ScriptGenerator:
             final_title = initial_script_data["title"]
             initial_sentences = initial_script_data["initial_scenes"]
 
-            # --- Step 2: Breakdown sentences and build final structure ---
-            # (Identical logic to other generate functions)
+            # --- Step 2: Process sentences (breakdown or not) ---
             final_scenes = []
             final_speech_units = []
             global_shot_number = 1
             speech_unit_number = 1
 
-            logger.info("Step 2: Breaking down generated sentences into visual shots...")
+            logger.info("Step 2 (Basic/Text): Processing sentences...") # Đổi log
             for sentence in initial_sentences:
-                if not sentence.strip(): continue
-                shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
-                if shots_for_sentence:
-                    shot_numbers_for_unit = []
-                    for shot_content in shots_for_sentence:
-                        final_scenes.append({"number": global_shot_number, "content": shot_content.strip()})
-                        shot_numbers_for_unit.append(global_shot_number)
+                original_sentence = sentence.strip()
+                if not original_sentence: continue
+
+                # --- Logic kiểm tra setting và tạo danh sách shots ---
+                enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
+                shots_for_sentence_content = []
+
+                if enable_breakdown:
+                    logger.debug(f"(Basic-Text/Breakdown) Processing sentence '{original_sentence[:50]}...'")
+                    shots_for_sentence_content = self._breakdown_sentence_into_shots(original_sentence, style_config['tone'])
+                    if not shots_for_sentence_content:
+                        logger.warning(f"(Basic-Text/Breakdown) Breakdown failed, using full sentence.")
+                        shots_for_sentence_content = [original_sentence]
+                else:
+                    logger.debug(f"(Basic-Text/No Breakdown) Using full sentence as single shot.")
+                    shots_for_sentence_content = [original_sentence]
+                # --- Kết thúc logic tạo danh sách shots ---
+
+                # --- Xử lý danh sách shots đã tạo ---
+                shot_numbers_for_this_unit = []
+                valid_shots_found = False
+
+                if shots_for_sentence_content:
+                    for shot_content in shots_for_sentence_content:
+                        shot_content_stripped = shot_content.strip()
+                        if not shot_content_stripped: continue
+
+                        final_scenes.append({
+                            "number": global_shot_number,
+                            "content": shot_content_stripped
+                        })
+                        shot_numbers_for_this_unit.append(global_shot_number)
                         global_shot_number += 1
-                    final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": shot_numbers_for_unit})
+                        valid_shots_found = True
+
+                # Tạo speech unit nếu có scene hợp lệ
+                if valid_shots_found:
+                    final_speech_units.append({
+                        "unit_number": speech_unit_number,
+                        "text": original_sentence,
+                        "scene_numbers": shot_numbers_for_this_unit
+                    })
                     speech_unit_number += 1
-                else: # Fallback
-                    logger.warning(f"Could not break down sentence (text input), using full sentence as shot: '{sentence[:50]}...'")
-                    final_scenes.append({"number": global_shot_number, "content": sentence.strip()})
-                    final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": [global_shot_number]})
-                    global_shot_number += 1
-                    speech_unit_number += 1
+                elif original_sentence:
+                    logger.warning(f"No valid shots generated for non-empty sentence (Basic-Text): '{original_sentence[:50]}...'. Skipping speech unit.")
+            # --- Kết thúc vòng lặp sentences ---
+
 
             if not final_scenes or not final_speech_units:
-                logger.error("Script generation failed (text input): No valid scenes or speech units created.")
+                logger.error("Script generation failed (Basic-Text): No valid scenes or speech units created.")
                 return None
 
-            logger.info(f"Script generation complete (text input): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
+            logger.info(f"Script generation complete (Basic-Text): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
 
             # --- Final script object ---
             script_result = {
@@ -688,12 +772,13 @@ class ScriptGenerator:
                 "scenes": final_scenes,
                 "speech_units": final_speech_units,
                 "source": f"AI Generated from Text ({context_hint or 'Input Text'})",
-                "url": f"text://{project_id}", # Placeholder URL
+                "url": f"text://{project_id}",
                 "style": style,
                 "language": language,
+                "script_mode": "basic", # Thêm mode
                 "is_ai_generated": True,
                 "creation_timestamp": datetime.datetime.now().isoformat()
-            }
+             }
 
         elif video_mode == "advanced":
             logger.info("Generating text script in Advanced (Chapters) mode...")
@@ -718,24 +803,34 @@ class ScriptGenerator:
             return None
 
         # --- Enhance with video annotations ---
-        enhanced_script = script_result
-        if enhance_script_with_video_annotations and VIDEO_SETTINGS.get("enable_video_clips", False):
-             try:
-                 logger.info(f"Analyzing {len(script_result['scenes'])} shots for video suitability (text input)...")
-                 enhanced_script = enhance_script_with_video_annotations(script_result.copy())
-                 video_shots = sum(1 for shot in enhanced_script.get('scenes', []) if shot.get('prefer_video', False))
-                 logger.info(f"Video analysis result (text input): {video_shots}/{len(script_result['scenes'])} shots marked for video.")
-             except Exception as e:
-                 logger.error(f"Error during video analysis (text input): {str(e)}", exc_info=True)
-                 enhanced_script = script_result
-        elif not enhance_script_with_video_annotations:
-             logger.warning("Skipping video shot analysis (detector module missing).")
-        else:
-            logger.info("Video clip analysis is disabled in settings.")
-            for scene in enhanced_script.get('scenes', []):
-                 scene['prefer_video'] = False
+        if script_result and script_result.get('scenes'):
+            # Call the new batch analysis method
+            analysis_results_map = self._analyze_shots_for_video_batch(script_result['scenes'])
 
-        return enhanced_script
+            if analysis_results_map:
+                # Update the 'prefer_video' flag in the original script scenes
+                video_preferred_count = 0
+                for scene in script_result['scenes']:
+                    scene_num = scene.get('number')
+                    if scene_num in analysis_results_map:
+                        scene['prefer_video'] = analysis_results_map[scene_num]
+                        if scene['prefer_video']:
+                            video_preferred_count += 1
+                    else:
+                        scene['prefer_video'] = False # Default if somehow missing
+
+                total_scenes = len(script_result['scenes'])
+                logger.info(f"Applied batch video analysis results: {video_preferred_count}/{total_scenes} shots marked for video.")
+            else:
+                # If analysis failed or returned empty, ensure prefer_video is False
+                logger.warning("Batch video analysis did not return results. Setting all shots to prefer_video: false.")
+                for scene in script_result['scenes']:
+                    scene['prefer_video'] = False
+        elif script_result:
+            logger.warning("Script generated but contains no scenes to analyze for video suitability.")
+
+        # The final return statement
+        return script_result # Return the script with updated prefer_video flags
 
     def _generate_advanced_script(self, source_data, style_config, language, style, project_id):
         """Generates a chapter-based script using OpenAI."""
@@ -827,7 +922,7 @@ class ScriptGenerator:
         ]
         }}
         """
-        
+
         # Call OpenAI API (potentially longer timeout needed)
         response_json_str = self._call_openai_api(prompt_step1_advanced, request_timeout=180) # Increased timeout
         if not response_json_str:
@@ -874,45 +969,61 @@ class ScriptGenerator:
                     continue
 
                 for sentence in chapter_content_sentences:
-                    sentence = sentence.strip()
-                    if not sentence: continue
+                    original_sentence = sentence.strip() # Lưu câu gốc
+                    if not original_sentence: continue # Bỏ qua câu rỗng
 
-                    # Breakdown sentence into shots (reuse existing function)
-                    shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
+                    # --- THÊM LOGIC KIỂM TRA SETTING (TƯƠNG TỰ BASIC) ---
+                    enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
+                    shots_for_sentence_content = [] # List chứa nội dung text của shots
 
-                    if not shots_for_sentence: # Fallback if breakdown fails
-                        logger.warning(f"(Advanced) Could not break down sentence in Chapter {chapter_num}, using full sentence as shot: '{sentence[:50]}...'")
-                        shots_for_sentence = [sentence] # Treat full sentence as one shot
+                    if enable_breakdown:
+                        logger.debug(f"(Adv/Breakdown) Ch-{chapter_num} Processing sentence '{original_sentence[:50]}...'")
+                        shots_for_sentence_content = self._breakdown_sentence_into_shots(original_sentence, style_config['tone'])
+                        if not shots_for_sentence_content:
+                            logger.warning(f"(Adv/Breakdown) Breakdown failed in Ch-{chapter_num}, using full sentence.")
+                            shots_for_sentence_content = [original_sentence]
+                    else:
+                        logger.debug(f"(Adv/No Breakdown) Ch-{chapter_num} Using full sentence as single shot.")
+                        shots_for_sentence_content = [original_sentence]
+                    # --- KẾT THÚC LOGIC TẠO SHOTS CONTENT ---
 
-                    shot_numbers_for_unit = []
-                    for shot_content in shots_for_sentence:
-                        shot_content = shot_content.strip()
-                        if not shot_content: continue
 
-                        scene = {
-                            "number": global_shot_number,
-                            "content": shot_content,
-                            "chapter_number": chapter_num,
-                            "chapter_title": chapter_title
-                        }
-                        final_scenes.append(scene)
-                        shot_numbers_for_unit.append(global_shot_number)
-                        global_shot_number += 1
+                    # --- Xử lý danh sách shots đã tạo ---
+                    shot_numbers_for_this_unit = []
+                    valid_shots_found = False
 
-                    if shot_numbers_for_unit: # Only create speech unit if scenes were generated
+                    if shots_for_sentence_content:
+                        for shot_content in shots_for_sentence_content:
+                            shot_content_stripped = shot_content.strip()
+                            if not shot_content_stripped: continue
+
+                            # Tạo scene VỚI chapter info
+                            scene = {
+                                "number": global_shot_number,
+                                "content": shot_content_stripped,
+                                "chapter_number": chapter_num, # Thêm chapter info
+                                "chapter_title": chapter_title # Thêm chapter info
+                            }
+                            final_scenes.append(scene)
+                            shot_numbers_for_this_unit.append(global_shot_number)
+                            global_shot_number += 1
+                            valid_shots_found = True
+
+                    # Tạo speech unit nếu có scene hợp lệ
+                    if valid_shots_found:
                         speech_unit = {
                             "unit_number": speech_unit_number,
-                            "text": sentence, # Original sentence for TTS
-                            "scene_numbers": shot_numbers_for_unit,
-                            "chapter_number": chapter_num,
-                            "chapter_title": chapter_title
+                            "text": original_sentence, # Câu gốc cho TTS
+                            "scene_numbers": shot_numbers_for_this_unit,
+                            "chapter_number": chapter_num, # Thêm chapter info
+                            "chapter_title": chapter_title # Thêm chapter info
                         }
                         final_speech_units.append(speech_unit)
                         speech_unit_number += 1
-
-            if not final_scenes or not final_speech_units:
-                logger.error("Script generation failed (Advanced): No valid scenes or speech units were created after flattening.")
-                return None
+                    elif original_sentence:
+                         logger.warning(f"No valid shots generated for non-empty sentence in Chapter {chapter_num}: '{original_sentence[:50]}...'. Skipping speech unit.")
+                # --- Kết thúc vòng lặp sentences trong chapter ---
+            # --- Kết thúc vòng lặp chapters ---
 
             logger.info(f"Script generation complete (Advanced): {len(final_scenes)} shots, {len(final_speech_units)} speech units across {len(chapter_data['chapters'])} chapters.")
 
@@ -942,6 +1053,127 @@ class ScriptGenerator:
             logger.error(f"Step 2 (Advanced) Failed: Unexpected error parsing or flattening chapters: {e}", exc_info=True)
             return None
     # --- End of _generate_advanced_script ---
+
+    def _analyze_shots_for_video_batch(self, scenes):
+        """
+        Analyzes a list of scene contents in batch to determine video suitability using a single API call.
+
+        Args:
+            scenes (list): A list of scene dictionaries, each containing at least 'number' and 'content'.
+
+        Returns:
+            dict: A dictionary mapping scene number to a boolean (True if video is preferred, False otherwise).
+                Returns an empty dictionary if analysis fails or is disabled.
+        """
+        if not scenes:
+            logger.warning("No scenes provided for batch video analysis.")
+            return {}
+
+        if not VIDEO_SETTINGS.get("enable_video_clips", False) or not self.api_key:
+            logger.info("Video clip analysis is disabled or OpenAI API key is missing. Skipping batch analysis.")
+            # Return a dict with all False if disabled, so the structure exists but doesn't prefer video
+            return {scene['number']: False for scene in scenes}
+
+        logger.info(f"Starting batch video suitability analysis for {len(scenes)} shots...")
+
+        # 1. Prepare data for the prompt
+        # Create a simplified list of scenes just for the prompt
+        scenes_for_prompt = [{"number": s['number'], "content": s['content']} for s in scenes]
+        # Convert the list to a JSON string to include in the prompt
+        try:
+            scenes_json_string = json.dumps(scenes_for_prompt, ensure_ascii=False, indent=2)
+        except Exception as json_err:
+            logger.error(f"Error converting scenes to JSON for prompt: {json_err}")
+            return {scene['number']: False for scene in scenes} # Fallback: assume no video
+
+        # 2. Build the Prompt
+        analysis_prompt = f"""
+        You are an expert video editor assistant. Your task is to analyze a list of short video script shots (scenes) provided below in JSON format.
+        For EACH shot in the list, decide whether its content is BEST represented by a VIDEO clip or a STATIC IMAGE.
+
+        Consider these factors for each shot:
+        - **Action/Movement:** Prefer VIDEO for shots describing actions, movements, processes, changes, demonstrations (e.g., "running", "building", "exploding", "presenting", "market fluctuating").
+        - **Static/Abstract:** Prefer IMAGE for shots describing states, static locations, abstract concepts, quotes, data, inner thoughts (e.g., "the building stands tall", "statistics show", "he thought about...", "according to experts", "a graph illustrating").
+        - **Overall Pacing:** Look at the sequence. Avoid recommending video clips for too many consecutive shots (e.g., try not to have more than 2-3 'true' values in a row). Aim for roughly {int(VIDEO_SETTINGS.get('video_clip_frequency', 0.4)*100)}% video usage if the content allows, but prioritize appropriate representation.
+
+        Input JSON (list of shots):
+        ```json
+        {scenes_json_string}
+        ```
+
+        Output Requirements:
+        - Respond ONLY with a valid JSON object. Do not include any introduction, explanation, or markdown formatting.
+        - The JSON object must contain a single key "analysis_results".
+        - The value of "analysis_results" must be a LIST of objects.
+        - Each object in the list must correspond to a shot from the input list and contain:
+            - "number": The original number of the shot (integer).
+            - "prefer_video": A boolean value (true if video is preferred, false if image is preferred).
+
+        Example Output Format:
+        {{
+        "analysis_results": [
+            {{ "number": 1, "prefer_video": false }},
+            {{ "number": 2, "prefer_video": true }},
+            {{ "number": 3, "prefer_video": true }},
+            {{ "number": 4, "prefer_video": false }}
+            // ... continue for all shots in the input list
+        ]
+        }}
+        """
+
+        # 3. Call OpenAI API
+        # Use a potentially longer timeout as the request/response might be larger
+        response_json_str = self._call_openai_api(analysis_prompt, request_timeout=120)
+        if not response_json_str:
+            logger.error("Batch video analysis failed: No response from API.")
+            return {scene['number']: False for scene in scenes} # Fallback
+
+        # 4. Process Results
+        try:
+            analysis_data = json.loads(response_json_str)
+
+            # Validate the response structure
+            if not isinstance(analysis_data, dict) or "analysis_results" not in analysis_data:
+                logger.error(f"Batch video analysis failed: Invalid JSON structure in response. Got: {analysis_data}")
+                return {scene['number']: False for scene in scenes}
+
+            results_list = analysis_data["analysis_results"]
+            if not isinstance(results_list, list):
+                logger.error(f"Batch video analysis failed: 'analysis_results' is not a list. Got: {type(results_list)}")
+                return {scene['number']: False for scene in scenes}
+
+
+            # Create the result map {scene_number: prefer_video}
+            analysis_map = {}
+            processed_numbers = set()
+            for result_item in results_list:
+                if isinstance(result_item, dict) and \
+                "number" in result_item and isinstance(result_item["number"], int) and \
+                "prefer_video" in result_item and isinstance(result_item["prefer_video"], bool):
+                    scene_num = result_item["number"]
+                    analysis_map[scene_num] = result_item["prefer_video"]
+                    processed_numbers.add(scene_num)
+                else:
+                    logger.warning(f"Skipping invalid item in analysis results: {result_item}")
+
+            # Check if all original scene numbers were processed
+            original_numbers = {s['number'] for s in scenes}
+            missing_numbers = original_numbers - processed_numbers
+            if missing_numbers:
+                logger.warning(f"Batch video analysis results missing for scene numbers: {sorted(list(missing_numbers))}. Defaulting them to 'prefer_video: false'.")
+                for num in missing_numbers:
+                    analysis_map[num] = False # Default missing ones to False
+
+            logger.info(f"Batch video analysis complete. Results obtained for {len(analysis_map)} scenes.")
+            return analysis_map
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Batch video analysis failed: Could not decode JSON response: {e}")
+            logger.debug(f"Received content: {response_json_str}")
+            return {scene['number']: False for scene in scenes} # Fallback
+        except Exception as e:
+            logger.error(f"Batch video analysis failed: Unexpected error processing results: {e}", exc_info=True)
+            return {scene['number']: False for scene in scenes} # Fallback
 
     def _call_openai_api(self, prompt, max_retries=3, request_timeout=90):
         """Gọi OpenAI API, yêu cầu JSON, có retry đơn giản."""

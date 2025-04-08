@@ -79,6 +79,7 @@ VIDEO_SETTINGS = {
     "format": "mp4",
     "enable_video_clips": True,          # Bật/tắt tính năng video clips
     "video_clip_duration": 10,            # Thời lượng mong muốn cho video clips (giây)
+    "enable_sentence_to_shot_breakdown": False, # Bật/tắt tính năng chia nhỏ video thành các đoạn ngắn hơn
     "video_clip_frequency": 0.4,         # Tỷ lệ scene nên dùng video (0.0-1.0)
     "min_scenes_between_videos": 1,      # Số scene tối thiểu giữa 2 video clips
     "chapter_title_duration": 2.5,
