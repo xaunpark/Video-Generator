@@ -463,7 +463,7 @@ class ImageGenerator:
         1. Be descriptive and specific about visual elements. Mention subjects, actions, setting, mood, and composition.
         2. Incorporate the video's style/tone (e.g., if 'dramatic', use words like 'intense lighting', 'dynamic angle').
         3. Aim for a prompt length suitable for Imagen (under 150 words).
-        4. Specify the image type (e.g., photorealistic, digital illustration, graphic art, cinematic shot).
+        4. USE ONLY PHOTOREALISTIC IMAGE TYPE
         5. AVOID mentioning text unless the scene is explicitly about text/code.
         6. If the original scene involves children, REWRITE it with adults or symbolic representations.
         7. For concepts involving children's activities, represent them with symbolic objects instead (e.g., "a toy left on a colorful playground" rather than "a child playing").
@@ -647,27 +647,26 @@ class ImageGenerator:
                 
             # Filter and score potential images based on size and aspect ratio
             potential_images = []
-            logger.info("=== Scoring all images from search results ===")
+            #logger.info("=== Scoring all images from search results ===")
             
             for i, img_data in enumerate(image_results):
-                # CORRECTION: Use proper Serper API property names (imageWidth/imageHeight instead of width/height)
                 width = img_data.get("imageWidth", 0)
                 height = img_data.get("imageHeight", 0)
                 url = img_data.get("imageUrl")
                 
                 # Skip images without URLs
                 if not url:
-                    logger.debug(f"Image {i+1} skipped - No URL provided")
+                    #logger.debug(f"Image {i+1} skipped - No URL provided")
                     continue
                     
                 # Skip known problematic domains
                 if any(domain in url.lower() for domain in blacklisted_domains):
-                    logger.debug(f"Image {i+1} skipped - Blacklisted domain: {url[:80]}...")
+                    #logger.debug(f"Image {i+1} skipped - Blacklisted domain: {url[:80]}...")
                     continue
                 
                 # Filter out very small images if dimensions are provided
-                if width != 0 and height != 0 and (width < 400 or height < 300):
-                    logger.debug(f"Image {i+1} skipped - Too small: {width}x{height}")
+                if width != 0 and height != 0 and (width < 900 or height < 800):
+                    #logger.debug(f"Image {i+1} skipped - Too small: {width}x{height}")
                     continue
 
                 # Calculate score even if dimensions are not provided
@@ -705,7 +704,7 @@ class ImageGenerator:
                 score = min(score, 1.0)  # Cap at 1.0
 
                 # Log detailed scoring information
-                logger.info(f"Image {i+1}: Score={score:.2f} [{', '.join(score_components)}], Size={width}x{height}, URL={url[:80]}...")
+                #logger.info(f"Image {i+1}: Score={score:.2f} [{', '.join(score_components)}], Size={width}x{height}, URL={url[:80]}...")
 
                 potential_images.append({"url": url, "score": score, "width": width, "height": height})
 
@@ -722,9 +721,9 @@ class ImageGenerator:
             potential_images.sort(key=lambda x: x["score"], reverse=True)
             
             # Log the sorted results
-            logger.info("=== Sorted images by score (highest first) ===")
-            for i, img in enumerate(potential_images[:5]):  # Log top 5 for brevity
-                logger.info(f"Rank {i+1}: Score={img['score']:.2f}, Size={img['width']}x{img['height']}, URL={img['url'][:80]}...")
+            #logger.info("=== Sorted images by score (highest first) ===")
+            #for i, img in enumerate(potential_images[:5]):  # Log top 5 for brevity
+            #    logger.info(f"Rank {i+1}: Score={img['score']:.2f}, Size={img['width']}x{img['height']}, URL={img['url'][:80]}...")
             
             logger.info(f"Starting download attempts from highest scored images...")
 
@@ -1113,6 +1112,82 @@ class ImageGenerator:
              logger.error(f"Failed to create outro card: {e}", exc_info=True)
              # Fallback: Create a simple text image
              return self._create_text_only_image("Thanks for watching!", output_path)
+
+    def _create_chapter_title_card(self, chapter_title, output_path, chapter_number=None):
+        """Creates the title card image for a specific chapter."""
+        try:
+            # 1. Create canvas with a distinct background color
+            # Example: A medium teal color - adjust as desired
+            img = Image.new('RGB', (self.width, self.height), color=(20, 80, 80))
+            draw = ImageDraw.Draw(img)
+
+            # 2. Get fonts (adjust size as needed, maybe slightly smaller than main intro)
+            title_font_size = 60
+            title_font = self._get_font(size=title_font_size)
+            if not title_font:
+                raise Exception("Cannot load font for chapter title card")
+
+            # 3. Prepare the text to display
+            display_text = chapter_title
+            if chapter_number is not None:
+                # Format with chapter number if provided
+                display_text = f"Chapter {chapter_number}: {chapter_title}"
+
+            # 4. Wrap text to fit within margins
+            margin = 100
+            wrapped_text = self._wrap_text(display_text, title_font, self.width - 2 * margin)
+
+            # 5. Calculate vertical centering
+            # Estimate line height based on font size (adjust multiplier if needed)
+            line_height = title_font_size * 1.2
+            total_text_height = len(wrapped_text) * line_height
+            y_start = (self.height - total_text_height) / 2
+
+            # 6. Draw text with outline/shadow for readability
+            text_color = (255, 255, 255) # White text
+            outline_color = (0, 0, 0)    # Black outline
+
+            for i, line in enumerate(wrapped_text):
+                # Calculate horizontal centering for each line
+                try:
+                    bbox = draw.textbbox((0, 0), line, font=title_font)
+                    text_width = bbox[2] - bbox[0]
+                except AttributeError: # Fallback for older Pillow
+                    try: text_width, _ = title_font.getsize(line)
+                    except AttributeError: text_width = len(line) * (title_font_size * 0.6) # Estimate
+                except Exception: # General fallback
+                    text_width = len(line) * (title_font_size * 0.6) # Estimate
+
+                x = (self.width - text_width) / 2
+                y = y_start + i * line_height
+
+                # Draw outline (multiple offset draws)
+                outline_strength = 1
+                for dx in range(-outline_strength, outline_strength + 1):
+                    for dy in range(-outline_strength, outline_strength + 1):
+                        if dx != 0 or dy != 0:
+                            draw.text((x + dx, y + dy), line, font=title_font, fill=outline_color)
+                # Draw main text
+                draw.text((x, y), line, font=title_font, fill=text_color)
+
+            # 7. Save the image
+            img.save(output_path, "PNG") # Use PNG to avoid compression artifacts on text
+            chapter_info = f" (Chapter {chapter_number})" if chapter_number else ""
+            logger.info(f"Created chapter title card{chapter_info}: {output_path}")
+            return output_path
+
+        except Exception as e:
+            logger.error(f"Failed to create chapter card for '{chapter_title}': {e}", exc_info=True)
+            # Fallback to a simple text image if card generation fails
+            fallback_text = f"Chapter: {chapter_title[:100]}"
+            if chapter_number:
+                fallback_text = f"Chapter {chapter_number}:\n{chapter_title[:100]}"
+            try:
+                # Reuse existing text-only image fallback
+                return self._create_text_only_image(fallback_text, output_path)
+            except Exception as fallback_e:
+                logger.error(f"Fallback text image generation also failed: {fallback_e}")
+                return None # Return None if absolutely cannot create an image
 
     def _resize_image(self, image):
         """

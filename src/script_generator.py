@@ -109,55 +109,129 @@ class ScriptGenerator:
             prompt_step1 += f"ARTICLE CONTENT:\n{safe_truncate(article.get('content', ''))}\n"
             # --- PROMPT ĐÃ ĐƯỢC TỐI ƯU CHO ARTICLE ---
             prompt_step1 += """
-    Instructions: 
-    Rewrite the provided news article into an engaging, emotionally compelling, and potentially viral video narration script (voice-over/subtitle). 
+            Rewrite the provided news article into an engaging, emotionally compelling, and potentially viral video narration script (voice-over/subtitle).
 
-    CRITICAL REQUIREMENTS:
-    1. Write ONLY narrative sentences suitable for voice-over or subtitles. Do NOT include any visual direction (such as "scene opens with," "camera zooms," "image shows," "hình ảnh," "cảnh quay," etc.).
+            CRITICAL REQUIREMENTS:
 
-    2. Maintain a clear storytelling structure:
-    - Hook (opening): Start immediately with an intriguing, surprising, or shocking fact or question.
-    - Story (middle): Narrate key events, details, or developments in an engaging way.
-    - Conclusion (ending): End with a strong, reflective statement or question.
+            1. Write ONLY narrative sentences suitable for voice-over or subtitles. Do NOT include visual direction phrases (like "scene opens," "camera zooms," "hình ảnh," "cảnh quay," etc.).
 
-    3. Use vivid, emotional, conversational language that naturally engages the audience.
+            2. Clearly structure the script into 3 distinct parts:
+            - **Hook (Opening)**: Start immediately with the MOST intriguing, surprising, or shocking detail from the article to instantly captivate viewers. Consider using a provocative question or a cliffhanger to trigger curiosity.
+            - **Story (Middle)**: Clearly narrate the key events, dramatic developments, or interesting facts from the article, organized logically and vividly to build suspense and maintain engagement.
+            - **Conclusion (Ending)**: End with a powerful, memorable statement or an open-ended question that encourages viewers to reflect, comment, or share the video.
 
-    4. Stay truthful and accurate: ONLY use facts and details provided by the article. Do NOT invent new information.
-    """
+            3. Use vivid, emotional language:
+            - Incorporate emotionally-charged words (e.g., shocking, unbelievable, devastating, astonishing, heartbreaking, incredible) to amplify viewer reactions.
+            - Use conversational, natural-sounding narration to deeply engage the audience.
 
+            4. Highly visual-friendly narration:
+            - Although you must NOT explicitly describe visuals (e.g., avoid "zoom in," "show," "image of"), choose wording that naturally evokes clear and dramatic mental imagery, facilitating the search for stock visuals later.
+
+            5. Encourage viewer interaction:
+            - End the script with a brief, provocative question inviting viewer opinions or encouraging sharing.
+
+            6. Strict accuracy:
+            - Only use facts and information directly from the provided article. Do NOT invent or speculate beyond provided content.
+
+            OUTPUT FORMAT:
+            Return ONLY a valid JSON object:
+            {
+            "title": "Emotionally engaging and click-worthy title",
+            "initial_scenes": [
+                "Captivating opening sentence or two (hook).",
+                "Engaging narrative sentence clearly describing dramatic developments.",
+                "...",
+                "Powerful concluding sentence ending with a reflective question or strong emotional statement."
+            ]
+            }
+            """
         elif keyword:
             input_type = "Keyword"
             lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
             prompt_step1 += f"\nCONTEXT TYPE: Keyword/Topic\n"
             prompt_step1 += f"TOPIC: \"{keyword}\"\n"
-            prompt_step1 += f"\nInstructions: Generate a relevant and engaging script {lang_instruction} *about* the topic '{keyword}'. Apply the requested style and structure the content into logical, complete sentences for the 'initial_scenes' array."
+
+            prompt_step1 += f"""
+        Instructions:
+        Generate an engaging, informative, and potentially viral video narration script {lang_instruction} about the topic '{keyword}'.
+
+        CRITICAL REQUIREMENTS:
+
+        1. Clear and structured storytelling:
+        - **Hook (opening)**: Start with an intriguing question, surprising fact, or provocative statement related directly to the topic to immediately capture viewers' attention.
+        - **Body (main content)**: Clearly explain or narrate key ideas, interesting facts, or insightful details about '{keyword}'. Structure the narrative logically, each scene clearly leading to the next.
+        - **Conclusion (ending)**: End with a powerful statement, summary, or thought-provoking question that invites viewer interaction or encourages sharing.
+
+        2. Vivid and visual-friendly language:
+        - Use emotionally engaging and vivid descriptions to help the audience easily visualize each idea or concept.
+        - While maintaining visual imagery, do NOT explicitly describe visual actions (e.g., avoid phrases like "scene shows", "camera zooms", "image of", "cảnh quay", etc.). Keep sentences purely narrative, suitable for voice-over or subtitle.
+
+        3. Engaging, conversational tone:
+        - Maintain a natural, conversational style that captivates and holds viewers' interest throughout the video.
+
+        OUTPUT FORMAT:
+        Return ONLY a valid JSON object:
+        {{
+        "title": "Engaging, attention-grabbing title related directly to '{keyword}'",
+        "initial_scenes": [
+            "Intriguing opening sentence or two (hook).",
+            "Next logically connected narrative sentence(s) clearly describing key points.",
+            "...",
+            "Strong concluding sentence or question encouraging viewer reflection or interaction."
+        ]
+        }}
+            """
 
         elif transcript_text:
             input_type = "YouTube Transcript"
             lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
             prompt_step1 += f"\nCONTEXT TYPE: YouTube Video Transcript {f'({context_hint})' if context_hint else ''}\n"
             prompt_step1 += f"TRANSCRIPT CONTENT:\n{safe_truncate(transcript_text, 12000)}\n"
-            prompt_step1 += f"\nInstructions: Generate a script {lang_instruction} that accurately summarizes and logically restructures the content *found within the provided transcript*. **Crucially, use ONLY information present in the transcript.** Rephrase sentences naturally where needed, apply the requested style ({style_config['tone']}), and organize the output into complete, speakable sentences for the 'initial_scenes' array. Do *not* add external information or significantly deviate from the transcript's topics."
 
+            prompt_step1 += f"""
+        Instructions:
+        Convert the provided YouTube transcript into a concise, highly engaging, and structured video narration script {lang_instruction} suitable for creating a shorter, viral summary video.
+
+        CRITICAL REQUIREMENTS:
+
+        1. Thorough but concise restructuring:
+        - Remove ALL unnecessary filler words or phrases (e.g., "um", "you know", "actually", repeated sentences, etc.).
+        - Clearly summarize the main ideas and key highlights from the transcript. 
+        - Significantly condense the content into concise, easy-to-follow narrative sentences without losing important meaning.
+
+        2. Clear storytelling structure:
+        - **Hook (Opening)**: Start with the most intriguing, impactful, or surprising point from the transcript to immediately grab attention.
+        - **Main points (Middle)**: Logically narrate the key points, highlights, or insights extracted from the transcript, structured clearly and sequentially for ease of understanding.
+        - **Conclusion (Ending)**: Provide a compelling summary, impactful statement, or thought-provoking question encouraging viewers to reflect, interact, or share.
+
+        3. Natural and conversational narration:
+        - Rewrite sentences to ensure clarity, smoothness, and ease of narration.
+        - Maintain a conversational, engaging tone appropriate for voice-over or subtitles.
+
+        4. Visual-friendly language:
+        - Choose wording that naturally evokes clear mental images, facilitating easy selection of relevant visuals later.
+        - However, strictly avoid explicit visual direction phrases like "scene opens", "camera zooms", "hình ảnh", "cảnh quay", etc.
+
+        5. Accuracy and faithfulness:
+        - Do NOT add any external information. ONLY use content found directly in the provided transcript. Avoid deviating significantly from original topics or ideas.
+
+        OUTPUT FORMAT:
+        Return ONLY a valid JSON object:
+        {{
+        "title": "Engaging, click-worthy title summarizing video's main point",
+        "initial_scenes": [
+            "Intriguing opening sentence or two (hook).",
+            "Next concise, logically narrated sentence(s) clearly summarizing key ideas.",
+            "...",
+            "Compelling conclusion or question designed to engage viewers and invite interaction."
+        ]
+        }}
+        """
         else:
             logger.error("Step 1 Failed: No valid input provided.")
             return None
 
         logger.info(f"Generating initial script based on: {input_type}")
-
-        prompt_step1 += """\n\nOutput Requirements:
-    - Return ONLY a valid JSON object.
-    - The JSON object must have a 'title' (string) and 'initial_scenes' (list of strings).
-    - Each string in 'initial_scenes' should be one or more complete, natural-sounding sentences covering a part of the topic/article/transcript.
-    - Example Format:
-    {
-    "title": "{style_config['title_hint']}",
-    "initial_scenes": [
-        "First complete sentence or two.",
-        "Next logical sentence or paragraph fragment.",
-        ...
-    ]
-    }"""
 
         # --- Gọi API cho Bước 1 ---
         response_json_str = self._call_openai_api(prompt_step1, request_timeout=120) # Increase timeout for potentially longer processing
@@ -281,7 +355,7 @@ class ScriptGenerator:
             return None
 
     # --- HÀM CHÍNH: generate_script (Sử dụng 2 bước) ---
-    def generate_script(self, article, style="informative", language=None):
+    def generate_script(self, article, style="informative", language=None, video_mode="basic"):
         """
         Tạo kịch bản sử dụng quy trình 2 bước: câu -> shots.
         """
@@ -295,87 +369,109 @@ class ScriptGenerator:
         style_config = cfg.style_configs[style]
         language = language or detect_language(article.get('content', ''))
 
-        # --- Bước 1: Tạo script với câu hoàn chỉnh ---
-        initial_script_data = self._generate_initial_script_sentences(
-            style_config=style_config,
-            article=article,
-            language=language
-        )
-        if not initial_script_data:
-            return None # Lỗi đã được log bên trong hàm con
+        script_result = None
+        enhanced_script = None
 
-        final_title = initial_script_data["title"]
-        initial_sentences = initial_script_data["initial_scenes"]
+        if video_mode == "basic":
+            logger.info("Generating script in Basic mode...")
+            # --- Bước 1: Tạo script với câu hoàn chỉnh ---
+            initial_script_data = self._generate_initial_script_sentences(
+                style_config=style_config,
+                article=article,
+                language=language
+            )
+            if not initial_script_data:
+                return None # Lỗi đã được log bên trong hàm con
 
-        # --- Bước 2: Chia từng câu thành shots và xây dựng cấu trúc cuối cùng ---
-        final_scenes = [] # Danh sách các shots cuối cùng
-        final_speech_units = [] # Danh sách các speech units (tương ứng câu gốc)
-        global_shot_number = 1
-        speech_unit_number = 1
+            final_title = initial_script_data["title"]
+            initial_sentences = initial_script_data["initial_scenes"]
 
-        logger.info("Step 2: Breaking down sentences into visual shots...")
-        for sentence in initial_sentences:
-            if not sentence.strip(): continue # Bỏ qua câu rỗng
+            # --- Bước 2: Chia từng câu thành shots và xây dựng cấu trúc cuối cùng ---
+            final_scenes = [] # Danh sách các shots cuối cùng
+            final_speech_units = [] # Danh sách các speech units (tương ứng câu gốc)
+            global_shot_number = 1
+            speech_unit_number = 1
 
-            # Gọi API để chia câu này thành shots
-            shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
+            logger.info("Step 2: Breaking down sentences into visual shots...")
+            for sentence in initial_sentences:
+                if not sentence.strip(): continue # Bỏ qua câu rỗng
 
-            if shots_for_sentence:
-                shot_numbers_for_unit = []
-                # Thêm các shots vào danh sách cuối cùng với số thứ tự toàn cục
-                for shot_content in shots_for_sentence:
+                # Gọi API để chia câu này thành shots
+                shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
+
+                if shots_for_sentence:
+                    shot_numbers_for_unit = []
+                    # Thêm các shots vào danh sách cuối cùng với số thứ tự toàn cục
+                    for shot_content in shots_for_sentence:
+                        final_scenes.append({
+                            "number": global_shot_number,
+                            "content": shot_content.strip() # Đảm bảo strip
+                        })
+                        shot_numbers_for_unit.append(global_shot_number)
+                        global_shot_number += 1
+
+                    # Tạo speech unit tương ứng với câu gốc
+                    final_speech_units.append({
+                        "unit_number": speech_unit_number,
+                        "text": sentence.strip(), # Giữ nguyên text của câu gốc
+                        "scene_numbers": shot_numbers_for_unit
+                    })
+                    speech_unit_number += 1
+                else:
+                    # Nếu không chia được câu -> xem câu đó như 1 shot duy nhất (Fallback)
+                    logger.warning(f"Could not break down sentence, using the full sentence as a single shot: '{sentence[:50]}...'")
                     final_scenes.append({
                         "number": global_shot_number,
-                        "content": shot_content.strip() # Đảm bảo strip
+                        "content": sentence.strip()
                     })
-                    shot_numbers_for_unit.append(global_shot_number)
+                    final_speech_units.append({
+                        "unit_number": speech_unit_number,
+                        "text": sentence.strip(),
+                        "scene_numbers": [global_shot_number]
+                    })
                     global_shot_number += 1
-
-                # Tạo speech unit tương ứng với câu gốc
-                final_speech_units.append({
-                    "unit_number": speech_unit_number,
-                    "text": sentence.strip(), # Giữ nguyên text của câu gốc
-                    "scene_numbers": shot_numbers_for_unit
-                })
-                speech_unit_number += 1
-            else:
-                # Nếu không chia được câu -> xem câu đó như 1 shot duy nhất (Fallback)
-                logger.warning(f"Could not break down sentence, using the full sentence as a single shot: '{sentence[:50]}...'")
-                final_scenes.append({
-                    "number": global_shot_number,
-                    "content": sentence.strip()
-                })
-                final_speech_units.append({
-                    "unit_number": speech_unit_number,
-                    "text": sentence.strip(),
-                    "scene_numbers": [global_shot_number]
-                })
-                global_shot_number += 1
-                speech_unit_number += 1
+                    speech_unit_number += 1
 
 
-        # --- Kiểm tra kết quả cuối cùng ---
-        if not final_scenes or not final_speech_units:
-            logger.error("Script generation failed: No valid scenes or speech units were created after breakdown.")
+            # --- Kiểm tra kết quả cuối cùng ---
+            if not final_scenes or not final_speech_units:
+                logger.error("Script generation failed: No valid scenes or speech units were created after breakdown.")
+                return None
+
+            logger.info(f"Script generation complete: {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
+
+            # --- Tạo đối tượng script cuối cùng ---
+            script_result = {
+                "project_id": project_id,
+                "title": final_title,
+                "scenes": final_scenes,           # Danh sách shots ngắn
+                "speech_units": final_speech_units, # Speech units là các câu gốc
+                "source": article.get('source', 'Unknown'),
+                "url": article.get('url', ''),
+                "style": style,
+                "language": language,
+                "is_ai_generated": False,
+                "creation_timestamp": datetime.datetime.now().isoformat()
+            }
+        elif video_mode == "advanced":
+            logger.info("Generating script in Advanced (Chapters) mode...")
+            # Gọi hàm mới để tạo script nâng cao
+            script_result = self._generate_advanced_script(
+                source_data={'type': 'article', 'data': article},
+                style_config=style_config,
+                language=language,
+                style=style, # Pass style for metadata
+                project_id=project_id # Pass project_id
+            )
+            if not script_result:
+                logger.error("Failed to generate advanced script.")
+                return None
+
+        else:
+            logger.error(f"Invalid video_mode: '{video_mode}'. Cannot generate script.")
             return None
 
-        logger.info(f"Script generation complete: {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
-
-        # --- Tạo đối tượng script cuối cùng ---
-        script_result = {
-            "project_id": project_id,
-            "title": final_title,
-            "scenes": final_scenes,           # Danh sách shots ngắn
-            "speech_units": final_speech_units, # Speech units là các câu gốc
-            "source": article.get('source', 'Unknown'),
-            "url": article.get('url', ''),
-            "style": style,
-            "language": language,
-            "is_ai_generated": False,
-             "creation_timestamp": datetime.datetime.now().isoformat()
-        }
-
-        # --- Gọi phân tích video (Enhance Script - logic giữ nguyên) ---
+        # --- Gọi phân tích video (Enhance Script) ---
         # Logic này hoạt động trên `scenes` (shots)
         enhanced_script = script_result
         if enhance_script_with_video_annotations and VIDEO_SETTINGS.get("enable_video_clips", False):
@@ -397,7 +493,7 @@ class ScriptGenerator:
         return enhanced_script
 
     # --- Hàm generate_script_from_keyword ---
-    def generate_script_from_keyword(self, keyword, style="informative", language=None):
+    def generate_script_from_keyword(self, keyword, style="informative", language=None, video_mode="basic"):
         """
         Tạo kịch bản từ từ khóa sử dụng quy trình 2 bước.
         """
@@ -410,66 +506,94 @@ class ScriptGenerator:
         style_config = cfg.style_configs[style]
         language = language or detect_language(keyword)
 
-        # --- Bước 1: Tạo script với câu hoàn chỉnh ---
-        initial_script_data = self._generate_initial_script_sentences(
-            style_config=style_config,
-            keyword=keyword, # Truyền keyword thay vì article
-            language=language
-        )
-        if not initial_script_data:
+        script_result = None
+        enhanced_script = None
+
+        if video_mode == "basic":
+            logger.info("Generating keyword script in Basic mode...")
+            # --- Bước 1: Tạo script với câu hoàn chỉnh ---
+            initial_script_data = self._generate_initial_script_sentences(
+                style_config=style_config,
+                keyword=keyword, # Truyền keyword thay vì article
+                language=language
+            )
+            if not initial_script_data:
+                return None
+
+            final_title = initial_script_data["title"]
+            initial_sentences = initial_script_data["initial_scenes"]
+
+            # --- Bước 2: Chia từng câu thành shots ---
+            final_scenes = []
+            final_speech_units = []
+            global_shot_number = 1
+            speech_unit_number = 1
+
+            logger.info("Step 2: Breaking down generated sentences into visual shots...")
+            for sentence in initial_sentences:
+                # ... (Copy logic chia câu từ hàm generate_script) ...
+                if not sentence.strip(): continue
+                shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
+                if shots_for_sentence:
+                    shot_numbers_for_unit = []
+                    for shot_content in shots_for_sentence:
+                        final_scenes.append({"number": global_shot_number, "content": shot_content.strip()})
+                        shot_numbers_for_unit.append(global_shot_number)
+                        global_shot_number += 1
+                    final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": shot_numbers_for_unit})
+                    speech_unit_number += 1
+                else:
+                    logger.warning(f"Could not break down sentence (keyword), using full sentence as shot: '{sentence[:50]}...'")
+                    final_scenes.append({"number": global_shot_number, "content": sentence.strip()})
+                    final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": [global_shot_number]})
+                    global_shot_number += 1
+                    speech_unit_number += 1
+
+            if not final_scenes or not final_speech_units:
+                logger.error("Script generation failed (keyword): No valid scenes or speech units created.")
+                return None
+
+            logger.info(f"Script generation complete (keyword): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
+
+            # --- Tạo đối tượng script cuối cùng ---
+            script_result = {
+                "project_id": project_id,
+                "title": final_title,
+                "scenes": final_scenes,
+                "speech_units": final_speech_units,
+                "source": "AI Generated",
+                "url": f"keyword://{keyword}",
+                "style": style,
+                "language": language,
+                "keyword": keyword,
+                "is_ai_generated": True,
+                "creation_timestamp": datetime.datetime.now().isoformat()
+            }
+
+        elif video_mode == "advanced":
+            logger.info("Generating keyword script in Advanced (Chapters) mode...")
+            script_result = self._generate_advanced_script(
+                source_data={'type': 'keyword', 'data': keyword},
+                style_config=style_config,
+                language=language,
+                style=style,
+                project_id=project_id
+            )
+            if not script_result:
+                logger.error("Failed to generate advanced keyword script.")
+                return None
+            # Ensure AI generation flag is set correctly for advanced keyword script
+            script_result["is_ai_generated"] = True
+            script_result["source"] = "AI Generated (Chapters)"
+            script_result["url"] = f"keyword_chapters://{keyword}"
+            script_result["keyword"] = keyword
+
+
+        else:
+            logger.error(f"Invalid video_mode: '{video_mode}'. Cannot generate script.")
             return None
 
-        final_title = initial_script_data["title"]
-        initial_sentences = initial_script_data["initial_scenes"]
-
-        # --- Bước 2: Chia từng câu thành shots ---
-        final_scenes = []
-        final_speech_units = []
-        global_shot_number = 1
-        speech_unit_number = 1
-
-        logger.info("Step 2: Breaking down generated sentences into visual shots...")
-        for sentence in initial_sentences:
-            # ... (Copy logic chia câu từ hàm generate_script) ...
-            if not sentence.strip(): continue
-            shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
-            if shots_for_sentence:
-                 shot_numbers_for_unit = []
-                 for shot_content in shots_for_sentence:
-                      final_scenes.append({"number": global_shot_number, "content": shot_content.strip()})
-                      shot_numbers_for_unit.append(global_shot_number)
-                      global_shot_number += 1
-                 final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": shot_numbers_for_unit})
-                 speech_unit_number += 1
-            else:
-                 logger.warning(f"Could not break down sentence (keyword), using full sentence as shot: '{sentence[:50]}...'")
-                 final_scenes.append({"number": global_shot_number, "content": sentence.strip()})
-                 final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": [global_shot_number]})
-                 global_shot_number += 1
-                 speech_unit_number += 1
-
-        if not final_scenes or not final_speech_units:
-            logger.error("Script generation failed (keyword): No valid scenes or speech units created.")
-            return None
-
-        logger.info(f"Script generation complete (keyword): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
-
-        # --- Tạo đối tượng script cuối cùng ---
-        script_result = {
-            "project_id": project_id,
-            "title": final_title,
-            "scenes": final_scenes,
-            "speech_units": final_speech_units,
-            "source": "AI Generated",
-            "url": f"keyword://{keyword}",
-            "style": style,
-            "language": language,
-            "keyword": keyword,
-            "is_ai_generated": True,
-            "creation_timestamp": datetime.datetime.now().isoformat()
-        }
-
-        # --- Gọi phân tích video (Enhance Script - logic giữ nguyên) ---
+        # --- Gọi phân tích video (Enhance Script) ---
         enhanced_script = script_result
         # ... (Copy logic gọi enhance_script_with_video_annotations từ generate_script) ...
         if enhance_script_with_video_annotations and VIDEO_SETTINGS.get("enable_video_clips", False):
@@ -491,7 +615,7 @@ class ScriptGenerator:
         return enhanced_script
 
     # --- NEW Main function for TRANSCRIPT/TEXT input ---
-    def generate_script_from_text(self, input_text, style="informative", language="en", context_hint=None):
+    def generate_script_from_text(self, input_text, style="informative", language="en", context_hint=None, video_mode="basic"):
         """
         Generates a script from raw text (like a transcript) using the 2-step process.
         """
@@ -506,64 +630,92 @@ class ScriptGenerator:
         style_config = cfg.style_configs[style]
         # Language is passed directly
 
-        # --- Step 1: Generate initial script with full sentences ---
-        initial_script_data = self._generate_initial_script_sentences(
-            style_config=style_config,
-            transcript_text=input_text, # Pass transcript text
-            language=language,
-            context_hint=context_hint
-        )
-        if not initial_script_data:
-            return None
+        script_result = None
+        enhanced_script = None
 
-        final_title = initial_script_data["title"]
-        initial_sentences = initial_script_data["initial_scenes"]
+        if video_mode == "basic":
+            logger.info("Generating text script in Basic mode...")
 
-        # --- Step 2: Breakdown sentences and build final structure ---
-        # (Identical logic to other generate functions)
-        final_scenes = []
-        final_speech_units = []
-        global_shot_number = 1
-        speech_unit_number = 1
+            # --- Step 1: Generate initial script with full sentences ---
+            initial_script_data = self._generate_initial_script_sentences(
+                style_config=style_config,
+                transcript_text=input_text, # Pass transcript text
+                language=language,
+                context_hint=context_hint
+            )
+            if not initial_script_data:
+                return None
 
-        logger.info("Step 2: Breaking down generated sentences into visual shots...")
-        for sentence in initial_sentences:
-            if not sentence.strip(): continue
-            shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
-            if shots_for_sentence:
-                shot_numbers_for_unit = []
-                for shot_content in shots_for_sentence:
-                    final_scenes.append({"number": global_shot_number, "content": shot_content.strip()})
-                    shot_numbers_for_unit.append(global_shot_number)
+            final_title = initial_script_data["title"]
+            initial_sentences = initial_script_data["initial_scenes"]
+
+            # --- Step 2: Breakdown sentences and build final structure ---
+            # (Identical logic to other generate functions)
+            final_scenes = []
+            final_speech_units = []
+            global_shot_number = 1
+            speech_unit_number = 1
+
+            logger.info("Step 2: Breaking down generated sentences into visual shots...")
+            for sentence in initial_sentences:
+                if not sentence.strip(): continue
+                shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
+                if shots_for_sentence:
+                    shot_numbers_for_unit = []
+                    for shot_content in shots_for_sentence:
+                        final_scenes.append({"number": global_shot_number, "content": shot_content.strip()})
+                        shot_numbers_for_unit.append(global_shot_number)
+                        global_shot_number += 1
+                    final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": shot_numbers_for_unit})
+                    speech_unit_number += 1
+                else: # Fallback
+                    logger.warning(f"Could not break down sentence (text input), using full sentence as shot: '{sentence[:50]}...'")
+                    final_scenes.append({"number": global_shot_number, "content": sentence.strip()})
+                    final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": [global_shot_number]})
                     global_shot_number += 1
-                final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": shot_numbers_for_unit})
-                speech_unit_number += 1
-            else: # Fallback
-                logger.warning(f"Could not break down sentence (text input), using full sentence as shot: '{sentence[:50]}...'")
-                final_scenes.append({"number": global_shot_number, "content": sentence.strip()})
-                final_speech_units.append({"unit_number": speech_unit_number, "text": sentence.strip(), "scene_numbers": [global_shot_number]})
-                global_shot_number += 1
-                speech_unit_number += 1
+                    speech_unit_number += 1
 
-        if not final_scenes or not final_speech_units:
-            logger.error("Script generation failed (text input): No valid scenes or speech units created.")
+            if not final_scenes or not final_speech_units:
+                logger.error("Script generation failed (text input): No valid scenes or speech units created.")
+                return None
+
+            logger.info(f"Script generation complete (text input): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
+
+            # --- Final script object ---
+            script_result = {
+                "project_id": project_id,
+                "title": final_title,
+                "scenes": final_scenes,
+                "speech_units": final_speech_units,
+                "source": f"AI Generated from Text ({context_hint or 'Input Text'})",
+                "url": f"text://{project_id}", # Placeholder URL
+                "style": style,
+                "language": language,
+                "is_ai_generated": True,
+                "creation_timestamp": datetime.datetime.now().isoformat()
+            }
+
+        elif video_mode == "advanced":
+            logger.info("Generating text script in Advanced (Chapters) mode...")
+            script_result = self._generate_advanced_script(
+                source_data={'type': 'text', 'data': input_text, 'context': context_hint},
+                style_config=style_config,
+                language=language,
+                style=style,
+                project_id=project_id
+            )
+            if not script_result:
+                logger.error("Failed to generate advanced text script.")
+                return None
+            # Ensure AI generation flag is set correctly for advanced text script
+            script_result["is_ai_generated"] = True
+            script_result["source"] = f"AI Generated from Text (Chapters - {context_hint or 'Input Text'})"
+            script_result["url"] = f"text_chapters://{project_id}"
+
+
+        else:
+            logger.error(f"Invalid video_mode: '{video_mode}'. Cannot generate script.")
             return None
-
-        logger.info(f"Script generation complete (text input): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
-
-        # --- Final script object ---
-        script_result = {
-            "project_id": project_id,
-            "title": final_title,
-            "scenes": final_scenes,
-            "speech_units": final_speech_units,
-            "source": f"AI Generated from Text ({context_hint or 'Input Text'})",
-            "url": f"text://{project_id}", # Placeholder URL
-            "style": style,
-            "language": language,
-            "is_ai_generated": True,
-            "creation_timestamp": datetime.datetime.now().isoformat()
-        }
 
         # --- Enhance with video annotations ---
         enhanced_script = script_result
@@ -584,6 +736,212 @@ class ScriptGenerator:
                  scene['prefer_video'] = False
 
         return enhanced_script
+
+    def _generate_advanced_script(self, source_data, style_config, language, style, project_id):
+        """Generates a chapter-based script using OpenAI."""
+        logger.info("Step 1 (Advanced): Generating chapter structure...")
+
+        # --- Bước 1: Tạo Prompt cho Chapters ---
+
+        prompt_step1_advanced = f"""
+        You are an expert video scriptwriter and storyteller known for creating highly engaging, insightful, emotionally resonant, and comprehensive video scripts.
+
+        Your goal is to produce the highest quality, deeply thoughtful, and truly comprehensive video script possible, carefully avoiding superficial summaries or brief overviews.
+
+        Video Style Requirements:
+        - Tone: {style_config['tone']}
+        - Instructions: {'; '.join(style_config['instructions'])}
+
+        Input Content Details:
+        """
+        input_type = source_data.get('type', 'unknown')
+        content_data = source_data.get('data', '')
+        context_hint = source_data.get('context', None)
+
+        if input_type == 'article':
+            prompt_step1_advanced += f"- Type: News Article\n"
+            prompt_step1_advanced += f"- Title: {content_data.get('title', '')}\n"
+            prompt_step1_advanced += f"- Content to Analyze & Structure:\n{safe_truncate(content_data.get('content', ''))}\n"
+            prompt_step1_advanced += "\nTask: Thoroughly analyze the article. Provide a deep, comprehensive, detailed narrative across clearly defined chapters. Include substantial background context, critical insights, emotional depth, illustrative examples, multiple perspectives, and implications to deliver a fully-rounded narrative."
+        elif input_type == 'keyword':
+            lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
+            prompt_step1_advanced += f"- Type: Keyword/Topic\n"
+            prompt_step1_advanced += f"- Topic: \"{content_data}\"\n"
+            prompt_step1_advanced += f"""
+        Task: Extensively research and develop a truly comprehensive, detailed, and highly informative script {lang_instruction} about '{content_data}'.
+
+        Explicitly adhere to these guidelines:
+        - Aim for depth, providing extensive analysis, detailed explanations, historical context, practical examples, critical viewpoints, emotional resonance, and storytelling techniques to significantly enhance viewer engagement.
+        - Avoid superficial or overly brief chapters; each chapter must comprehensively explore its respective facet of the topic.
+        - Provide rich context and clear narrative progression from foundational concepts to advanced insights, ensuring clarity and complete understanding for the audience.
+        - Clearly define your intended audience and tailor language, tone, and examples accordingly to maximize viewer resonance and impact.
+        - Conclude each chapter with thoughtful reflections, actionable insights, or intriguing points that encourage further thinking or action by the viewers.
+        """
+        elif input_type == 'text':
+            lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
+            prompt_step1_advanced += f"- Type: Input Text {f'({context_hint})' if context_hint else ''}\n"
+            prompt_step1_advanced += f"- Text Content to Structure:\n{safe_truncate(content_data, 12000)}\n"
+            prompt_step1_advanced += f"\nTask: Provide a deeply analytical, well-organized, and genuinely comprehensive narrative based on the text {lang_instruction}. Structure into detailed chapters, fully exploring each aspect with emotional depth, compelling storytelling, and rich explanations, avoiding superficial summaries at all costs."
+        else:
+            logger.error("Invalid source data type for advanced script generation.")
+            return None
+
+        prompt_step1_advanced += f"""
+
+        Chapter Requirements:
+        - Create between 3 and 7 chapters, focusing exclusively on achieving comprehensive depth and clarity. Never sacrifice content quality or detail for brevity.
+        - Clearly identify the emotional goals (e.g., curiosity, empathy, inspiration, excitement, nostalgia) and deliberately structure the narrative to consistently achieve these emotional impacts throughout.
+        - Each chapter must explore its topic comprehensively, providing rich context, detailed examples, extensive explanations, critical analysis, emotional resonance, and engaging storytelling.
+        - Chapters must logically build upon each other, presenting information clearly, progressively, and cohesively from foundational to advanced levels.
+        - Actively employ storytelling techniques—including anecdotes, metaphors, rhetorical questions, suspenseful narratives, historical examples—to enhance emotional and intellectual engagement.
+        - Explicitly tailor your narrative style (language complexity, tone, and choice of examples) to your defined target audience, ensuring maximum resonance and viewer satisfaction.
+        - Include actionable insights or reflective conclusions at the end of each chapter, enabling viewers to derive personal or practical value from the video.
+        - Begin Chapter 1 with an intriguing opening that strongly captures viewer attention and clearly communicates the importance of the topic.
+        - End the final chapter with a memorable and thoughtful conclusion, reinforcing key ideas and inspiring viewer reflection or further exploration.
+        - Generate insightful, concise, and engaging `chapter_title` for each chapter (max 5-7 words).
+        - For each chapter, provide extensive narrative content as a list of natural-sounding, detailed sentences (`chapter_content`) designed specifically for professional-quality voice-over narration.
+        - Absolutely DO NOT include visual directions, editing instructions, or formatting cues.
+
+        Output Format:
+        Return ONLY a valid JSON object following this exact structure, without explanations or markdown formatting:
+        {{
+        "title": "Highly Engaging and Insightful Video Title About the Topic",
+        "chapters": [
+            {{
+            "chapter_number": 1,
+            "chapter_title": "Concise Chapter 1 Title",
+            "chapter_content": [
+                "Detailed opening sentence(s), strongly engaging viewers with context and emotional resonance.",
+                "Further extensive and insightful sentences, continuing with comprehensive explanations and vivid storytelling."
+            ]
+            }},
+            {{
+            "chapter_number": 2,
+            "chapter_title": "Insightful Chapter 2 Title",
+            "chapter_content": [
+                "Comprehensive and detailed exploration of chapter 2's main points, enriched by critical perspectives and compelling storytelling.",
+                "Additional sentences providing thorough analysis, context-rich examples, emotional resonance, and actionable takeaways."
+            ]
+            }}
+            // ... additional detailed and comprehensive chapters
+        ]
+        }}
+        """
+        
+        # Call OpenAI API (potentially longer timeout needed)
+        response_json_str = self._call_openai_api(prompt_step1_advanced, request_timeout=180) # Increased timeout
+        if not response_json_str:
+            logger.error("Step 1 (Advanced) Failed: No response from API for chapter structure.")
+            return None
+
+        # --- Bước 2: Parse và Flatten ---
+        try:
+            chapter_data = json.loads(response_json_str)
+
+            # Validate structure
+            if not isinstance(chapter_data, dict) or \
+            "title" not in chapter_data or not isinstance(chapter_data["title"], str) or \
+            "chapters" not in chapter_data or not isinstance(chapter_data["chapters"], list) or \
+            not chapter_data["chapters"]:
+                logger.error(f"Step 1 (Advanced) Failed: Invalid JSON structure received: {chapter_data}")
+                return None
+
+            final_title = chapter_data["title"]
+            final_scenes = []
+            final_speech_units = []
+            global_shot_number = 1
+            speech_unit_number = 1
+
+            logger.info("Step 2 (Advanced): Flattening chapters and breaking sentences into shots...")
+
+            for chapter in chapter_data["chapters"]:
+                # Validate chapter structure
+                if not isinstance(chapter, dict) or \
+                "chapter_number" not in chapter or not isinstance(chapter["chapter_number"], int) or \
+                "chapter_title" not in chapter or not isinstance(chapter["chapter_title"], str) or \
+                "chapter_content" not in chapter or not isinstance(chapter["chapter_content"], list):
+                    logger.warning(f"Skipping invalid chapter structure: {chapter}")
+                    continue
+
+                chapter_num = chapter["chapter_number"]
+                chapter_title = chapter["chapter_title"].strip()
+                chapter_content_sentences = chapter["chapter_content"]
+
+                logger.info(f"  Processing Chapter {chapter_num}: '{chapter_title}' ({len(chapter_content_sentences)} sentences)")
+
+                if not chapter_content_sentences:
+                    logger.warning(f"Chapter {chapter_num} has empty content. Skipping.")
+                    continue
+
+                for sentence in chapter_content_sentences:
+                    sentence = sentence.strip()
+                    if not sentence: continue
+
+                    # Breakdown sentence into shots (reuse existing function)
+                    shots_for_sentence = self._breakdown_sentence_into_shots(sentence, style_config['tone'])
+
+                    if not shots_for_sentence: # Fallback if breakdown fails
+                        logger.warning(f"(Advanced) Could not break down sentence in Chapter {chapter_num}, using full sentence as shot: '{sentence[:50]}...'")
+                        shots_for_sentence = [sentence] # Treat full sentence as one shot
+
+                    shot_numbers_for_unit = []
+                    for shot_content in shots_for_sentence:
+                        shot_content = shot_content.strip()
+                        if not shot_content: continue
+
+                        scene = {
+                            "number": global_shot_number,
+                            "content": shot_content,
+                            "chapter_number": chapter_num,
+                            "chapter_title": chapter_title
+                        }
+                        final_scenes.append(scene)
+                        shot_numbers_for_unit.append(global_shot_number)
+                        global_shot_number += 1
+
+                    if shot_numbers_for_unit: # Only create speech unit if scenes were generated
+                        speech_unit = {
+                            "unit_number": speech_unit_number,
+                            "text": sentence, # Original sentence for TTS
+                            "scene_numbers": shot_numbers_for_unit,
+                            "chapter_number": chapter_num,
+                            "chapter_title": chapter_title
+                        }
+                        final_speech_units.append(speech_unit)
+                        speech_unit_number += 1
+
+            if not final_scenes or not final_speech_units:
+                logger.error("Script generation failed (Advanced): No valid scenes or speech units were created after flattening.")
+                return None
+
+            logger.info(f"Script generation complete (Advanced): {len(final_scenes)} shots, {len(final_speech_units)} speech units across {len(chapter_data['chapters'])} chapters.")
+
+            # --- Bước 3: Return final script object ---
+            # Basic metadata - specific source/url will be added in the calling function
+            advanced_script_result = {
+                "project_id": project_id,
+                "title": final_title,
+                "scenes": final_scenes,
+                "speech_units": final_speech_units,
+                "source": "AI Generated (Chapters)", # Placeholder, specific source added later
+                "url": "",                          # Placeholder, specific URL added later
+                "style": style,
+                "language": language,
+                "script_mode": "advanced", # Indicate mode
+                "is_chapter_based": True, # Explicit flag
+                "is_ai_generated": True, # Always true for advanced mode currently
+                "creation_timestamp": datetime.datetime.now().isoformat()
+            }
+            return advanced_script_result
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Step 1 (Advanced) Failed: Could not decode JSON response for chapters: {e}")
+            logger.debug(f"Received content: {response_json_str}")
+            return None
+        except Exception as e:
+            logger.error(f"Step 2 (Advanced) Failed: Unexpected error parsing or flattening chapters: {e}", exc_info=True)
+            return None
+    # --- End of _generate_advanced_script ---
 
     def _call_openai_api(self, prompt, max_retries=3, request_timeout=90):
         """Gọi OpenAI API, yêu cầu JSON, có retry đơn giản."""

@@ -1,3 +1,5 @@
+# --- START OF FILE main.py ---
+
 # main.py
 import logging
 import os
@@ -28,7 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Force always using controversial style
+# Force always using controversial style (Keep this if needed, but user choice will override if False)
 FORCE_CONTROVERSIAL_STYLE = False
 
 # --- Add youtube-transcript-api import ---
@@ -36,96 +38,98 @@ try:
     from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
 except ImportError:
     YouTubeTranscriptApi = None
+    logger.warning("youtube-transcript-api not installed. YouTube transcript feature disabled.")
 # -----------------------------------------
 
-# --- Hàm Helper để hỏi Style ---
+# --- Helper function to prompt for Style ---
 def prompt_for_style():
-    """Hàm hiển thị menu, hỏi và trả về style do người dùng chọn."""
-    print("\nChọn phong cách cho video:")
-    print("1. Thông tin (informative) - Giọng điệu chính thống, chuyên nghiệp")
-    print("2. Hội thoại (conversational) - Giọng điệu thân thiện, gần gũi")
-    print("3. Kịch tính (dramatic) - Gây ấn tượng mạnh, tập trung vào tác động")
-    print("4. Gây tranh cãi (controversial) - Nêu bật các quan điểm đối lập, gây tranh luận")
-    # Thêm các style khác nếu có trong prompt_generator.py
-    print("5. Cảm xúc (emotional)")
-    print("6. Hài hước (funny)")
-    print("7. Truyền động lực (motivational)")
-
+    """Prompts the user to select a video style and returns the chosen style key."""
+    print("\nSelect a style for the video:")
+    print("1. Informative - Professional, neutral tone")
+    print("2. Conversational - Friendly, approachable tone")
+    print("3. Dramatic - Emphasizes impact, strong emotions")
+    print("4. Controversial - Highlights opposing views, provokes debate")
+    print("5. Emotional - Focuses on feelings and empathy")
+    print("6. Funny - Humorous or lighthearted approach")
+    print("7. Motivational - Inspiring and encouraging")
 
     style_choice = ""
-    # Cập nhật số lượng lựa chọn hợp lệ
     valid_choices = ["1", "2", "3", "4", "5", "6", "7"]
     while style_choice not in valid_choices:
-        style_choice = input(f"Nhập lựa chọn phong cách ({','.join(valid_choices)}, mặc định là 1): ").strip()
+        style_choice = input(f"Enter style choice ({','.join(valid_choices)}, default is 1): ").strip()
         if not style_choice:
-            style_choice = "1"  # Mặc định là Informative
+            style_choice = "1"  # Default to Informative
 
-    # Ánh xạ lựa chọn sang phong cách
     style_map = {
-        "1": "informative",
-        "2": "conversational",
-        "3": "dramatic",
-        "4": "controversial",
-        "5": "emotional",
-        "6": "funny",
-        "7": "motivational"
+        "1": "informative", "2": "conversational", "3": "dramatic",
+        "4": "controversial", "5": "emotional", "6": "funny", "7": "motivational"
     }
-    return style_map.get(style_choice, "informative") # Fallback về informative
-# --- Kết thúc hàm Helper ---
+    chosen_style = style_map.get(style_choice, "informative")
 
+    # Apply FORCE_CONTROVERSIAL_STYLE if set
+    if FORCE_CONTROVERSIAL_STYLE:
+        logger.warning("FORCE_CONTROVERSIAL_STYLE is enabled. Overriding user choice.")
+        return "controversial"
+    else:
+        return chosen_style
+
+# --- Helper function to prompt for Visual Source ---
+def prompt_for_visual_source():
+    """Prompts the user to select the source for visual elements."""
+    print("\nSelect method for creating visuals (images/videos):")
+    print("1. Search online (Serper, Pexels, Pixabay) - Default")
+    print("2. Generate images with AI (Google Imagen 3)")
+
+    vis_choice = ""
+    while vis_choice not in ["1", "2"]:
+        vis_choice = input("Enter visual source choice (1 or 2, default is 1): ").strip()
+        if not vis_choice:
+            vis_choice = "1"
+
+    if vis_choice == "2":
+        logger.info("Selected AI image generation (Google Imagen 3).")
+        print("Note: AI image generation may take longer and incur costs.")
+        return "ai"
+    else:
+        logger.info("Selected online search for images/videos.")
+        return "search" # default
+
+# --- Helper function to get article from URL ---
 def get_article_from_url(url):
-    """
-    Lấy thông tin bài báo từ một URL cụ thể sử dụng newspaper3k.
-
-    Args:
-        url (str): URL của bài báo.
-
-    Returns:
-        dict: Một dictionary chứa thông tin bài báo (title, content, image_url, source, url)
-              hoặc None nếu có lỗi.
-    """
+    """Fetches article information from a URL using newspaper3k."""
     try:
-        logger.info(f"Đang tải và phân tích bài báo từ URL: {url}")
+        logger.info(f"Downloading and parsing article from URL: {url}")
         article_obj = Article(url)
         article_obj.download()
-        time.sleep(1)
+        # Add a small delay after download before parsing
+        time.sleep(1) # Consider making this configurable or removing if not needed
         article_obj.parse()
 
         if not article_obj.title or not article_obj.text:
-            logger.error(f"Không thể trích xuất tiêu đề hoặc nội dung từ URL: {url}")
+            logger.error(f"Could not extract title or content from URL: {url}")
             return None
 
-        # Tạo cấu trúc giống như bài báo lấy từ RSS
+        # Create a structure similar to RSS articles
         article_data = {
             'title': article_obj.title,
             'content': article_obj.text,
-            'summary': article_obj.summary, # newspaper3k tự tạo summary
+            'summary': article_obj.summary, # newspaper3k generates summary
             'image_url': article_obj.top_image,
-            'source': article_obj.source_url or urlparse(url).netloc, # Lấy tên miền làm nguồn nếu có
+            'source': article_obj.source_url or urlparse(url).netloc, # Use domain as source fallback
             'url': url,
             'published_date': article_obj.publish_date.strftime("%Y-%m-%d") if article_obj.publish_date else datetime.now().strftime("%Y-%m-%d"),
-            'language': article_obj.meta_lang or 'en' # Thử lấy ngôn ngữ từ meta tag
+            'language': article_obj.meta_lang or 'en' # Try getting language from meta tag
         }
-        logger.info(f"Đã trích xuất thành công bài báo: '{article_data['title']}'")
+        logger.info(f"Successfully extracted article: '{article_data['title']}'")
         return article_data
 
     except Exception as e:
-        logger.error(f"Lỗi khi xử lý URL bài báo {url}: {str(e)}", exc_info=True)
+        logger.error(f"Error processing article URL {url}: {str(e)}", exc_info=True)
         return None
 
 # --- Function to get YouTube transcript ---
 def get_youtube_transcript(video_url, languages=None):
-    """
-    Fetches the transcript for a given YouTube video URL.
-
-    Args:
-        video_url (str): The URL of the YouTube video.
-        languages (list, optional): List of preferred languages (e.g., ['vi', 'en']).
-                                    Defaults to ['en', 'vi'].
-
-    Returns:
-        tuple: (transcript_text, detected_language) or (None, None) if failed.
-    """
+    """Fetches the transcript for a given YouTube video URL."""
     if languages is None:
         languages = ['en', 'vi'] # Default preference
 
@@ -135,10 +139,9 @@ def get_youtube_transcript(video_url, languages=None):
 
     video_id = None
     try:
-        # Try extracting video ID using regex for various URL formats
         patterns = [
-            r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', # Standard watch?v=... or /v/...
-            r'(?:embed\/|v\/|youtu\.be\/)([0-9A-Za-z_-]{11}).*' # embed, v/, youtu.be/
+            r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+            r'(?:embed\/|v\/|youtu\.be\/)([0-9A-Za-z_-]{11}).*'
         ]
         for pattern in patterns:
             match = re.search(pattern, video_url)
@@ -153,24 +156,20 @@ def get_youtube_transcript(video_url, languages=None):
         logger.info(f"Extracted YouTube Video ID: {video_id}")
         logger.info(f"Attempting to fetch transcript for video ID {video_id} in languages: {languages}")
 
-        # Fetch the transcript
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-
-        # Find a suitable transcript (manual or generated)
         transcript = None
         detected_language = None
 
-        # Try preferred languages first
+        # Try preferred languages (manual first)
         for lang_code in languages:
             try:
                 transcript = transcript_list.find_transcript([lang_code])
                 detected_language = lang_code
                 logger.info(f"Found manually created transcript in '{lang_code}'.")
                 break
-            except NoTranscriptFound:
-                continue # Try next language
+            except NoTranscriptFound: continue
 
-        # If no manual transcript in preferred languages, try generated ones
+        # Try preferred languages (generated)
         if not transcript:
             for lang_code in languages:
                 try:
@@ -178,31 +177,34 @@ def get_youtube_transcript(video_url, languages=None):
                     detected_language = lang_code
                     logger.info(f"Found automatically generated transcript in '{lang_code}'.")
                     break
-                except NoTranscriptFound:
-                    continue # Try next language
+                except NoTranscriptFound: continue
 
-        # If still no transcript, try any available language
+        # Try any available language if still not found
         if not transcript:
             logger.warning(f"No transcript found in preferred languages {languages}. Trying any available language.")
             try:
-                 # Iterate through all available transcripts
-                 available_transcripts = transcript_list._transcripts # Accessing internal dict might be fragile
-                 if available_transcripts:
-                    first_lang = list(available_transcripts.keys())[0]
-                    transcript = transcript_list.find_transcript([first_lang])
-                    detected_language = first_lang
-                    logger.info(f"Found transcript in language: '{detected_language}'.")
-                 else:
+                available_transcripts_list = list(transcript_list) # Get available transcripts
+                if available_transcripts_list:
+                    first_available = available_transcripts_list[0]
+                    transcript = first_available.translate('en') # Example: try translating to English
+                    # Or simply fetch the first one: transcript = first_available
+                    # transcript = transcript_list.find_transcript([first_available.language_code]) # Fetch using its code
+                    detected_language = first_available.language # Get the actual language code
+                    logger.info(f"Found transcript in language: '{detected_language}'. Will attempt fetch.")
+                    # Ensure we get the right object to call fetch on
+                    transcript = transcript_list.find_transcript([detected_language])
+                else:
                     raise NoTranscriptFound("No transcripts available at all.")
             except NoTranscriptFound:
                 logger.error(f"No transcript found for video {video_id} in any language.")
                 return None, None
+            except Exception as find_err:
+                 logger.error(f"Error finding any transcript for video {video_id}: {find_err}", exc_info=True)
+                 return None, None
 
         # Fetch the actual transcript data
         transcript_data = transcript.fetch()
-
-        # Combine the text segments
-        full_transcript = " ".join([segment.text for segment in transcript_data])
+        full_transcript = " ".join([segment['text'] for segment in transcript_data]) # Use dict access
 
         logger.info(f"Successfully fetched transcript (Language: {detected_language}, Length: {len(full_transcript)} chars)")
         return full_transcript, detected_language
@@ -210,445 +212,381 @@ def get_youtube_transcript(video_url, languages=None):
     except TranscriptsDisabled:
         logger.error(f"Transcripts are disabled for video: {video_id}")
         return None, None
-    except NoTranscriptFound: # Catch specific error if find_transcript fails broadly
+    except NoTranscriptFound:
         logger.error(f"Could not find any transcript for video: {video_id}")
         return None, None
     except Exception as e:
         logger.error(f"Error fetching YouTube transcript for {video_url}: {str(e)}", exc_info=True)
         return None, None
-# --- End of new function ---
+# --- End of YouTube function ---
 
 def main():
-    logger.info("Starting automated news video generation program")
-    
-    # Ensure directories exist
+    logger.info("="*20 + " Automated News Video Generation " + "="*20)
+
+    # Ensure base directories exist
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # --- HỎI LỰA CHỌN CỦA NGƯỜI DÙNG ---
-    print("\nChọn phương thức lấy tin tức:")
-    print("1. Lấy tin mới nhất từ nguồn RSS đã cấu hình.")
-    print("2. Nhập URL của một bài báo cụ thể.")
-    print("3. Tạo video từ từ khóa (nội dung tạo bởi AI).")
-    print("4. Tạo video từ phụ đề Video Youtube.")
+    # --- Gather ALL User Inputs First ---
+    print("\n--- Step 1: Select Input Source ---")
+    print("1. Latest news from configured RSS feeds.")
+    print("2. Specific article URL.")
+    print("3. Generate video from a keyword (AI content).")
+    print("4. Generate video from a YouTube video transcript.")
 
     choice = ""
-    visual_source_choice = "search" # Default to search for images/videos to create video
-
-    while choice not in ["1", "2", "3", "4"]:
-        choice = input("Nhập lựa chọn của bạn (1, 2, 3 hoặc 4): ").strip()
+    valid_choices = ["1", "2", "3", "4"]
+    while choice not in valid_choices:
+        choice = input(f"Enter your choice ({','.join(valid_choices)}): ").strip()
         if choice == "4" and YouTubeTranscriptApi is None:
-            print("Lỗi: Tính năng này yêu cầu thư viện 'youtube-transcript-api'. Vui lòng cài đặt: pip install youtube-transcript-api")
-            choice = "" # Reset choice to ask again
+            print("Error: YouTube Transcript feature requires 'youtube-transcript-api'.")
+            print("Please install it: pip install youtube-transcript-api")
+            choice = "" # Ask again
 
-    # Khởi tạo các biến chung
-    selected_article = None
-    script_path = None
-    script = None
-    articles = []
-    categorized = {}
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    selected_style = None
+    # --- Get Video Mode ---
+    print("\n--- Step 1.5: Select Video Mode ---") # Numeration adjusted for clarity
+    print("1. Basic Video (Standard news style) - Default")
+    print("2. Advanced Video (Chapters for detailed topics)")
+
+    video_mode_choice = ""
+    video_mode = "basic" # Default mode
+    valid_mode_choices = ["1", "2"]
+    while video_mode_choice not in valid_mode_choices:
+        video_mode_choice = input(f"Enter video mode choice ({','.join(valid_mode_choices)}, default is 1): ").strip()
+        if not video_mode_choice:
+            video_mode_choice = "1" # Default to Basic
+
+    if video_mode_choice == "2":
+        video_mode = "advanced"
+        # --- Add Guidance ---
+        logger.info("Selected Advanced (Chapters) mode.")
+        print("INFO: Advanced mode works best with 'Keyword/Topic' input or longer 'Article URL'/'YouTube Transcript' inputs.")
+        # Optional: Add warning if incompatible source was chosen earlier (e.g., RSS)
+        if choice == "1":
+            logger.warning("Advanced (Chapters) mode might not be ideal for short news items typically found in RSS feeds.")
+    else:
+        video_mode = "basic"
+        logger.info("Selected Basic (Standard) mode.")
+    # --- End Get Video Mode ---
+
+    # --- Get specific details based on choice ---
+    article_url = None
     keyword = None
-    transcript_text = None
     youtube_url = None
-    language = "en"
-    script_generator = ScriptGenerator()
+    preferred_langs_yt = ['en', 'vi']
+    language = "en" # Default language, will be updated
 
-    # --- XỬ LÝ LỰA CHỌN 1: LẤY TỪ RSS ---
-    if choice == "1":
-        logger.info("Lựa chọn 1: Lấy tin từ RSS...")
-        # Initialize scraper and fetch news
-        scraper = NewsScraper()
-        articles = scraper.fetch_articles(limit=5) # Giới hạn số lượng để không quá lâu
-
-        if not articles:
-            logger.error("Không tìm thấy bài báo nào từ RSS. Kết thúc chương trình.")
-            return
-
-        logger.info(f"Tìm thấy {len(articles)} bài báo từ RSS.")
-
-        # Categorize articles
-        categorized = scraper.categorize_articles(articles)
-    
-        # Save fetched news data to temp directory for future reference
-        with open(os.path.join(TEMP_DIR, f"articles_{timestamp}.json"), 'w', encoding='utf-8') as f:
-            json.dump(articles, f, ensure_ascii=False, indent=2)
-    
-        # Select an article for video creation
-        priority_categories = ['politics', 'technology', 'business', 'entertainment', 'general']
-    
-        for category in priority_categories:
-            # Lấy danh sách bài báo cho category, xử lý trường hợp key không tồn tại
-            category_articles = categorized.get(category, [])
-            if category_articles: # Kiểm tra xem danh sách có rỗng không
-                selected_article = category_articles[0]
-                logger.info(f"Đã chọn bài báo từ danh mục {category}: {selected_article['title']}")
-                break
-    
-        if not selected_article:
-            # Fallback: Nếu không có bài nào trong các category ưu tiên, lấy bài đầu tiên
-            if articles:
-                selected_article = articles[0]
-                logger.info(f"Không tìm thấy bài trong category ưu tiên, chọn bài báo đầu tiên: {selected_article['title']}")
-            else:
-                # Trường hợp này gần như không xảy ra vì đã kiểm tra articles ở trên
-                logger.error("Không có bài báo nào phù hợp để tạo script.")
-                return
-
-        # *** Hỏi Style NGAY SAU KHI có selected_article ***
-        selected_style = prompt_for_style()
-        language = selected_article.get('language', 'vi') # Lấy ngôn ngữ từ bài báo
-        logger.info(f"Ngôn ngữ bài báo: {language}. Phong cách đã chọn: {selected_style}")
-
-        # Tạo script
-        script = script_generator.generate_script(selected_article, style=selected_style)
-
-    # --- XỬ LÝ LỰA CHỌN 2: NHẬP URL ---
-    elif choice == "2":
-        logger.info("Lựa chọn 2: Nhập URL bài báo...")
-        article_url = ""
+    if choice == "2":
         while not article_url:
-            article_url = input("Nhập URL bài báo bạn muốn tạo video: ").strip()
+            article_url = input("Enter the article URL: ").strip()
             if not article_url.startswith('http'):
-                logger.warning("URL không hợp lệ. Vui lòng nhập URL đầy đủ (bắt đầu bằng http:// hoặc https://).")
-                article_url = "" # Reset để hỏi lại
+                logger.warning("Invalid URL. Please include http:// or https://.")
+                article_url = ""
+    elif choice == "3":
+        while not keyword:
+            keyword = input("Enter the keyword for AI video generation: ").strip()
+            if len(keyword) < 3:
+                logger.warning("Keyword is too short.")
+                keyword = ""
+        lang_choice = input("Select output language (vi/en, default vi): ").strip().lower()
+        language = "en" if lang_choice == "en" else "vi"
+    elif choice == "4":
+        while not youtube_url:
+            youtube_url = input("Enter the YouTube video URL: ").strip()
+            if not ("youtube.com" in youtube_url or "youtu.be" in youtube_url):
+                logger.warning("Invalid YouTube URL.")
+                youtube_url = ""
+        lang_pref_input = input(f"Enter preferred transcript languages (comma-separated, e.g., en,vi), leave blank for default ({','.join(preferred_langs_yt)}): ").strip().lower()
+        if lang_pref_input:
+            preferred_langs_yt = [lang.strip() for lang in lang_pref_input.split(',') if lang.strip()]
 
-        # Lấy thông tin bài báo từ URL
-        selected_article = get_article_from_url(article_url)
+    # --- Get Style ---
+    print("\n--- Step 2: Select Video Style ---")
+    selected_style = prompt_for_style()
 
-        if not selected_article:
-            logger.error(f"Không thể xử lý bài báo từ URL đã nhập. Kết thúc chương trình.")
+    # --- Get Visual Source ---
+    print("\n--- Step 3: Select Visual Source ---")
+    visual_source_choice = prompt_for_visual_source()
+
+    logger.info("--- User Input Gathering Complete ---")
+    logger.info(f"Input Method: {choice}")
+    if article_url: logger.info(f"Article URL: {article_url}")
+    logger.info(f"Selected Mode: {video_mode}")
+    if article_url: logger.info(f"Article URL: {article_url}")
+    if keyword: logger.info(f"Keyword: {keyword}, Language: {language}")
+    if youtube_url: logger.info(f"YouTube URL: {youtube_url}, Pref Langs: {preferred_langs_yt}")
+    logger.info(f"Selected Style: {selected_style}")
+    logger.info(f"Visual Source: {visual_source_choice}")
+    print("-" * 50)
+
+    # --- Start Processing Based on Inputs ---
+    script_generator = ScriptGenerator()
+    script = None
+    selected_article = None
+    transcript_text = None
+    transcript_language = None
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # --- Action based on choice ---
+    if choice == "1": # RSS
+        logger.info("Processing Choice 1: Fetching from RSS...")
+        scraper = NewsScraper()
+        articles = scraper.fetch_articles(limit=5)
+        if not articles:
+            logger.error("No articles found from RSS. Exiting.")
             return
 
-        # *** Hỏi Style NGAY SAU KHI có selected_article ***
-        selected_style = prompt_for_style()
-        language = selected_article.get('language', 'vi') # Lấy ngôn ngữ từ bài báo
-        logger.info(f"Ngôn ngữ bài báo: {language}. Phong cách đã chọn: {selected_style}")
+        logger.info(f"Found {len(articles)} articles from RSS.")
+        categorized = scraper.categorize_articles(articles)
+        # Select article (same logic as before)
+        priority_categories = ['politics', 'technology', 'business', 'entertainment', 'general']
+        for category in priority_categories:
+            category_articles = categorized.get(category, [])
+            if category_articles:
+                selected_article = category_articles[0]
+                logger.info(f"Selected article from category {category}: {selected_article['title']}")
+                break
+        if not selected_article and articles:
+            selected_article = articles[0]
+            logger.info(f"No priority category match, selected first article: {selected_article['title']}")
 
-        # Tạo script
-        script = script_generator.generate_script(selected_article, style=selected_style)
+        if not selected_article:
+            logger.error("Could not select an article from RSS. Exiting.")
+            return
 
-        # Lưu bài báo đã nhập để tham khảo (tùy chọn)
+        language = selected_article.get('language', 'en') # Detect language from selected article
+        logger.info(f"Article language: {language}. Generating script...")
+        script = script_generator.generate_script(selected_article, style=selected_style, language=language, video_mode=video_mode)
+
+        # Save fetched articles (optional)
         try:
-            sanitized_title = "".join(c for c in selected_article['title'][:50] if c.isalnum() or c in (' ', '_')).rstrip()
-            sanitized_title = sanitized_title.replace(' ', '_')
+             with open(os.path.join(TEMP_DIR, f"articles_{timestamp}.json"), 'w', encoding='utf-8') as f:
+                 json.dump(articles, f, ensure_ascii=False, indent=2)
+        except Exception as e: logger.warning(f"Could not save fetched articles: {e}")
+
+
+    elif choice == "2": # URL
+        logger.info("Processing Choice 2: Fetching from URL...")
+        selected_article = get_article_from_url(article_url)
+        if not selected_article:
+            logger.error(f"Failed to process article from URL: {article_url}. Exiting.")
+            return
+
+        language = selected_article.get('language', 'en')
+        logger.info(f"Article language: {language}. Generating script...")
+        script = script_generator.generate_script(selected_article, style=selected_style, language=language, video_mode=video_mode)
+
+        # Save article info (optional)
+        try:
+            sanitized_title = "".join(c for c in selected_article['title'][:50] if c.isalnum() or c in (' ', '_')).rstrip().replace(' ', '_')
             article_filename = f"article_url_{sanitized_title}_{timestamp}.json"
             with open(os.path.join(TEMP_DIR, article_filename), 'w', encoding='utf-8') as f:
                 json.dump(selected_article, f, ensure_ascii=False, indent=2)
-            logger.info(f"Đã lưu thông tin bài báo từ URL vào: {article_filename}")
-        except Exception as save_err:
-            logger.warning(f"Không thể lưu thông tin bài báo từ URL: {save_err}")
-
-    # --- XỬ LÝ LỰA CHỌN 3: TẠO VIDEO TỪ TỪ KHÓA BẰNG AI ---
-    elif choice == "3":
-        logger.info("Lựa chọn 3: Tạo video từ từ khóa bằng AI...")
-        keyword = ""
-        while not keyword:
-            keyword = input("Nhập từ khóa bạn muốn tạo video: ").strip()
-            if len(keyword) < 3:
-                logger.warning("Từ khóa quá ngắn...")
-                keyword = ""
-
-        # Chọn ngôn ngữ output
-        language_choice = input("Chọn ngôn ngữ output (vi/en, mặc định là vi): ").strip().lower()
-        language = "en" if language_choice == "en" else "vi"
-
-        # *** Hỏi Style bằng hàm helper ***
-        selected_style = prompt_for_style()
-        logger.info(f"Đang tạo kịch bản từ từ khóa '{keyword}' với phong cách '{selected_style}' và ngôn ngữ '{language}'...")
-        print("\nĐang xử lý...")
-
-        # Tạo kịch bản trực tiếp từ từ khóa
-        script = script_generator.generate_script_from_keyword(keyword, selected_style, language)
-        
-    # --- NEW: XỬ LÝ LỰA CHỌN 4: TẠO TỪ PHỤ ĐỀ YOUTUBE ---
-    elif choice == "4":
-        logger.info("Lựa chọn 4: Tạo video từ phụ đề Youtube...")
-
-        youtube_url = ""
-        transcript_text = None
-        transcript_language = None
-
-        while not transcript_text:
-            youtube_url = input("Nhập URL của video Youtube: ").strip()
-            # Basic validation
-            if not ("youtube.com" in youtube_url or "youtu.be" in youtube_url):
-                logger.warning("URL không giống link Youtube hợp lệ. Vui lòng thử lại.")
-                continue
-
-            # Fetch transcript
-            print("Đang tải phụ đề từ Youtube...")
-            # Allow specifying preferred languages, default to English then Vietnamese
-            preferred_langs = ['en', 'vi']
-            lang_choice = input(f"Nhập mã ngôn ngữ ưu tiên (vd: en, vi), cách nhau bởi dấu phẩy, hoặc để trống (mặc định {','.join(preferred_langs)}): ").strip().lower()
-            if lang_choice:
-                preferred_langs = [lang.strip() for lang in lang_choice.split(',')]
-
-            transcript_text, transcript_language = get_youtube_transcript(youtube_url, languages=preferred_langs)
-
-            if not transcript_text:
-                logger.error(f"Không thể lấy phụ đề cho URL: {youtube_url}. Vui lòng kiểm tra URL hoặc thử video khác.")
-                # Ask user if they want to try another URL
-                retry = input("Bạn có muốn thử URL khác không? (y/n): ").strip().lower()
-                if retry != 'y':
-                    logger.info("Hủy bỏ tạo video từ Youtube.")
-                    return # Exit main function
-                # Loop continues to ask for URL again
-            else:
-                logger.info(f"Đã lấy được phụ đề (ngôn ngữ: {transcript_language}).")
-                # Save transcript for reference (optional)
-                try:
-                    transcript_filename = f"transcript_{timestamp}.txt"
-                    with open(os.path.join(TEMP_DIR, transcript_filename), 'w', encoding='utf-8') as f:
-                        f.write(f"Source URL: {youtube_url}\nDetected Language: {transcript_language}\n\n")
-                        f.write(transcript_text)
-                    logger.info(f"Đã lưu nội dung phụ đề vào: {transcript_filename}")
-                except Exception as save_err:
-                    logger.warning(f"Không thể lưu file phụ đề: {save_err}")
+            logger.info(f"Saved article info from URL to: {article_filename}")
+        except Exception as save_err: logger.warning(f"Could not save article info from URL: {save_err}")
 
 
-        # *** Hỏi Style bằng hàm helper ***
-        selected_style = prompt_for_style()
+    elif choice == "3": # Keyword
+        logger.info(f"Processing Choice 3: Generating script from keyword '{keyword}'...")
+        # Language was already set during input gathering
+        script = script_generator.generate_script_from_keyword(keyword, selected_style, language, video_mode=video_mode)
 
-        # Chọn ngôn ngữ output
-        language_out_choice = input(f"Chọn ngôn ngữ output (vi/en, mặc định là '{transcript_language or 'vi'}'): ").strip().lower()
-        language = transcript_language if language_out_choice == "" else ("en" if language_out_choice == "en" else "vi")
 
-        logger.info(f"Đang tạo kịch bản từ phụ đề với phong cách '{selected_style}' và ngôn ngữ '{language}'...")
-        print("\nĐang xử lý...")
+    elif choice == "4": # YouTube Transcript
+        logger.info(f"Processing Choice 4: Generating script from YouTube transcript...")
+        print("Fetching transcript...")
+        transcript_text, transcript_language = get_youtube_transcript(youtube_url, languages=preferred_langs_yt)
 
-        # Gọi hàm tạo script từ transcript
+        if not transcript_text:
+            logger.error(f"Could not get transcript for {youtube_url}. Exiting.")
+            return # Exit if transcript fetching fails
+
+        logger.info(f"Transcript fetched (Language: {transcript_language}).")
+
+        # Save transcript (optional)
+        try:
+            transcript_filename = f"transcript_{timestamp}.txt"
+            with open(os.path.join(TEMP_DIR, transcript_filename), 'w', encoding='utf-8') as f:
+                f.write(f"Source URL: {youtube_url}\nDetected Language: {transcript_language}\n\n")
+                f.write(transcript_text)
+            logger.info(f"Saved transcript content to: {transcript_filename}")
+        except Exception as save_err: logger.warning(f"Could not save transcript file: {save_err}")
+
+        # Determine output language (Prompt user or use transcript language)
+        # Example: Ask user again or just use the detected transcript language
+        lang_out_choice = input(f"Select output language (vi/en, default '{transcript_language or 'vi'}'): ").strip().lower()
+        language = transcript_language if not lang_out_choice else ("en" if lang_out_choice == "en" else "vi")
+
+        logger.info(f"Generating script from transcript (Output Lang: {language})...")
         script = script_generator.generate_script_from_text(
             input_text=transcript_text,
             style=selected_style,
             language=language,
-            context_hint=f"YouTube transcript ({youtube_url})"
+            context_hint=f"YouTube transcript ({youtube_url})",
+            video_mode=video_mode # <-- THÊM VÀO ĐÂY
         )
 
-        # --- Kiểm tra và Lưu Script (Thực hiện sau khi đã có script từ bất kỳ lựa chọn nào) ---
-        if not script:
-            logger.error(f"Không thể tạo kịch bản từ phụ đề. Kết thúc chương trình.")
-            return
+    # --- Validation and Script Saving ---
+    if not script:
+        logger.error("Script generation failed. Cannot proceed. Check previous logs.")
+        return
 
-        # Lưu kịch bản
-        script_path = os.path.join(TEMP_DIR, f"script_{timestamp}.json")
-        try:
-            with open(script_path, 'w', encoding='utf-8') as f:
-                json.dump(script, f, ensure_ascii=False, indent=2)
-            logger.info(f"Đã lưu script tại: {script_path}")
-        except Exception as e:
-            logger.error(f"Lỗi khi lưu script: {e}")
-            return
+    # Save the generated script
+    script_path = os.path.join(TEMP_DIR, f"script_{timestamp}.json")
+    try:
+        with open(script_path, 'w', encoding='utf-8') as f:
+            json.dump(script, f, ensure_ascii=False, indent=2)
+        logger.info(f"Script saved to: {script_path}")
+    except Exception as e:
+        logger.error(f"Error saving script: {e}")
+        return # Critical error, cannot proceed without script
 
-        # Hiển thị thông tin script cuối cùng
-        print("\n" + "="*50)
-        print(f"Chuẩn bị tạo video cho: {script.get('title', 'N/A')}") # Dùng .get() để an toàn hơn
-        print(f"Phong cách đã chọn: {selected_style}")
-        print(f"Ngôn ngữ output: {language}")
-        print(f"Số lượng shots (scenes): {len(script.get('scenes', []))}")
-        print(f"Số lượng speech units: {len(script.get('speech_units', []))}")
-        print("="*50 + "\n")
+    # --- Display Final Script Info ---
+    print("\n" + "="*50)
+    print(f"Script Generated: {script.get('title', 'N/A')}")
+    print(f"Input Source Type: {choice}")
+    print(f"Chosen Style: {selected_style}")
+    print(f"Chosen Visual Source: {visual_source_choice}")
+    print(f"Output Language: {language}")
+    print(f"Number of Shots (Scenes): {len(script.get('scenes', []))}")
+    print(f"Number of Speech Units: {len(script.get('speech_units', []))}")
+    print("="*50 + "\n")
+    print("Proceeding with Voice, Visuals, and Video Editing...")
 
-    # --- HỎI LỰA CHỌN NGUỒN VISUAL ---
-    print("\nChọn phương thức tạo hình ảnh/video minh họa:")
-    print("1. Tìm kiếm trên mạng (Serper, Pexels, Pixabay) - Mặc định")
-    print("2. Tạo ảnh bằng AI (Google Imagen 3)") # Specify model if known
-
-    vis_choice = ""
-    while vis_choice not in ["1", "2"]:
-        vis_choice = input("Nhập lựa chọn nguồn visual (1 hoặc 2, mặc định là 1): ").strip()
-        if not vis_choice:
-            vis_choice = "1"
-
-    if vis_choice == "2":
-        visual_source_choice = "ai"
-        logger.info("Đã chọn tạo ảnh bằng AI (Google Imagen 3).")
-        print("Lưu ý: Việc tạo ảnh AI có thể mất nhiều thời gian và chi phí hơn.")
-    else:
-        visual_source_choice = "search" # default
-        logger.info("Đã chọn tìm kiếm hình ảnh/video trên mạng.")
-    # --- KẾT THÚC HỎI NGUỒN VISUAL ---
-
-    ### --- KHỐI TẠO VOICE ---
-    # Generate voice for script
-    logger.info("Generating voice for the script...")
+    # --- Voice Generation ---
+    logger.info("Generating voice...")
     voice_generator = VoiceGenerator()
+    # Optionally set voice/model based on language/style here if needed
+    # voice_generator.set_voice(...)
     audio_files = voice_generator.generate_audio_for_script(script)
-    logger.info(f"Generated {len(audio_files)} audio files for script's speech units.")
-    
     if not audio_files:
-        logger.error("Audio generation failed or returned empty list. Cannot proceed with image/video generation.")
-        return # Thoát nếu không có audio
+        logger.error("Audio generation failed. Cannot proceed.")
+        return
+    logger.info(f"Generated {len(audio_files)} audio files for speech units.")
 
-    ###--- KHỐI TẠO IMAGE/VIDEO ---
-    logger.info("Generating images/videos for the script...")
+    # --- Image/Video Generation ---
+    logger.info("Generating visuals...")
     image_generator = ImageGenerator()
 
-    # Add image from original article if available (only for choices 1 & 2)
+    # Add source image URL to script if applicable (RSS/URL choices)
     if choice in ["1", "2"] and selected_article and 'image_url' in selected_article:
         script['image_url'] = selected_article['image_url']
-    elif choice == "4":
-        # Optionally try to get YouTube thumbnail as a "source image"
-        # This requires additional logic, e.g., using pytube or regex
-        # For simplicity, we'll skip this for now.
-        script['image_url'] = None
-        logger.info("Source image not applicable for YouTube transcript generation.")
-    else: # Choice 3 (keyword) also has no source image
-        script['image_url'] = None
+    else:
+        script['image_url'] = None # No source image for keyword/transcript
 
-    # Generate images (Truyền audio_files vào generate_images_for_script)
-    # audio_files_info argument in ImageGenerator is mainly used for intro/outro timing now
+    # Generate visuals using the chosen method (search or AI)
     images = image_generator.generate_images_for_script(
         script,
-        audio_files_info=audio_files,
-        visual_source=visual_source_choice
+        audio_files_info=audio_files, # Pass audio info (mainly for intro/outro timing now)
+        visual_source=visual_source_choice # Pass the user's choice
     )
+    if not images:
+        logger.error("Visual generation failed. Cannot proceed.")
+        return
+    logger.info(f"Generated {len(images)} visual items (images/videos).")
 
-    logger.info(f"Generated {len(images)} images/videos for script")
-    
-    # Save image information
+    # Save image info (optional)
     images_path = os.path.join(TEMP_DIR, f"images_{timestamp}.json")
-    with open(images_path, 'w', encoding='utf-8') as f:
-        # Only save necessary information
+    try:
         image_info = []
         for img in images:
-            img_copy = {k: v for k, v in img.items() if k not in ['path']} # Exclude absolute path
-            img_copy['filename'] = os.path.basename(img.get('path', '')) # Store only filename
+            img_copy = {k: v for k, v in img.items() if k not in ['path']}
+            img_copy['filename'] = os.path.basename(img.get('path', ''))
             image_info.append(img_copy)
+        with open(images_path, 'w', encoding='utf-8') as f:
+            json.dump(image_info, f, ensure_ascii=False, indent=2)
+        logger.info(f"Saved visual items info to: {images_path}")
+    except Exception as e: logger.warning(f"Could not save visual items info: {e}")
 
-        json.dump(image_info, f, ensure_ascii=False, indent=2)
-
-    logger.info(f"Saved image information at: {images_path}")
-    ###---KẾT THÚC KHỐI TẠO IMAGE/VIDEO---
-    
-    # --- SAVE PROJECT INFORMATION ---
+    # --- Save Project Information ---
     article_info = {}
     creation_method = "unknown"
     if choice == "3": # Keyword
-        article_info = {
-            "title": script['title'], # AI generated title
-            "url": f"keyword://{keyword}",
-            "source": "AI Generated from Keyword"
-        }
+        article_info = {"title": script['title'], "url": f"keyword://{keyword}", "source": "AI Generated from Keyword"}
         creation_method = "ai_keyword"
     elif choice == "4": # YouTube Subtitles
-         article_info = {
-             "title": script['title'], # AI generated title based on transcript
-             "url": youtube_url,
-             "source": f"YouTube Transcript ({youtube_url})"
-         }
+         article_info = {"title": script['title'], "url": youtube_url, "source": f"YouTube Transcript ({youtube_url})"}
          creation_method = "youtube_subtitle"
     elif choice in ["1", "2"]: # RSS or Article URL
-        article_info = {
-            "title": selected_article['title'],
-            "url": selected_article.get('url', ''),
-            "source": selected_article.get('source', '')
-        }
+        article_info = {"title": selected_article['title'], "url": selected_article.get('url', ''), "source": selected_article.get('source', '')}
         creation_method = "url" if choice == "2" else "rss"
 
     project_info = {
         "title": script['title'],
         "timestamp": timestamp,
         "style": selected_style,
-        "article": article_info, # Source info
+        "visual_source": visual_source_choice,
+        "article": article_info,
         "script": {
             "path": script_path,
             "scenes_count": len(script['scenes']),
             "speech_units_count": len(script.get('speech_units', []))
         },
-        # Store relative paths or just filenames for images/audio in project file
         "images": [{"type": img['type'], "filename": os.path.basename(img.get('path',''))} for img in images],
         "audio": [{"type": audio['type'], "filename": os.path.basename(audio.get('path',''))} for audio in audio_files],
-        "creation_method": creation_method
+        "creation_method": creation_method,
+        "language": language
     }
-
     project_path = os.path.join(TEMP_DIR, f"project_{timestamp}.json")
-    with open(project_path, 'w', encoding='utf-8') as f:
-        json.dump(project_info, f, ensure_ascii=False, indent=2)
-
-    logger.info(f"Saved project information at: {project_path}")
-    
-    # --- CREATE VIDEO ---
     try:
+        with open(project_path, 'w', encoding='utf-8') as f:
+            json.dump(project_info, f, ensure_ascii=False, indent=2)
+        logger.info(f"Project information saved to: {project_path}")
+    except Exception as e: logger.error(f"Failed to save project information: {e}")
+
+    # --- Video Editing ---
+    try:
+        logger.info("Starting final video editing process...")
         video_editor = VideoEditor()
 
-        # Find default background music if available
+        # Find background music
         background_music = None
         music_dir = os.path.join(ASSETS_DIR, "music")
         if os.path.exists(music_dir):
-            music_files = [f for f in os.listdir(music_dir) if f.endswith('.mp3')]
+            music_files = [f for f in os.listdir(music_dir) if f.endswith(('.mp3', '.wav', '.m4a'))]
             if music_files:
-                # Optionally, select music based on style? For now, just take the first.
-                background_music = os.path.join(music_dir, music_files[0])
+                background_music = os.path.join(music_dir, music_files[0]) # Take the first one
                 logger.info(f"Using background music: {music_files[0]}")
 
-        # Create output path
+        # Sanitize title for filename
         def sanitize_filename(filename):
-            """Remove invalid characters from filename"""
             import unicodedata
-            # Normalize và loại bỏ dấu
-            filename = unicodedata.normalize('NFKD', filename)
-            filename = ''.join([c for c in filename if not unicodedata.combining(c)])
+            filename = unicodedata.normalize('NFKD', filename).encode('ascii', 'ignore').decode('ascii')
+            filename = re.sub(r'[^\w\s-]', '', filename).strip()
+            filename = re.sub(r'[-\s]+', '_', filename)
+            return filename[:100] # Limit length
 
-            # Xử lý các ký tự không hợp lệ
-            invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*', "'"]
-            for char in invalid_chars:
-                filename = filename.replace(char, '_')
-
-            # Loại bỏ khoảng trắng đầu/cuối
-            filename = filename.strip()
-
-            # Thay thế nhiều khoảng trắng liên tiếp bằng một dấu gạch dưới
-            import re
-            filename = re.sub(r'\s+', '_', filename)
-
-            # Giới hạn độ dài tên file (adjust length as needed)
-            max_len = 100
-            if len(filename) > max_len:
-                 # Find the last underscore before max_len to avoid cutting words awkwardly
-                 last_underscore = filename.rfind('_', 0, max_len - 3)
-                 if last_underscore != -1:
-                     filename = filename[:last_underscore] + "..."
-                 else:
-                     filename = filename[:max_len - 3] + "..."
-
-
-            return filename
-
-        # Use the generated script title for the filename
-        safe_title = sanitize_filename(script.get('title', 'untitled_video')[:50]) # Limit length
+        safe_title = sanitize_filename(script.get('title', 'untitled_video'))
         video_filename = f"{timestamp}_{safe_title}.mp4"
-        output_path = os.path.join(OUTPUT_DIR, video_filename)
+        output_path_final = os.path.join(OUTPUT_DIR, video_filename)
 
-
-        # Create video with correct parameter order
-        logger.info("Starting final video editing process...")
-        # *** CRITICAL CHANGE: Pass audio_files (list of speech unit audio info) ***
-        output_path_final = video_editor.create_video(
-            script=script,               # Script contains scenes (shots) and speech_units
-            media_items=images,          # List of visual media items (images/videos)
-            audio_files_info=audio_files,# <-- Pass the list of speech unit audio info
-            output_path=output_path,     # Final output path
-            background_music_path=background_music # Optional background music
+        # Create the video
+        final_video_path = video_editor.create_video(
+            script=script,
+            media_items=images,
+            audio_files_info=audio_files,
+            output_path=output_path_final,
+            background_music_path=background_music
         )
 
-        # Added completion message
+        # --- Final Output ---
         print("\n" + "="*50)
-        if output_path_final and os.path.exists(output_path_final):
+        if final_video_path and os.path.exists(final_video_path):
              print(f"Video successfully created!")
              print(f"Title: {script['title']}")
              print(f"Style: {selected_style}")
-             if FORCE_CONTROVERSIAL_STYLE and choice in ["1", "2"]: # Only show forced mode if applicable
+             if FORCE_CONTROVERSIAL_STYLE and choice in ["1", "2"]:
                   print("(FORCED CONTROVERSIAL MODE ENABLED)")
-             print(f"Output: {output_path_final}") # Use the path returned by create_video
+             print(f"Output: {final_video_path}")
         else:
              print("Video creation failed. Check logs for details.")
-             logger.error(f"Video creation process did not return a valid path or the file does not exist: {output_path_final}")
+             logger.error(f"Video creation process did not return a valid path or the file does not exist: {final_video_path}")
         print("="*50 + "\n")
 
     except Exception as e:
-        logger.error(f"Error creating video: {str(e)}", exc_info=True)
+        logger.error(f"Error during video editing: {str(e)}", exc_info=True)
 
 if __name__ == "__main__":
     main()
+
+# --- END OF FILE main.py ---

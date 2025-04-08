@@ -1,3 +1,5 @@
+.\venv\Scripts\activate
+
 Nếu bạn chia sẻ project này với người khác, hãy thêm một file README.md hoặc phần hướng dẫn chỉ rõ:
 
 1. Cần tạo một file .env ở thư mục gốc.

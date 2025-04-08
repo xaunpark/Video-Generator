@@ -16,6 +16,8 @@ import tempfile
 import mutagen
 from datetime import timedelta
 import whisper
+import itertools
+from itertools import groupby
 
 from src.logger_config import setup_logger
 logger = setup_logger(__name__)
@@ -41,6 +43,8 @@ try:
 except ImportError:
     unidecode = None
     logger.warning("unidecode not found. Text normalization for alignment might be less robust. Install with: pip install unidecode")
+
+from src.image_generator import ImageGenerator # Để tạo Chapter Cards
 
 class VideoEditor:
     """
@@ -395,6 +399,15 @@ class VideoEditor:
             logger.info(f"Output Path: {output_path}")
 
             # --- 0. Chuẩn bị và Kiểm tra đầu vào ---
+            script_mode = script.get("script_mode", "basic") # Lấy chế độ từ script
+            logger.info(f"Detected script mode: {script_mode}")
+            image_gen = None # Khởi tạo là None
+            if script_mode == "advanced":
+                image_gen = ImageGenerator() # Chỉ khởi tạo nếu là chế độ nâng cao
+                if not image_gen:
+                    logger.error("Failed to initialize ImageGenerator, cannot create chapter cards.")
+                    # Decide how to handle this: fallback to basic or exit? For now, log and continue without cards.
+
             if not script or not script.get('scenes') or not script.get('speech_units'):
                 logger.error("Invalid script structure: Missing scenes or speech_units.")
                 return None
@@ -462,465 +475,791 @@ class VideoEditor:
             logger.info(f"Processing {len(script['speech_units'])} speech units...")
             self.temp_unit_files = []  # Reset danh sách khi bắt đầu project mới
 
-            for speech_unit in sorted(script['speech_units'], key=lambda x: x['unit_number']):
-                unit_number = speech_unit['unit_number']
-                scene_numbers_in_unit = speech_unit['scene_numbers']
-                logger.info(f"--- Processing Speech Unit {unit_number} (Scenes/Shots: {scene_numbers_in_unit}) ---")
+            all_speech_units = sorted(script.get('speech_units', []), key=lambda u: u.get('unit_number', 0)) # Sắp xếp trước
 
-                # Lấy thông tin audio cho unit này
-                audio_info = audio_map.get(unit_number)
-                if not audio_info or not os.path.exists(audio_info['path']):
-                    logger.warning(f"Audio not found for Speech Unit {unit_number}. Skipping this unit.")
-                    continue
+            if script_mode == "basic":
+                # --- BASIC MODE ---
+                logger.info("Processing speech units sequentially (Basic Mode)...")
+                for speech_unit in all_speech_units: # Lặp qua các unit đã sắp xếp
+                    unit_number = speech_unit['unit_number']
+                    scene_numbers_in_unit = speech_unit['scene_numbers']
+                    logger.info(f"--- Processing Speech Unit {unit_number} (Basic) ---")
 
-                # Lấy danh sách media items (visuals) cho các scenes (shots) trong unit này
-                visual_items_for_unit = []
-                for scene_num in scene_numbers_in_unit:
-                    media_item = media_map.get(scene_num)
-                    # Kiểm tra xem media có tồn tại và hợp lệ không
-                    if media_item and media_item.get('path') and os.path.exists(media_item['path']):
-                        visual_items_for_unit.append(media_item)
+                    # --- COPY LOGIC XỬ LÝ 1 SPEECH UNIT TỪ CODE CŨ VÀO ĐÂY ---
+                    # Bắt đầu từ: Lấy thông tin audio cho unit này
+                    audio_info = audio_map.get(unit_number)
+                    if not audio_info or not os.path.exists(audio_info['path']):
+                        logger.warning(f"Audio not found for Speech Unit {unit_number}. Skipping.")
+                        continue
+
+                    # Lấy danh sách media items (visuals)
+                    visual_items_for_unit = []
+                    for scene_num in scene_numbers_in_unit:
+                        media_item = media_map.get(scene_num)
+                        if media_item and media_item.get('path') and os.path.exists(media_item['path']):
+                            visual_items_for_unit.append(media_item)
+                        else:
+                            logger.warning(f"Media not found or invalid for Scene/Shot {scene_num} in Unit {unit_number}.")
+                    if not visual_items_for_unit:
+                        logger.warning(f"No valid media for Speech Unit {unit_number}. Skipping.")
+                        continue
+
+                    # Gọi hàm tạo sequence video cho unit
+                    unit_clip = None
+                    unit_temp_path = os.path.join(temp_project_dir, f"unit_{unit_number}_temp.mp4")
+                    try:
+                        # Gọi hàm _create_speech_unit_video_sequence_direct như cũ
+                        unit_clip = self._create_speech_unit_video_sequence_direct(
+                            speech_unit=speech_unit,
+                            audio_info=audio_info,
+                            visual_items=visual_items_for_unit,
+                            temp_dir=temp_project_dir,
+                            language=language
+                        )
+                        if unit_clip:
+                            # Lưu clip thành file tạm (logic cũ)
+                            logger.info(f"Saving Unit {unit_number} clip to temporary file...")
+                            try:
+                                unit_clip.write_videofile(
+                                    unit_temp_path, codec='libx264', audio_codec='aac',
+                                    temp_audiofile=os.path.join(temp_project_dir, f'temp-unit-{unit_number}-audio.m4a'),
+                                    remove_temp=True, fps=self.fps, preset="ultrafast", logger=None,
+                                    threads=os.cpu_count() or 4,
+                                    ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
+                                )
+                                if os.path.exists(unit_temp_path) and os.path.getsize(unit_temp_path) > 10000:
+                                    # Dùng SỐ unit làm key cho chế độ basic
+                                    self.temp_unit_files.append((unit_number, unit_temp_path))
+                                    logger.info(f"Unit {unit_number} saved to temporary file: {unit_temp_path}")
+                                else:
+                                    logger.warning(f"Failed to save Unit {unit_number} to temporary file.")
+                                unit_clip.close() # Đóng clip sau khi lưu
+                            except Exception as write_err:
+                                logger.error(f"Error writing Unit {unit_number} to temp file: {write_err}", exc_info=True)
+                                if unit_clip and hasattr(unit_clip, 'close'): unit_clip.close()
+                        else:
+                            logger.error(f"Failed to create video sequence for Speech Unit {unit_number}.")
+                    except Exception as unit_err:
+                        logger.error(f"Critical error processing Speech Unit {unit_number}: {unit_err}", exc_info=True)
+                        if unit_clip and hasattr(unit_clip, 'close'): unit_clip.close()
+                    # --- KẾT THÚC PHẦN COPY LOGIC BASIC ---
+                # --- END BASIC MODE ---
+
+            elif script_mode == "advanced":
+                # --- ADVANCED MODE (CHAPTERS) ---
+                logger.info("Processing content by chapters (Advanced Mode)...")
+                chapter_title_duration = VIDEO_SETTINGS.get("chapter_title_duration", 2.5) # Lấy duration từ settings
+
+                # Sắp xếp lại units theo chapter rồi đến unit number để groupby hoạt động đúng
+                all_speech_units_sorted_for_grouping = sorted(
+                    all_speech_units,
+                    key=lambda u: (u.get('chapter_number', 0), u.get('unit_number', 0))
+                )
+
+                current_clip_index = 0 # Để tạo key duy nhất cho file tạm
+
+                # Lặp qua các chapter đã nhóm
+                for chapter_num, unit_group_iterator in groupby(all_speech_units_sorted_for_grouping, key=lambda u: u.get('chapter_number', 0)):
+                    unit_group = list(unit_group_iterator) # Chuyển iterator thành list để dùng nhiều lần
+                    if not unit_group: continue # Bỏ qua nếu nhóm rỗng
+
+                    first_unit_in_chapter = unit_group[0]
+                    chapter_title = first_unit_in_chapter.get('chapter_title', f'Chapter {chapter_num}') # Lấy title từ unit đầu tiên
+                    logger.info(f"--- Processing Chapter {chapter_num}: '{chapter_title}' ---")
+
+                    # 1. Tạo và thêm Chapter Title Card Clip
+                    if image_gen: # Chỉ tạo nếu ImageGenerator đã khởi tạo thành công
+                        chapter_card_img_path = os.path.join(temp_project_dir, f"chapter_{chapter_num}_card.png")
+                        chapter_card_video_path = os.path.join(temp_project_dir, f"chapter_{chapter_num}_card_video.mp4")
+
+                        # Gọi hàm tạo ảnh card chapter
+                        created_card_img_path = image_gen._create_chapter_title_card(chapter_title, chapter_card_img_path, chapter_num)
+
+                        if created_card_img_path and os.path.exists(created_card_img_path):
+                            logger.info(f"Creating video clip for Chapter {chapter_num} title card...")
+                            try:
+                                # Sử dụng FFmpeg trực tiếp để tạo video từ ảnh (hiệu quả hơn)
+                                ffmpeg_cmd = [
+                                    self.ffmpeg_path, "-y",
+                                    "-loop", "1",                  # Lặp ảnh đầu vào
+                                    "-i", created_card_img_path,   # Ảnh card chapter
+                                    "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo", # Nguồn audio im lặng
+                                    "-t", str(chapter_title_duration), # Thời lượng mong muốn
+                                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", # Encode video
+                                    "-vf", f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,format=pix_fmts=yuv420p", # Scale và pad, đảm bảo format
+                                    "-c:a", "aac", "-b:a", "128k", # Encode audio im lặng
+                                    "-r", str(self.fps),           # Đặt FPS
+                                    chapter_card_video_path
+                                ]
+                                subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+                                if os.path.exists(chapter_card_video_path) and os.path.getsize(chapter_card_video_path) > 1000:
+                                    # Dùng tuple (chapter_num, -1) để đảm bảo card đứng trước unit 0 của chapter đó
+                                    self.temp_unit_files.append(((chapter_num, -1), chapter_card_video_path))
+                                    logger.info(f"Chapter {chapter_num} title card video saved to temp file: {chapter_card_video_path}")
+                                else:
+                                    logger.warning(f"Failed to create Chapter {chapter_num} title card video using FFmpeg.")
+
+                            except Exception as card_err:
+                                logger.error(f"Error creating video clip for chapter {chapter_num} title card: {card_err}", exc_info=True)
+                        else:
+                            logger.warning(f"Could not create image for chapter {chapter_num} title card. Skipping card.")
                     else:
-                        logger.warning(f"Media not found or invalid for Scene/Shot {scene_num} in Unit {unit_number}. It will be skipped.")
+                        logger.warning("ImageGenerator not available. Skipping chapter title card.")
 
-                if not visual_items_for_unit:
-                    logger.warning(f"No valid media found for Speech Unit {unit_number}. Skipping this unit.")
-                    continue
 
-                # Gọi hàm tạo sequence video cho unit
-                unit_clip = None # Khởi tạo để đóng nếu lỗi
-                unit_temp_path = os.path.join(temp_project_dir, f"unit_{unit_number}_temp.mp4")
-                
-                try:
-                    unit_clip = self._create_speech_unit_video_sequence_direct(
-                        speech_unit=speech_unit,
-                        audio_info=audio_info,
-                        visual_items=visual_items_for_unit,
-                        temp_dir=temp_project_dir,
-                        language=language
-                    )
+                    # 2. Xử lý các Speech Units trong Chapter này
+                    logger.info(f"Processing {len(unit_group)} speech units for Chapter {chapter_num}...")
+                    for speech_unit in unit_group:
+                        unit_number = speech_unit['unit_number']
+                        scene_numbers_in_unit = speech_unit['scene_numbers']
+                        logger.info(f"--- Processing Speech Unit {unit_number} (Chapter {chapter_num}) ---")
 
-                    if unit_clip:
-                        # Lưu clip thành file tạm ngay lập tức
-                        logger.info(f"Saving Unit {unit_number} clip to temporary file...")
+                        # --- COPY LOGIC XỬ LÝ 1 SPEECH UNIT TỪ CODE CŨ (GIỐNG HET BASIC MODE) VÀO ĐÂY ---
+                        audio_info = audio_map.get(unit_number)
+                        # ... (lấy audio_info, visual_items_for_unit như trong basic mode) ...
+                        if not audio_info or not os.path.exists(audio_info['path']): continue # Skip nếu thiếu
+                        visual_items_for_unit = []
+                        for scene_num in scene_numbers_in_unit:
+                            media_item = media_map.get(scene_num)
+                            if media_item and media_item.get('path') and os.path.exists(media_item['path']): visual_items_for_unit.append(media_item)
+                            else: logger.warning(f"Media not found or invalid for Scene/Shot {scene_num} in Unit {unit_number}.")
+                        if not visual_items_for_unit: continue # Skip nếu thiếu
+
+                        # Gọi hàm tạo sequence video cho unit
+                        unit_clip = None
+                        unit_temp_path = os.path.join(temp_project_dir, f"unit_{unit_number}_temp.mp4") # Đặt tên file tạm
                         try:
-                            unit_clip.write_videofile(
-                                unit_temp_path,
-                                codec='libx264',
-                                audio_codec='aac',
-                                temp_audiofile=os.path.join(temp_project_dir, f'temp-unit-{unit_number}-audio.m4a'),
-                                remove_temp=True,
-                                fps=self.fps,
-                                preset="ultrafast",  # Nhanh hơn vì chỉ là file tạm
-                                threads=os.cpu_count() or 4,
-                                logger=None,  # Tránh log quá nhiều 
-                                ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
+                            unit_clip = self._create_speech_unit_video_sequence_direct(
+                                speech_unit=speech_unit, audio_info=audio_info, visual_items=visual_items_for_unit,
+                                temp_dir=temp_project_dir, language=language
                             )
-                            
-                            # Kiểm tra file tạm đã được tạo thành công chưa
-                            if os.path.exists(unit_temp_path) and os.path.getsize(unit_temp_path) > 10000:
-                                self.temp_unit_files.append((unit_number, unit_temp_path))
-                                logger.info(f"Unit {unit_number} saved to temporary file: {unit_temp_path}")
+                            if unit_clip:
+                                # Lưu clip thành file tạm (logic cũ)
+                                logger.info(f"Saving Unit {unit_number} (Ch {chapter_num}) clip to temp file...")
+                                try:
+                                    unit_clip.write_videofile(
+                                        unit_temp_path, codec='libx264', audio_codec='aac',
+                                        temp_audiofile=os.path.join(temp_project_dir, f'temp-unit-{unit_number}-audio.m4a'),
+                                        remove_temp=True, fps=self.fps, preset="ultrafast", logger=None,
+                                        threads=os.cpu_count() or 4,
+                                        ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
+                                    )
+                                    if os.path.exists(unit_temp_path) and os.path.getsize(unit_temp_path) > 10000:
+                                        # Dùng tuple (chapter_num, unit_number) làm key để sắp xếp đúng
+                                        self.temp_unit_files.append(((chapter_num, unit_number), unit_temp_path))
+                                        logger.info(f"Unit {unit_number} (Ch {chapter_num}) saved to temp file: {unit_temp_path}")
+                                    else:
+                                        logger.warning(f"Failed to save Unit {unit_number} (Ch {chapter_num}) to temp file.")
+                                    unit_clip.close() # Đóng clip sau khi lưu
+                                except Exception as write_err:
+                                    logger.error(f"Error writing Unit {unit_number} (Ch {chapter_num}) to temp file: {write_err}", exc_info=True)
+                                    if unit_clip and hasattr(unit_clip, 'close'): unit_clip.close()
                             else:
-                                logger.warning(f"Failed to save Unit {unit_number} to temporary file (file too small or doesn't exist).")
-                        except Exception as e:
-                            logger.error(f"Error writing Unit {unit_number} to temporary file: {e}", exc_info=True)
-                            # Nếu không lưu được file, vẫn giữ clip trong danh sách để thử ghép nối với MoviePy
-                        
-                        # Vẫn giữ clip trong danh sách cũ để hỗ trợ phương pháp cũ (tùy chọn)
-                        final_clips_sequence.append(unit_clip)
-                        logger.info(f"Successfully created video sequence for Speech Unit {unit_number} (Duration: {unit_clip.duration:.3f}s)")
-                    else:
-                        logger.error(f"Failed to create video sequence for Speech Unit {unit_number}.")
+                                logger.error(f"Failed to create video sequence for Unit {unit_number} (Ch {chapter_num}).")
+                        except Exception as unit_err:
+                            logger.error(f"Critical error processing Unit {unit_number} (Ch {chapter_num}): {unit_err}", exc_info=True)
+                            if unit_clip and hasattr(unit_clip, 'close'): unit_clip.close()
+                        # --- KẾT THÚC PHẦN COPY LOGIC XỬ LÝ UNIT ---
+                # --- END ADVANCED MODE ---
+            else:
+                logger.error(f"Unknown script mode: {script_mode}. Cannot process content.")
+                # Handle error appropriately, maybe return None after cleanup
 
-                except Exception as e:
-                    logger.error(f"Critical error processing Speech Unit {unit_number}: {e}", exc_info=True)
-                    if unit_clip and hasattr(unit_clip, 'close'): unit_clip.close() # Đóng nếu lỗi
-
-            # --- 3. Xử lý Outro (tương tự Intro) ---
+            # --- 3. Xử lý Outro (Giống Intro, tạo file tạm) ---
             if outro_media_item and outro_audio_info:
                 logger.info("Processing Outro...")
-                outro_clip = None
+                # Không cần tạo MoviePy clip nữa, sẽ tạo file tạm trực tiếp
+                # outro_clip = None # Không cần biến này nữa
+
+                # Đường dẫn file tạm cho video outro
+                outro_temp_path = os.path.join(temp_project_dir, "outro_temp.mp4")
+
                 try:
-                    if outro_media_item['type'] == 'image' and os.path.exists(outro_media_item['path']) and os.path.exists(outro_audio_info['path']):
-                        outro_duration = outro_audio_info['duration']
-                        outro_audio_clip = AudioFileClip(outro_audio_info['path'])
-                        all_clips_to_close.append(outro_audio_clip)
+                    # Kiểm tra các file đầu vào
+                    outro_image_path = outro_media_item.get('path')
+                    outro_audio_path = outro_audio_info.get('path')
+                    outro_duration = outro_audio_info.get('duration', VIDEO_SETTINGS.get("outro_duration", 5)) # Lấy duration từ audio info
 
-                        outro_image_clip = ImageClip(outro_media_item['path'], duration=outro_duration)
-                        outro_image_clip = outro_image_clip.with_fps(self.fps).resized(width=self.width)
-                        if abs(outro_image_clip.aspect_ratio - (self.width/self.height)) > 0.01:
-                            outro_image_clip = outro_image_clip.cropped(width=self.width, height=self.height, x_center=outro_image_clip.w/2, y_center=outro_image_clip.h/2)
+                    if outro_media_item.get('type') == 'image' and \
+                       outro_image_path and os.path.exists(outro_image_path) and \
+                       outro_audio_path and os.path.exists(outro_audio_path) and \
+                       outro_duration > 0.1:
 
-                        outro_clip = outro_image_clip.with_audio(outro_audio_clip)
-                        outro_clip = outro_clip.with_duration(outro_duration)
-                        all_clips_to_close.append(outro_image_clip)
-                        final_clips_sequence.append(outro_clip)
-                        logger.info(f"Outro clip created (Duration: {outro_duration:.2f}s)")
+                        logger.info(f"Creating temporary video file for Outro (Duration: {outro_duration:.2f}s)...")
+
+                        # Lệnh FFmpeg để tạo video từ ảnh và audio
+                        ffmpeg_cmd = [
+                            self.ffmpeg_path, "-y",
+                            "-loop", "1",                      # Lặp ảnh đầu vào
+                            "-i", outro_image_path,           # Ảnh outro
+                            "-i", outro_audio_path,           # Audio outro
+                            "-t", str(outro_duration),        # Thời lượng mong muốn (theo audio)
+                            "-map", "0:v:0",                   # Map video từ input 0 (ảnh)
+                            "-map", "1:a:0",                   # Map audio từ input 1 (audio)
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", # Encode video nhanh cho file tạm
+                            "-vf", f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,format=pix_fmts=yuv420p", # Scale/pad và format
+                            "-c:a", "aac", "-b:a", "128k",     # Encode audio
+                            "-r", str(self.fps),               # Đặt FPS
+                            "-shortest",                       # Dừng khi input ngắn nhất kết thúc (là audio do -t)
+                            outro_temp_path                    # File output tạm
+                        ]
+
+                        # Chạy lệnh FFmpeg
+                        process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, check=False) # check=False để bắt lỗi stderr
+
+                        # Kiểm tra kết quả
+                        if process.returncode == 0 and os.path.exists(outro_temp_path) and os.path.getsize(outro_temp_path) > 1000:
+                            # Thêm file tạm vào danh sách để ghép nối sau
+                            # Sử dụng key đặc biệt để đảm bảo nó ở cuối cùng khi sắp xếp
+                            outro_sort_key = (float('inf'), float('inf'))
+                            self.temp_unit_files.append((outro_sort_key, outro_temp_path))
+                            logger.info(f"Outro saved to temporary file for concatenation: {outro_temp_path}")
+                        else:
+                            logger.error(f"Failed to create Outro temporary video using FFmpeg.")
+                            logger.error(f"FFmpeg stderr: {process.stderr}") # Log lỗi từ FFmpeg
+
                     else:
-                        logger.warning("Outro media or audio missing or invalid type.")
+                        # Log lý do không xử lý được
+                        if outro_media_item.get('type') != 'image':
+                            logger.warning("Outro media is not an image, skipping temporary file creation.")
+                        elif not (outro_image_path and os.path.exists(outro_image_path)):
+                            logger.warning(f"Outro image path invalid or file missing: {outro_image_path}")
+                        elif not (outro_audio_path and os.path.exists(outro_audio_path)):
+                            logger.warning(f"Outro audio path invalid or file missing: {outro_audio_path}")
+                        elif not outro_duration > 0.1:
+                             logger.warning(f"Outro audio duration invalid: {outro_duration}")
+
                 except Exception as e:
-                    logger.error(f"Error processing outro: {e}", exc_info=True)
-                    if outro_clip and hasattr(outro_clip, 'close'): outro_clip.close()
+                    logger.error(f"Error processing outro and creating temporary file: {e}", exc_info=True)
+                    # Không cần đóng `outro_clip` vì không tạo ra nó nữa
 
             # --- 4. Nối tất cả các Clips (Intro, Units, Outro) ---
-            if not final_clips_sequence and not self.temp_unit_files:
-                logger.error("No video clips or temporary files were generated to concatenate. Cannot create final video.")
+
+            if not self.temp_unit_files:
+                logger.error(f"Project {project_id}: No temporary video files were generated to concatenate. Cannot create final video.")
                 # Dọn dẹp thư mục tạm
                 if VIDEO_SETTINGS.get("cleanup_temp_files", False): shutil.rmtree(temp_project_dir, ignore_errors=True)
-                # Đóng các clip đã mở (nếu có)
+                # Đóng các clip đã mở (nếu có) - thường sẽ ít khi có ở bước này nếu chỉ dùng file tạm
                 for clip in all_clips_to_close:
-                    if clip and hasattr(clip, 'close'): clip.close()
+                    if clip and not isinstance(clip, str) and hasattr(clip, 'close'):
+                        try: clip.close()
+                        except: pass
                 return None
 
-            logger.info(f"Concatenating video clips... (MoviePy: {len(final_clips_sequence)}, Temp files: {len(self.temp_unit_files)})")
-            final_video_no_music = None
+            logger.info(f"Project {project_id}: Preparing to concatenate {len(self.temp_unit_files)} temporary video files...")
+
+            # Khởi tạo biến cho đường dẫn file trung gian
             intermediate_output_path = os.path.join(temp_project_dir, f"intermediate_{project_id}.mp4")
+            ffmpeg_concatenation_successful = False # Cờ để theo dõi thành công
 
             # ----- BẮT ĐẦU KHỐI TRY CHO CONCATENATE VÀ WRITE -----
             try:
-                # --- PHƯƠNG PHÁP 1: Sử dụng FFmpeg với file tạm ---
-                if self.temp_unit_files:
-                    logger.info(f"Using FFmpeg to concatenate {len(self.temp_unit_files)} temporary unit files...")
-                    
-                    # Sắp xếp file tạm theo số thứ tự unit
-                    sorted_temp_files = sorted(self.temp_unit_files, key=lambda x: x[0])
-                    temp_file_paths = [f[1] for f in sorted_temp_files]
-                    
-                    # Tạo danh sách file đầy đủ bao gồm cả intro và outro nếu có
-                    all_temp_files = []
-                    
-                    # Thêm intro nếu có
-                    intro_temp_path = os.path.join(temp_project_dir, "intro_temp.mp4")
-                    if 'intro_clip' in locals() and intro_clip:
-                        try:
-                            logger.info("Saving intro clip to temporary file...")
-                            intro_clip.write_videofile(
-                                intro_temp_path,
-                                codec='libx264', audio_codec='aac',
-                                temp_audiofile=os.path.join(temp_project_dir, 'temp-intro-audio.m4a'),
-                                remove_temp=True, fps=self.fps, preset="ultrafast",
-                                threads=os.cpu_count() or 4, logger=None,
-                                ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
-                            )
-                            if os.path.exists(intro_temp_path) and os.path.getsize(intro_temp_path) > 10000:
-                                all_temp_files.append(intro_temp_path)
-                                logger.info("Added intro to concatenation list")
-                        except Exception as e:
-                            logger.error(f"Error saving intro to temp file: {e}")
-                    
-                    # Thêm các unit file
-                    all_temp_files.extend(temp_file_paths)
-                    
-                    # Thêm outro nếu có
-                    outro_temp_path = os.path.join(temp_project_dir, "outro_temp.mp4")
-                    if 'outro_clip' in locals() and outro_clip:
-                        try:
-                            logger.info("Saving outro clip to temporary file...")
-                            outro_clip.write_videofile(
-                                outro_temp_path,
-                                codec='libx264', audio_codec='aac',
-                                temp_audiofile=os.path.join(temp_project_dir, 'temp-outro-audio.m4a'),
-                                remove_temp=True, fps=self.fps, preset="ultrafast",
-                                threads=os.cpu_count() or 4, logger=None,
-                                ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p"]
-                            )
-                            if os.path.exists(outro_temp_path) and os.path.getsize(outro_temp_path) > 10000:
-                                all_temp_files.append(outro_temp_path)
-                                logger.info("Added outro to concatenation list")
-                        except Exception as e:
-                            logger.error(f"Error saving outro to temp file: {e}")
-                    
-                    # Ghép nối tất cả file tạm bằng FFmpeg
-                    if all_temp_files:
-                        logger.info(f"Concatenating {len(all_temp_files)} temporary files with FFmpeg...")
-                        ffmpeg_output_path = self.concatenate_videos_with_ffmpeg(
-                            all_temp_files, 
-                            intermediate_output_path
-                        )
-                        
-                        if ffmpeg_output_path and os.path.exists(ffmpeg_output_path):
-                            logger.info(f"FFmpeg concatenation successful: {ffmpeg_output_path}")
-                            # Mở file kết quả để tiếp tục xử lý (thêm nhạc nền, phụ đề)
-                            final_video_no_music = VideoFileClip(ffmpeg_output_path)
-                            all_clips_to_close.append(final_video_no_music)
-                        else:
-                            logger.error("FFmpeg concatenation failed. Trying MoviePy method as fallback...")
-                            # Không return None ở đây, mà để rơi vào phương pháp MoviePy dưới đây
-                    else:
-                        logger.error("No temporary files available for FFmpeg concatenation. Trying MoviePy method...")
-                
-                # --- PHƯƠNG PHÁP 2: Sử dụng MoviePy (nếu không có file tạm hoặc FFmpeg thất bại) ---
-                if final_video_no_music is None and final_clips_sequence:
-                    logger.info("Attempting to concatenate clips with MoviePy...")
-                    
-                    # Lọc các clip hợp lệ
-                    filtered_clips = []
-                    for i, clip in enumerate(final_clips_sequence):
-                        if clip is None:
-                            logger.warning(f"Skipping None clip at index {i}")
-                            continue
-                        if not hasattr(clip, 'duration') or clip.duration <= 0:
-                            logger.warning(f"Skipping clip at index {i} with invalid duration: {getattr(clip, 'duration', None)}")
-                            continue
-                        # Kiểm tra clip có hoạt động không
-                        try:
-                            _ = clip.get_frame(0)  # Test if we can get a frame
-                            filtered_clips.append(clip)
-                            logger.info(f"Clip {i}: Type={type(clip).__name__}, Duration={clip.duration:.2f}s")
-                        except Exception as e:
-                            logger.warning(f"Skipping clip at index {i} due to error: {e}")
+                # --- SẮP XẾP FILE TẠM ĐỂ GHÉP NỐI ---
+                # Key sort: Dùng tuple (chapter_num, sub_order)
+                # Intro: (0, -2)
+                # Chapter 1 Card: (1, -1)
+                # Unit 1 (Chap 1): (1, 1)
+                # Unit 2 (Chap 1): (1, 2)
+                # Chapter 2 Card: (2, -1)
+                # Unit 3 (Chap 2): (2, 3)
+                # Basic Mode Units (Assume Chapter 0): (0, unit_number)
+                # Outro: (float('inf'), float('inf'))
+                def sort_key_logic(item):
+                    key, path = item # key có thể là int (basic), tuple (advanced), hoặc string ("intro")
+                    if key == "intro":
+                        return (0, -2) # Intro luôn đứng đầu
 
-                    if not filtered_clips:
-                        if final_video_no_music is None:
-                            logger.error("Both FFmpeg and MoviePy methods failed. Cannot create final video.")
-                            return None
-                        # Nếu đã có final_video_no_music từ FFmpeg, tiếp tục với nó
-                    else:
-                        logger.info(f"Using {len(filtered_clips)} valid clips for MoviePy concatenation")
-                        try:
-                            logger.info("Attempting MoviePy concatenation with method='compose'")
-                            final_video_no_music = concatenate_videoclips(filtered_clips, method="compose")
-                            all_clips_to_close.append(final_video_no_music)
-                            
-                            # Ghi file trung gian nếu ghép nối thành công
-                            logger.info(f"Writing intermediate video to: {intermediate_output_path}")
-                            final_video_no_music.write_videofile(
-                                intermediate_output_path,
-                                codec='libx264', audio_codec='aac',
-                                temp_audiofile=os.path.join(temp_project_dir,'temp-concat-audio.m4a'),
-                                remove_temp=True, fps=self.fps,
-                                preset=VIDEO_SETTINGS.get("ffmpeg_preset", "medium"),
-                                threads=os.cpu_count() or 4, logger='bar',
-                                ffmpeg_params=["-crf", str(VIDEO_SETTINGS.get("ffmpeg_crf", "23")), "-pix_fmt", "yuv420p"]
-                            )
-                        except Exception as e:
-                            logger.error(f"MoviePy concatenation failed: {e}")
-                            if final_video_no_music is None:
-                                # Cả hai phương pháp đều thất bại
-                                logger.error("Both FFmpeg and MoviePy methods failed. Cannot create final video.")
-                                return None
-                
-                # Nếu đã có final_video_no_music từ FFmpeg nhưng chưa ghi thành file, ghi nó ra
-                if final_video_no_music and not os.path.exists(intermediate_output_path):
-                    logger.info(f"Writing intermediate video to: {intermediate_output_path}")
-                    final_video_no_music.write_videofile(
-                        intermediate_output_path,
-                        codec='libx264', audio_codec='aac',
-                        temp_audiofile=os.path.join(temp_project_dir,'temp-concat-audio.m4a'),
-                        remove_temp=True, fps=self.fps,
-                        preset=VIDEO_SETTINGS.get("ffmpeg_preset", "medium"),
-                        threads=os.cpu_count() or 4, logger='bar',
-                        ffmpeg_params=["-crf", str(VIDEO_SETTINGS.get("ffmpeg_crf", "23")), "-pix_fmt", "yuv420p"]
+                    # Handle outro key explicitly
+                    if isinstance(key, tuple) and key == (float('inf'), float('inf')):
+                        return key # Outro luôn đứng cuối
+
+                    # Handle advanced mode tuple key (chapter_num, unit_or_card_marker)
+                    if isinstance(key, tuple) and len(key) == 2:
+                        chap_num, unit_or_card = key
+                        # Đảm bảo chapter number là số hợp lệ
+                        chap_num = int(chap_num) if isinstance(chap_num, (int, float)) else 0
+                        # Đảm bảo unit/card marker là số hợp lệ
+                        unit_or_card = int(unit_or_card) if isinstance(unit_or_card, (int, float)) else 0
+                        return (chap_num, unit_or_card) # card marker là -1, unit number >= 1
+
+                    # Handle basic mode key (integer unit number)
+                    if isinstance(key, int):
+                        return (0, key) # Gán vào chapter 0 cho chế độ basic
+
+                    # Fallback cho các key không xác định (đặt trước outro)
+                    logger.warning(f"Unknown sort key type encountered: {key}. Placing near end.")
+                    return (float('inf') - 1, float('inf') - 1)
+
+                # Thực hiện sắp xếp
+                try:
+                    sorted_temp_files_info = sorted(self.temp_unit_files, key=sort_key_logic)
+                except TypeError as sort_err:
+                     logger.error(f"Error sorting temporary files: {sort_err}. Keys: {[k for k, p in self.temp_unit_files]}", exc_info=True)
+                     raise Exception("Sorting temporary files failed.") from sort_err
+
+                temp_file_paths = [f[1] for f in sorted_temp_files_info] # Lấy đường dẫn đã sắp xếp
+
+                # Log thứ tự file sẽ ghép
+                logger.info(f"Concatenation order ({len(temp_file_paths)} files):")
+                for i, file_path in enumerate(temp_file_paths):
+                    logger.info(f"  {i+1}: {os.path.basename(file_path)}")
+
+                # --- Sử dụng FFmpeg để ghép nối ---
+                if temp_file_paths: # Kiểm tra lại xem có file nào không
+                    logger.info(f"Attempting FFmpeg concatenation -> {intermediate_output_path}")
+                    ffmpeg_output_path = self.concatenate_videos_with_ffmpeg(
+                        temp_file_paths,
+                        intermediate_output_path # Lưu vào file trung gian
                     )
-                    
-                # Dọn dẹp các file tạm thời
-                logger.info("Cleaning up temporary unit files...")
-                for unit_num, temp_file in self.temp_unit_files:
-                    try:
-                        if os.path.exists(temp_file):
-                            os.remove(temp_file)
-                            logger.debug(f"Removed temporary file: {temp_file}")
-                    except Exception as e:
-                        logger.warning(f"Error removing temporary file {temp_file}: {e}")
-                        
-                # Dọn dẹp intro/outro tạm nếu có
-                for temp_file in [intro_temp_path, outro_temp_path]:
-                    if 'temp_file' in locals() and os.path.exists(temp_file):
-                        try:
-                            os.remove(temp_file)
-                            logger.debug(f"Removed temporary file: {temp_file}")
-                        except: pass
-                        
-            except Exception as e:
-                logger.error(f"Error during video concatenation: {e}", exc_info=True)
-                # Dọn dẹp và thoát
+
+                    if ffmpeg_output_path and os.path.exists(ffmpeg_output_path) and os.path.getsize(ffmpeg_output_path) > 10000:
+                        logger.info(f"FFmpeg concatenation successful: {ffmpeg_output_path}")
+                        ffmpeg_concatenation_successful = True
+                        # Không cần mở lại bằng MoviePy ở đây nếu các bước sau cũng dùng FFmpeg
+                    else:
+                        logger.error("FFmpeg concatenation failed or output file invalid.")
+                        # Có thể thử fallback MoviePy ở đây nếu muốn, nhưng sẽ phức tạp hơn
+                        # Hiện tại, chúng ta sẽ raise lỗi nếu FFmpeg thất bại
+                        raise Exception("FFmpeg concatenation failed.")
+                else:
+                    logger.error("No valid temporary files found for concatenation after sorting.")
+                    raise Exception("No temporary files to concatenate.")
+
+            except Exception as concat_err:
+                logger.error(f"Error during video concatenation: {concat_err}", exc_info=True)
+                # Dọn dẹp và thoát nếu ghép nối thất bại
                 if VIDEO_SETTINGS.get("cleanup_temp_files", False): shutil.rmtree(temp_project_dir, ignore_errors=True)
+                # Đóng các clip (nếu có)
+                for clip in all_clips_to_close:
+                    if clip and not isinstance(clip, str) and hasattr(clip, 'close'):
+                        try: clip.close()
+                        except: pass
                 return None
 
-            # --- 5. Thêm nhạc nền (Logic giữ nguyên, áp dụng cho intermediate_output_path) ---
-            final_output_with_fx = intermediate_output_path # Đường dẫn mặc định là file trung gian
+            # --- Dọn dẹp các file tạm thời (Unit, Card, Intro, Outro temps) sau khi ghép nối thành công ---
+            if ffmpeg_concatenation_successful:
+                 logger.info("Cleaning up temporary individual clip files...")
+                 cleaned_count = 0
+                 failed_clean_count = 0
+                 for key, temp_file in self.temp_unit_files: # Lặp qua danh sách gốc
+                      if temp_file and os.path.exists(temp_file):
+                          try:
+                              os.remove(temp_file)
+                              cleaned_count += 1
+                              # logger.debug(f"Removed temporary file: {temp_file}")
+                          except Exception as e:
+                              failed_clean_count += 1
+                              logger.warning(f"Error removing temporary file {temp_file}: {e}")
+                 logger.info(f"Cleanup complete: Removed {cleaned_count} temp files, failed to remove {failed_clean_count}.")
 
-            # Thay thế đoạn code xử lý nhạc nền hiện tại với đoạn mới sử dụng FFmpeg
+                 # Xóa cả file card image gốc nếu là advanced mode
+                 if script_mode == 'advanced':
+                      logger.info("Cleaning up temporary chapter card images...")
+                      img_cleaned_count = 0
+                      # Tìm các key của chapter card (marker -1)
+                      chapter_card_keys = [k for k, p in self.temp_unit_files if isinstance(k, tuple) and len(k) == 2 and k[1] == -1]
+                      for chap_key in chapter_card_keys:
+                          chap_num = chap_key[0]
+                          card_img_path = os.path.join(temp_project_dir, f"chapter_{chap_num}_card.png")
+                          if os.path.exists(card_img_path):
+                              try:
+                                  os.remove(card_img_path)
+                                  img_cleaned_count +=1
+                              except Exception as img_e:
+                                   logger.warning(f"Could not remove chapter card image {card_img_path}: {img_e}")
+                      logger.info(f"Removed {img_cleaned_count} chapter card images.")
+
+            # Ở thời điểm này, intermediate_output_path chứa video đã ghép nối thành công
+
+            # --- 5. Thêm nhạc nền (Áp dụng cho intermediate_output_path) ---
+
+            final_output_with_fx = intermediate_output_path # Mặc định là file trung gian nếu không thêm nhạc/phụ đề
+
+            # Kiểm tra xem file trung gian có tồn tại không trước khi tiếp tục
+            if not (intermediate_output_path and os.path.exists(intermediate_output_path) and os.path.getsize(intermediate_output_path) > 1000):
+                 logger.error(f"Project {project_id}: Intermediate video file is missing or invalid. Cannot add effects.")
+                 # Dọn dẹp thư mục project và thoát
+                 if VIDEO_SETTINGS.get("cleanup_temp_files", False): shutil.rmtree(temp_project_dir, ignore_errors=True)
+                 return None # Không thể tiếp tục
+
+            # Biến để lưu đường dẫn file cuối cùng thực sự (có thể là intermediate hoặc file có nhạc)
+            video_input_for_next_step = intermediate_output_path # File đầu vào cho bước tiếp theo (phụ đề)
+
             if background_music_path and os.path.exists(background_music_path) and VIDEO_SETTINGS.get("enable_background_music", False):
-                logger.info(f"Adding background music from: {os.path.basename(background_music_path)}")
+                logger.info(f"Project {project_id}: Adding background music from: {os.path.basename(background_music_path)}")
+
+                # Đường dẫn file output cuối cùng nếu thêm nhạc thành công
+                # Sẽ ghi đè lên output_path gốc được truyền vào hàm create_video
+                output_path_with_music = output_path
+                music_temp_files_to_clean = [] # Theo dõi file tạm của nhạc
+
                 try:
-                    # Tạo đường dẫn file output với nhạc nền
-                    output_path_with_music = output_path
-                    intermediate_path = intermediate_output_path  # video đã ghép nối
-                    
-                    # Tạo file nhạc đã điều chỉnh âm lượng
-                    music_file_with_volume = os.path.join(temp_project_dir, "music_adjusted_volume.mp3")
+                    # 1. Tạo file nhạc đã điều chỉnh âm lượng
+                    music_file_with_volume = os.path.join(temp_project_dir, f"music_adjusted_volume_{project_id}.mp3")
+                    music_temp_files_to_clean.append(music_file_with_volume)
                     volume_cmd = [
                         self.ffmpeg_path, "-y",
                         "-i", background_music_path,
                         "-filter:a", f"volume={self.music_volume}",
-                        "-c:a", "libmp3lame",
+                        "-c:a", "libmp3lame", # Sử dụng mp3 cho tương thích rộng
+                        "-q:a", "5", # Chất lượng mp3 khá
                         music_file_with_volume
                     ]
-                    logger.info(f"Adjusting music volume using FFmpeg")
-                    subprocess.run(volume_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                    
-                    if not os.path.exists(music_file_with_volume) or os.path.getsize(music_file_with_volume) < 1000:
-                        logger.error("Failed to create adjusted volume music file")
+                    logger.info(f"Adjusting music volume using FFmpeg...")
+                    volume_process = subprocess.run(volume_cmd, capture_output=True, text=True, check=False)
+                    if volume_process.returncode != 0 or not os.path.exists(music_file_with_volume) or os.path.getsize(music_file_with_volume) < 1000:
+                        logger.error(f"Failed to create adjusted volume music file. FFmpeg stderr: {volume_process.stderr}")
                         raise Exception("Failed to adjust music volume")
-                    
-                    # Lấy thông tin duration của video và nhạc
-                    video_duration = self._get_video_duration_ffprobe(intermediate_path) or 0
-                    music_duration = self._get_video_duration_ffprobe(music_file_with_volume) or 0
-                    
-                    # Tạo file nhạc lặp nếu cần
+                    logger.info(f"Adjusted music volume saved to: {music_file_with_volume}")
+
+
+                    # 2. Lấy thông tin duration của video và nhạc
+                    # Dùng ffprobe để lấy duration chính xác hơn
+                    video_duration = self._get_video_duration_ffprobe(intermediate_output_path)
+                    music_duration = self._get_video_duration_ffprobe(music_file_with_volume)
+
+                    if video_duration is None or video_duration <= 0:
+                        logger.warning("Could not get intermediate video duration via ffprobe, trying MoviePy...")
+                        try:
+                             with VideoFileClip(intermediate_output_path) as temp_clip: video_duration = temp_clip.duration
+                        except Exception as e:
+                             logger.error(f"Failed to get video duration with MoviePy too: {e}. Cannot proceed with music looping/mixing accurately.")
+                             raise Exception("Failed to determine video duration")
+
+                    if music_duration is None or music_duration <= 0:
+                        logger.warning("Could not get adjusted music duration via ffprobe, trying mutagen...")
+                        try:
+                             audio_info_mutagen = mutagen.mp3.MP3(music_file_with_volume)
+                             music_duration = audio_info_mutagen.info.length
+                        except Exception as e:
+                             logger.error(f"Failed to get music duration with mutagen too: {e}. Cannot proceed with music looping.")
+                             raise Exception("Failed to determine music duration")
+
+                    logger.info(f"Video Duration: {video_duration:.2f}s, Adjusted Music Duration: {music_duration:.2f}s")
+
+                    # 3. Tạo file nhạc lặp nếu cần
+                    music_file_to_use = music_file_with_volume # Mặc định dùng file đã chỉnh volume
                     looped_music_file = None
+                    concat_list_path = None
+
                     if music_duration > 0 and music_duration < video_duration:
-                        looped_music_file = os.path.join(temp_project_dir, "looped_music.mp3")
+                        looped_music_file = os.path.join(temp_project_dir, f"looped_music_{project_id}.mp3")
+                        music_temp_files_to_clean.append(looped_music_file)
                         loops_needed = math.ceil(video_duration / music_duration)
-                        logger.info(f"Music duration ({music_duration:.2f}s) shorter than video ({video_duration:.2f}s). Creating looped music with {loops_needed} repetitions.")
-                        
-                        # Tạo danh sách file để ghép lặp
-                        concat_list = os.path.join(temp_project_dir, "music_list.txt")
-                        with open(concat_list, 'w', encoding='utf-8') as f:
+                        logger.info(f"Music duration shorter than video. Creating looped music with {loops_needed} repetitions.")
+
+                        # Tạo file danh sách cho FFmpeg concat demuxer
+                        concat_list_path = os.path.join(temp_project_dir, f"music_list_{project_id}.txt")
+                        music_temp_files_to_clean.append(concat_list_path)
+                        with open(concat_list_path, 'w', encoding='utf-8') as f:
+                            abs_music_path = os.path.abspath(music_file_with_volume).replace('\\', '/') # Path tuyệt đối, dùng /
                             for _ in range(loops_needed):
-                                f.write(f"file '{os.path.abspath(music_file_with_volume)}'\n")
-                            
-                        # Ghép nối bản nhạc
+                                # FFmpeg concat cần đường dẫn được escape đúng cách nếu có ký tự đặc biệt
+                                # Dùng cách an toàn nhất là path tuyệt đối
+                                f.write(f"file '{abs_music_path}'\n")
+
+                        # Lệnh FFmpeg để ghép lặp bản nhạc
                         loop_cmd = [
                             self.ffmpeg_path, "-y",
                             "-f", "concat",
-                            "-safe", "0",
-                            "-i", concat_list,
-                            "-c", "copy",
+                            "-safe", "0", # Cho phép path tuyệt đối
+                            "-i", concat_list_path,
+                            "-c", "copy", # Chỉ copy stream nhạc, không re-encode
                             looped_music_file
                         ]
-                        subprocess.run(loop_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                        
-                        # Sử dụng file nhạc đã lặp thay vì file gốc
-                        if os.path.exists(looped_music_file) and os.path.getsize(looped_music_file) > 1000:
-                            music_file = looped_music_file
+                        logger.info(f"Running FFmpeg concat command for music looping...")
+                        loop_process = subprocess.run(loop_cmd, capture_output=True, text=True, check=False)
+
+                        if loop_process.returncode == 0 and os.path.exists(looped_music_file) and os.path.getsize(looped_music_file) > 1000:
+                            logger.info(f"Looped music created successfully: {looped_music_file}")
+                            music_file_to_use = looped_music_file # Sử dụng file nhạc đã lặp
                         else:
-                            logger.warning("Failed to create looped music, using original")
-                            music_file = music_file_with_volume
-                    else:
-                        music_file = music_file_with_volume
-                    
-                    # Thêm nhạc nền vào video bằng FFmpeg
-                    logger.info(f"Adding background music to video using FFmpeg")
+                            logger.warning(f"Failed to create looped music file. Using original adjusted music. FFmpeg stderr: {loop_process.stderr}")
+                            # music_file_to_use vẫn là music_file_with_volume
+
+                    # 4. Thêm nhạc nền (đã chỉnh volume, có thể đã lặp) vào video bằng FFmpeg amix
+                    logger.info(f"Adding background music ('{os.path.basename(music_file_to_use)}') to video using FFmpeg amix...")
+
+                    # Sử dụng filter amix để trộn audio của video gốc và nhạc nền
+                    # duration=first: Độ dài output bằng input đầu tiên (video)
+                    # dropout_transition=2: Fade out nhẹ cho input thứ 2 (nhạc nền) nếu nó dài hơn
                     add_music_cmd = [
                         self.ffmpeg_path, "-y",
-                        "-i", intermediate_path,
-                        "-i", music_file,
-                        "-filter_complex", "[1:a]apad[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=2",
-                        "-c:v", "copy",
-                        "-c:a", "aac", "-b:a", "192k",
-                        output_path_with_music
+                        "-i", intermediate_output_path,      # Input 0: Video gốc (đã ghép nối)
+                        "-i", music_file_to_use,             # Input 1: Nhạc nền (đã xử lý)
+                        "-filter_complex", f"[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]", # Trộn audio
+                        "-map", "0:v:0",                      # Map luồng video từ input 0
+                        "-map", "[aout]",                     # Map luồng audio đã trộn
+                        "-c:v", "copy",                       # Copy luồng video (nhanh)
+                        "-c:a", "aac", "-b:a", "192k",        # Encode lại audio hỗn hợp sang AAC
+                        "-shortest",                          # Đảm bảo output không dài hơn video gốc
+                        output_path_with_music               # File output cuối cùng
                     ]
-                    subprocess.run(add_music_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                    
-                    # Kiểm tra kết quả và cập nhật đường dẫn cuối cùng
-                    if os.path.exists(output_path_with_music) and os.path.getsize(output_path_with_music) > 10000:
+
+                    # Chạy lệnh thêm nhạc
+                    logger.debug(f"FFmpeg add music command: {' '.join(add_music_cmd)}")
+                    add_music_process = subprocess.run(add_music_cmd, capture_output=True, text=True, check=False)
+
+                    # Kiểm tra kết quả
+                    if add_music_process.returncode == 0 and os.path.exists(output_path_with_music) and os.path.getsize(output_path_with_music) > 10000:
                         logger.info(f"Successfully created video with background music: {output_path_with_music}")
-                        final_output_with_fx = output_path_with_music  # Cập nhật đường dẫn trả về
-                        
-                        # Xóa file trung gian nếu khác file cuối cùng
+                        video_input_for_next_step = output_path_with_music  # Cập nhật đường dẫn cho bước phụ đề
+
+                        # Xóa file trung gian nếu tên khác file cuối cùng và việc thêm nhạc thành công
                         if intermediate_output_path != output_path_with_music and os.path.exists(intermediate_output_path):
                             try:
                                 os.remove(intermediate_output_path)
-                                logger.info(f"Removed intermediate video file: {intermediate_output_path}")
+                                logger.info(f"Removed intermediate video file (music added): {intermediate_output_path}")
                             except OSError as rm_err:
                                 logger.warning(f"Could not remove intermediate video file {intermediate_output_path}: {rm_err}")
                     else:
-                        logger.error("Failed to add background music. Using video without music.")
-                        final_output_with_fx = intermediate_output_path  # Trả về file không có nhạc
-                    
-                    # Dọn dẹp files tạm thời
-                    for temp_file in [music_file_with_volume, looped_music_file, concat_list]:
+                        logger.error(f"Failed to add background music using FFmpeg amix. Keeping video without music.")
+                        logger.error(f"FFmpeg stderr: {add_music_process.stderr}")
+                        # Nếu thất bại, file input cho bước sau vẫn là file trung gian
+                        # Đổi tên/copy file trung gian thành file output cuối cùng (nếu tên khác)
+                        if intermediate_output_path != output_path:
+                             try:
+                                 shutil.move(intermediate_output_path, output_path)
+                                 logger.info(f"Moved intermediate file to final output path (music failed): {output_path}")
+                                 video_input_for_next_step = output_path # Cập nhật input cho bước sau
+                             except Exception as move_err:
+                                 logger.error(f"Could not move intermediate file after music failure: {move_err}. Keeping intermediate file.")
+                                 video_input_for_next_step = intermediate_output_path # Giữ nguyên intermediate
+                        else:
+                             # Nếu tên giống nhau thì không cần làm gì
+                             video_input_for_next_step = intermediate_output_path
+
+
+                except Exception as music_err:
+                    logger.error(f"Error during background music processing: {str(music_err)}", exc_info=True)
+                    logger.warning("Proceeding with video without background music.")
+                    # Đổi tên/copy file trung gian nếu cần
+                    if os.path.exists(intermediate_output_path):
+                        if intermediate_output_path != output_path:
+                             try:
+                                 shutil.move(intermediate_output_path, output_path)
+                                 logger.info(f"Moved intermediate file to final output path (music error): {output_path}")
+                                 video_input_for_next_step = output_path
+                             except Exception as move_err:
+                                 logger.error(f"Could not move intermediate file after music error: {move_err}. Keeping intermediate file.")
+                                 video_input_for_next_step = intermediate_output_path
+                        else:
+                             video_input_for_next_step = intermediate_output_path
+                    else:
+                         video_input_for_next_step = None # Lỗi nghiêm trọng hơn
+
+                finally:
+                    # Dọn dẹp các file nhạc tạm thời
+                    logger.debug("Cleaning up temporary music files...")
+                    for temp_file in music_temp_files_to_clean:
                         if temp_file and os.path.exists(temp_file):
                             try:
                                 os.remove(temp_file)
-                            except OSError:
-                                pass
-                                
-                except Exception as e:
-                    logger.error(f"Error adding background music: {str(e)}", exc_info=True)
-                    logger.warning("Proceeding with video without background music.")
-                    final_output_with_fx = intermediate_output_path  # Trả về file không có nhạc
+                            except OSError as rm_music_err:
+                                logger.warning(f"Could not remove temporary music file {temp_file}: {rm_music_err}")
+
             else:
-                # Log các trường hợp không thêm nhạc nền
-                logger.info("Background music disabled or not provided.")
-                final_output_with_fx = intermediate_output_path
+                # Trường hợp không bật hoặc không có nhạc nền
+                logger.info("Background music disabled or not provided. Using concatenated video directly.")
+                # Đổi tên/di chuyển file trung gian thành file output cuối cùng (nếu tên khác)
+                if os.path.exists(intermediate_output_path):
+                    if intermediate_output_path != output_path:
+                         try:
+                             shutil.move(intermediate_output_path, output_path)
+                             logger.info(f"Moved intermediate file to final output path: {output_path}")
+                             video_input_for_next_step = output_path
+                         except Exception as move_err:
+                             logger.error(f"Could not move intermediate file: {move_err}. Keeping intermediate file.")
+                             video_input_for_next_step = intermediate_output_path
+                    else:
+                         video_input_for_next_step = intermediate_output_path # Đã là đường dẫn cuối
+                else:
+                     video_input_for_next_step = None # Lỗi nếu file trung gian không tồn tại
 
-            # --- 6. Thêm phụ đề (Logic giữ nguyên, áp dụng cho final_output_with_fx) ---
-            final_output_path_final = final_output_with_fx # Đường dẫn trả về cuối cùng
+            # Cập nhật final_output_with_fx để phản ánh đường dẫn hiện tại (có thể đã có nhạc hoặc chưa)
+            final_output_with_fx = video_input_for_next_step
 
-            if VIDEO_SETTINGS.get("enable_subtitles", False):
-                logger.info("Adding subtitles...")
-                subtitled_output_path = os.path.splitext(final_output_with_fx)[0] + "_subs" + os.path.splitext(final_output_with_fx)[1]
-                # Cần đường dẫn audio gốc của các speech units để tạo SRT chính xác
-                # Tìm một file audio unit bất kỳ để xác định thư mục audio
-                first_audio_unit = audio_map.get(1) if 1 in audio_map else (list(audio_map.values())[0] if audio_map else None)
-                audio_unit_dir = os.path.dirname(first_audio_unit['path']) if first_audio_unit else None
+            # --- 6. Thêm phụ đề (Áp dụng cho final_output_with_fx) ---
+            final_output_path_final = final_output_with_fx # Đường dẫn mặc định trả về là file từ bước trước
 
-                if audio_unit_dir:
+            # Chỉ thêm phụ đề nếu được bật và file video đầu vào hợp lệ
+            if VIDEO_SETTINGS.get("enable_subtitles", False) and \
+               final_output_with_fx and \
+               os.path.exists(final_output_with_fx) and \
+               os.path.getsize(final_output_with_fx) > 1000:
+
+                logger.info(f"Project {project_id}: Adding subtitles...")
+
+                # Xác định đường dẫn file audio gốc của các speech units
+                # Cần tìm thư mục chứa các file audio của unit
+                audio_unit_dir = None
+                if audio_map: # audio_map là dict {unit_number: audio_info}
+                    # Lấy thông tin của unit đầu tiên để xác định thư mục
+                    first_unit_info = next(iter(audio_map.values()), None)
+                    if first_unit_info and 'path' in first_unit_info:
+                        audio_unit_dir = os.path.dirname(first_unit_info['path'])
+
+                if not audio_unit_dir or not os.path.isdir(audio_unit_dir):
+                     logger.error("Could not determine speech unit audio directory. Cannot generate combined audio for subtitles.")
+                     # Không thể tiếp tục thêm phụ đề, giữ nguyên file từ bước trước
+                     final_output_path_final = final_output_with_fx
+                else:
                     # Ghép các file audio unit lại thành 1 file tạm để tạo SRT tổng thể
                     temp_full_audio_path = os.path.join(temp_project_dir, f"combined_audio_{project_id}.mp3")
-                    unit_audio_clips_for_srt = []
-                    all_clips_to_close.append(temp_full_audio_path) # Đánh dấu để xóa sau
+                    srt_file_path = os.path.join(temp_project_dir, f"subtitles_{project_id}.srt")
+                    subtitled_output_path_temp = os.path.join(temp_project_dir, f"output_with_subs_temp_{project_id}.mp4") # File output tạm thời
+
+                    combined_audio_success = False
                     try:
                         logger.info("Combining speech unit audios for subtitle generation...")
-                        sorted_units = sorted(audio_map.values(), key=lambda x: x['unit_number'])
-                        clips_to_concat = [AudioFileClip(unit['path']) for unit in sorted_units if os.path.exists(unit['path'])]
-                        if clips_to_concat:
-                                combined_audio = concatenate_audioclips(clips_to_concat)
-                                combined_audio.write_audiofile(temp_full_audio_path, codec='mp3')
-                                combined_audio.close() # Đóng clip tổng
-                                for clip in clips_to_concat: clip.close() # Đóng clip con
+                        # Sắp xếp các unit audio theo unit_number
+                        sorted_units_info = sorted(audio_map.values(), key=lambda x: x['unit_number'])
+                        unit_audio_paths_to_concat = [unit['path'] for unit in sorted_units_info if unit.get('path') and os.path.exists(unit['path'])]
 
-                                if os.path.exists(temp_full_audio_path):
-                                    # Gọi hàm thêm phụ đề bằng ffmpeg
-                                    subtitled_video_path = self.add_subtitles_to_video_ffmpeg(
-                                        video_path=final_output_with_fx, # Video đã có hoặc không có nhạc nền
-                                        audio_path_for_srt=temp_full_audio_path, # Audio tổng để tạo SRT
-                                        output_path=subtitled_output_path
-                                    )
-                                    if subtitled_video_path and os.path.exists(subtitled_video_path):
-                                        logger.info(f"Successfully added subtitles: {subtitled_video_path}")
-                                        # Xóa file video không có phụ đề nếu tên khác nhau
-                                        if final_output_with_fx != subtitled_video_path and os.path.exists(final_output_with_fx):
-                                            try:
-                                                # Đóng file trước khi xóa (quan trọng)
-                                                # Cần kiểm tra xem clip nào đang giữ file này
-                                                # Cách đơn giản là không đóng clip final_video_no_music sớm hơn
-                                                if 'final_video_no_music' in locals() and final_video_no_music and final_output_with_fx == intermediate_output_path:
-                                                    final_video_no_music.close()
-                                                    del final_video_no_music # Xóa tham chiếu
-
-                                                os.remove(final_output_with_fx)
-                                                logger.info(f"Removed original video without subtitles: {final_output_with_fx}")
-                                            except Exception as rm_err:
-                                                logger.warning(f"Could not remove video file before subtitle ({final_output_with_fx}): {rm_err}")
-                                        final_output_path_final = subtitled_video_path # Cập nhật đường dẫn cuối cùng
-                                    else:
-                                        logger.warning("Failed to add subtitles. Returning video without subtitles.")
-                                else:
-                                    logger.error("Failed to combine audio for subtitles.")
+                        if not unit_audio_paths_to_concat:
+                            logger.error("No valid speech unit audio files found to combine for subtitles.")
                         else:
-                                logger.error("No valid audio unit clips found to combine for subtitles.")
+                            # Tạo file list cho FFmpeg concat
+                            concat_audio_list_path = os.path.join(temp_project_dir, f"audio_list_{project_id}.txt")
+                            with open(concat_audio_list_path, 'w', encoding='utf-8') as f:
+                                for audio_file in unit_audio_paths_to_concat:
+                                    f.write(f"file '{os.path.abspath(audio_file).replace('\\', '/')}'\n")
+
+                            # Lệnh FFmpeg để ghép nối audio
+                            concat_audio_cmd = [
+                                self.ffmpeg_path, "-y",
+                                "-f", "concat",
+                                "-safe", "0",
+                                "-i", concat_audio_list_path,
+                                "-c", "copy", # Copy không cần re-encode
+                                temp_full_audio_path
+                            ]
+                            concat_audio_process = subprocess.run(concat_audio_cmd, capture_output=True, text=True, check=False)
+
+                            # Dọn dẹp file list ngay lập tức
+                            if os.path.exists(concat_audio_list_path):
+                                try: os.remove(concat_audio_list_path)
+                                except OSError: pass
+
+                            if concat_audio_process.returncode == 0 and os.path.exists(temp_full_audio_path) and os.path.getsize(temp_full_audio_path) > 100:
+                                logger.info(f"Successfully combined audio for subtitles: {temp_full_audio_path}")
+                                combined_audio_success = True
+                            else:
+                                logger.error(f"Failed to combine audio for subtitles. FFmpeg stderr: {concat_audio_process.stderr}")
 
                     except Exception as e:
-                        logger.error(f"Error processing audio for subtitles: {e}", exc_info=True)
-                    finally:
-                        # Xóa file audio tạm
-                        if os.path.exists(temp_full_audio_path):
+                        logger.error(f"Error combining audio for subtitles: {e}", exc_info=True)
+
+                    # Nếu tạo audio tổng hợp thành công, tiến hành tạo SRT và thêm vào video
+                    if combined_audio_success:
+                        subtitle_generation_success = False
+                        try:
+                            # Gọi hàm tạo SRT (hàm này đã bao gồm fallback faster-whisper -> whisper)
+                            generated_srt = self.generate_subtitles_with_whisper(
+                                temp_full_audio_path,
+                                srt_file_path,
+                                model=VIDEO_SETTINGS.get("subtitle_whisper_model", "base"),
+                                language=language # Sử dụng ngôn ngữ từ script
+                            )
+
+                            if generated_srt and os.path.exists(generated_srt) and os.path.getsize(generated_srt) > 0:
+                                logger.info(f"Successfully generated subtitles file: {srt_file_path}")
+                                subtitle_generation_success = True
+                            else:
+                                logger.error("Failed to generate subtitles file (SRT).")
+
+                        except Exception as srt_e:
+                            logger.error(f"Error generating subtitles file (SRT): {srt_e}", exc_info=True)
+
+                        # Nếu tạo SRT thành công, thêm vào video bằng FFmpeg
+                        if subtitle_generation_success:
+                            logger.info(f"Burning subtitles into video: {final_output_with_fx} -> {subtitled_output_path_temp}")
                             try:
-                                    os.remove(temp_full_audio_path)
-                                    # logger.debug(f"Removed temporary combined audio: {temp_full_audio_path}")
+                                # Chuẩn bị đường dẫn SRT cho FFmpeg (cần escape ký tự đặc biệt)
+                                # Trên Windows, FFmpeg cần escape dấu hai chấm và backslash
+                                if os.name == 'nt':
+                                    srt_path_escaped = srt_file_path.replace('\\', '\\\\').replace(':', '\\:')
+                                else: # Linux/macOS
+                                    # Thường chỉ cần escape ký tự đặc biệt như ':', ',', '[', ']'
+                                    # Cách an toàn là đặt trong dấu nháy đơn nếu shell không tự xử lý
+                                    # Tuy nhiên, khi gọi từ subprocess, không cần quote shell, chỉ cần escape
+                                    srt_path_escaped = srt_file_path.replace("'", "\\'") # Escape dấu nháy đơn nếu có
+
+                                # Lấy subtitle style từ settings
+                                subtitle_style_string = VIDEO_SETTINGS.get("subtitle_style", "Alignment=2,OutlineColour=&H80000000,BorderStyle=3,Outline=1,Shadow=1")
+                                font_size = VIDEO_SETTINGS.get("subtitle_font_size", 24)
+                                subtitle_vf = f"subtitles='{srt_path_escaped}':force_style='FontSize={font_size},{subtitle_style_string}'"
+
+                                add_subs_cmd = [
+                                    self.ffmpeg_path, "-y",
+                                    "-i", final_output_with_fx,   # Video đầu vào (có thể đã có nhạc)
+                                    "-vf", subtitle_vf,           # Filter để burn subtitle
+                                    "-c:a", "copy",               # Copy luồng audio gốc
+                                    "-c:v", "libx264", "-crf", "23", "-preset", "medium", # Encode lại video với subs
+                                    "-pix_fmt", "yuv420p",
+                                    subtitled_output_path_temp    # File output tạm thời
+                                ]
+
+                                logger.debug(f"FFmpeg add subtitles command: {' '.join(add_subs_cmd)}")
+                                subs_process = subprocess.run(add_subs_cmd, capture_output=True, text=True, check=False)
+
+                                if subs_process.returncode == 0 and os.path.exists(subtitled_output_path_temp) and os.path.getsize(subtitled_output_path_temp) > 10000:
+                                    logger.info(f"Successfully added subtitles to temporary video: {subtitled_output_path_temp}")
+
+                                    # Xóa file gốc không có phụ đề
+                                    original_file_to_delete = final_output_with_fx
+                                    try:
+                                        if os.path.exists(original_file_to_delete):
+                                            os.remove(original_file_to_delete)
+                                            logger.info(f"Removed original video without subtitles: {original_file_to_delete}")
+                                    except OSError as rm_err:
+                                        logger.warning(f"Could not remove original file before subtitle rename ({original_file_to_delete}): {rm_err}")
+
+                                    # Đổi tên file tạm thành file output cuối cùng
+                                    final_target_path = output_path # Đường dẫn cuối cùng mong muốn
+                                    try:
+                                        shutil.move(subtitled_output_path_temp, final_target_path)
+                                        final_output_path_final = final_target_path # Cập nhật đường dẫn trả về
+                                        logger.info(f"Renamed subtitled video to final path: {final_output_path_final}")
+                                    except OSError as mv_err:
+                                        logger.error(f"Could not rename subtitled video to {final_target_path}: {mv_err}. Keeping temp subtitled file: {subtitled_output_path_temp}")
+                                        final_output_path_final = subtitled_output_path_temp # Trả về file tạm nếu không đổi tên được
+
+                                else:
+                                    logger.error("Failed to add subtitles using FFmpeg.")
+                                    logger.error(f"FFmpeg stderr: {subs_process.stderr}")
+                                    # Giữ nguyên file từ bước trước (có thể có nhạc hoặc không)
+                                    final_output_path_final = final_output_with_fx
+
+                            except Exception as burn_err:
+                                logger.error(f"Error burning subtitles into video: {burn_err}", exc_info=True)
+                                final_output_path_final = final_output_with_fx # Giữ nguyên file gốc
+                        else:
+                             # Giữ nguyên file từ bước trước nếu tạo SRT thất bại
+                             final_output_path_final = final_output_with_fx
+                    else:
+                         # Giữ nguyên file từ bước trước nếu không tạo được audio tổng hợp
+                         final_output_path_final = final_output_with_fx
+
+                    # Dọn dẹp file audio tổng hợp và SRT tạm
+                    for temp_sub_file in [temp_full_audio_path, srt_file_path]:
+                        if temp_sub_file and os.path.exists(temp_sub_file):
+                            try:
+                                os.remove(temp_sub_file)
+                                # logger.debug(f"Removed temporary subtitle file: {temp_sub_file}")
                             except OSError: pass
-                else:
-                    logger.error("Could not determine audio directory for subtitle generation.")
+
+            else:
+                logger.info("Subtitles disabled in settings or input video invalid. Skipping subtitle step.")
+                # Đường dẫn trả về cuối cùng không đổi
+                final_output_path_final = final_output_with_fx
 
 
-            # --- 7. Dọn dẹp cuối cùng ---
+            # --- 7. Dọn dẹp cuối cùng --- (Phần này nên đặt sau cả bước 5 và 6)
             logger.debug(f"Final cleanup stage for project {project_id}...")
-            # Đóng tất cả các clip đã được quản lý
+            # ... (Giữ nguyên logic đóng clips và xóa temp_project_dir) ...
+            # Đóng tất cả các clip đã được quản lý (ít clip MoviePy hơn trong luồng này)
             closed_count = 0
             for clip in all_clips_to_close:
                 if clip and not isinstance(clip, str) and hasattr(clip, 'close') and callable(clip.close):
@@ -929,38 +1268,40 @@ class VideoEditor:
                         clip.close()
                         closed_count += 1
                     except Exception as close_err:
-                        # Tránh lỗi nếu clip đã được đóng bởi một phần khác (dù không nên)
                         if "AttributeError: 'NoneType'" not in str(close_err):
                             logger.warning(f"Error closing a tracked clip during final cleanup: {close_err}")
-            logger.debug(f"Closed {closed_count} tracked clips during final cleanup.")
+            logger.debug(f"Closed {closed_count} tracked MoviePy clips during final cleanup.")
 
             # Xóa thư mục tạm của project
             if VIDEO_SETTINGS.get("cleanup_temp_files", True):
                 try:
                     logger.info(f"Cleaning up temporary project directory: {temp_project_dir}")
+                    # Đợi một chút trước khi xóa để đảm bảo file không còn bị khóa
+                    time.sleep(1)
                     shutil.rmtree(temp_project_dir, ignore_errors=True)
-                    self._cleanup_old_temp_dirs(days=1) # Dọn dẹp các project cũ khác
                 except Exception as e:
                     logger.warning(f"Error during final temp directory cleanup: {str(e)}")
 
             logger.info(f"=== Video Creation Finished for Project: {project_id} ===")
-            logger.info(f"Final video saved to: {final_output_path_final}")
-            if os.path.exists(final_output_path_final) and os.path.getsize(final_output_path_final) > 10000:
+
+            # Kiểm tra file cuối cùng trước khi trả về
+            if final_output_path_final and os.path.exists(final_output_path_final) and os.path.getsize(final_output_path_final) > 10000:
+                logger.info(f"Final video saved to: {final_output_path_final}")
                 return final_output_path_final
             else:
-                # Tìm file output khác có thể sử dụng được
+                logger.error(f"Final output file is missing or invalid: {final_output_path_final}")
+                # Thử tìm file output khác có thể sử dụng được (ít khả năng xảy ra nếu logic đúng)
                 potential_outputs = [
-                    final_output_path_final,
-                    intermediate_output_path,
-                    output_path
+                    final_output_with_fx, # File trước khi thêm sub
+                    intermediate_output_path, # File trước khi thêm nhạc/sub
+                    output_path # Đường dẫn gốc mong muốn
                 ]
-                    
                 for potential_path in potential_outputs:
-                    if os.path.exists(potential_path) and os.path.getsize(potential_path) > 10000:
-                        logger.info(f"Using alternative output path: {potential_path}")
+                    if potential_path and os.path.exists(potential_path) and os.path.getsize(potential_path) > 10000:
+                        logger.warning(f"Returning best available output path: {potential_path}")
                         return potential_path
-                            
-                logger.error("No valid output file found to return")
+
+                logger.error("No valid output file found to return.")
                 return None
 
     def concatenate_videos_with_ffmpeg(self, video_files, output_path):
