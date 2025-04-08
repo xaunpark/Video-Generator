@@ -81,7 +81,8 @@ VIDEO_SETTINGS = {
     "video_clip_duration": 10,            # Thời lượng mong muốn cho video clips (giây)
     "video_clip_frequency": 0.4,         # Tỷ lệ scene nên dùng video (0.0-1.0)
     "min_scenes_between_videos": 1,      # Số scene tối thiểu giữa 2 video clips
-    "openai_model_for_scene_analysis": "gpt-4o-mini",  # Model để phân tích scene
+    "chapter_title_duration": 2.5,
+    "openai_model_for_scene_analysis": "gpt-4o",  # Model để phân tích scene
     "enable_transitions": True,
     "transition_types": ["fade"],
     "transition_duration": 0.5,
