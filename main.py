@@ -204,7 +204,7 @@ def get_youtube_transcript(video_url, languages=None):
 
         # Fetch the actual transcript data
         transcript_data = transcript.fetch()
-        full_transcript = " ".join([segment['text'] for segment in transcript_data]) # Use dict access
+        full_transcript = " ".join([segment.text for segment in transcript_data])
 
         logger.info(f"Successfully fetched transcript (Language: {detected_language}, Length: {len(full_transcript)} chars)")
         return full_transcript, detected_language

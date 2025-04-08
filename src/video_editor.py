@@ -1211,6 +1211,7 @@ class VideoEditor:
                                     original_file_to_delete = final_output_with_fx
                                     try:
                                         if os.path.exists(original_file_to_delete):
+                                            time.sleep(1)
                                             os.remove(original_file_to_delete)
                                             logger.info(f"Removed original video without subtitles: {original_file_to_delete}")
                                     except OSError as rm_err:
