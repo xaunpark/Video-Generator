@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 import pprint
+from src.telegram_notifier import TelegramNotifier
 from newspaper import Article
 from src.news_scraper import NewsScraper
 from src.script_generator import ScriptGenerator
@@ -21,8 +22,10 @@ from src.youtube_uploader import YouTubeUploader
 
 from config.credentials import (
     OPENAI_API_KEY,
-    YOUTUBE_CLIENT_SECRETS_FILE,
-    YOUTUBE_REFRESH_TOKEN
+    YOUTUBE_CLIENT_SECRETS_FILE_PATH,
+    YOUTUBE_REFRESH_TOKEN,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID
 )
 
 from config.settings import (
@@ -590,14 +593,36 @@ def main():
                 print("(FORCED CONTROVERSIAL MODE ENABLED)")
             print(f"Output: {final_video_path}")
 
+            # --- NEW: Initialize Telegram Notifier ---
+            telegram_notifier = None # Khởi tạo là None
+            if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+                logger.info("Attempting to initialize Telegram Notifier...")
+                try:
+                    # Khởi tạo Notifier với token và chat_id từ credentials
+                    telegram_notifier = TelegramNotifier(
+                        bot_token=TELEGRAM_BOT_TOKEN,
+                        chat_id=TELEGRAM_CHAT_ID
+                    )
+                    # Log thành công nếu không có lỗi
+                    logger.info("TelegramNotifier initialized successfully.")
+                except ValueError as e: # Bắt lỗi cụ thể từ __init__
+                    logger.error(f"Failed to initialize TelegramNotifier (ValueError): {e}")
+                except ConnectionError as e: # Bắt lỗi cụ thể từ __init__
+                    logger.error(f"Failed to initialize TelegramNotifier (ConnectionError): {e}")
+                except Exception as tele_init_err: # Bắt lỗi chung khác
+                    logger.error(f"Unexpected error initializing TelegramNotifier: {tele_init_err}", exc_info=True)
+            else:
+                logger.warning("Telegram BOT_TOKEN or CHAT_ID not configured in .env. Telegram notifications will be skipped.")
+            # --- END NEW: Initialize Telegram Notifier ---
+
             # --- NEW: Ask for YouTube Upload ---
             # Chỉ hỏi upload nếu video thực sự được tạo thành công
             upload_choice = input("\nDo you want to upload this video to YouTube? (y/N): ").strip().lower()
             if upload_choice == 'y':
                 logger.info("Attempting to upload video to YouTube...")
                 # Kiểm tra các credentials cần thiết cho việc upload
-                if not YOUTUBE_CLIENT_SECRETS_FILE or not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
-                    logger.error(f"YouTube client secrets file not found or path not set ('{YOUTUBE_CLIENT_SECRETS_FILE}'). Cannot upload.")
+                if not YOUTUBE_CLIENT_SECRETS_FILE_PATH or not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE_PATH):
+                    logger.error(f"YouTube client secrets file not found or path not set ('{YOUTUBE_CLIENT_SECRETS_FILE_PATH}'). Cannot upload.")
                 elif not YOUTUBE_REFRESH_TOKEN:
                     logger.error("YOUTUBE_REFRESH_TOKEN not found in environment variables. Cannot upload.")
                     logger.error("Please run the 'get_refresh_token.py' script once to obtain it.")
@@ -627,8 +652,14 @@ def main():
                         yt_language = language # Ngôn ngữ đã xác định khi tạo script
 
                         logger.info("Initializing YouTube Uploader...")
+
+                        # Đảm bảo secrets_path_str đã được định nghĩa từ YOUTUBE_CLIENT_SECRETS_FILE_PATH
+                        secrets_path_str = str(YOUTUBE_CLIENT_SECRETS_FILE_PATH)
+                        if not os.path.exists(secrets_path_str): # Kiểm tra lại đường dẫn
+                            raise FileNotFoundError(f"Secrets file not found at final check: {secrets_path_str}")
+
                         uploader = YouTubeUploader(
-                            client_secrets_file=YOUTUBE_CLIENT_SECRETS_FILE,
+                            client_secrets_file_path=secrets_path_str,
                             refresh_token=YOUTUBE_REFRESH_TOKEN
                         )
 
@@ -648,6 +679,35 @@ def main():
                             print(f"Video ID: {youtube_video_id}")
                             print(f"Watch Link: https://www.youtube.com/watch?v={youtube_video_id}")
                             print(f"Studio Link: https://studio.youtube.com/video/{youtube_video_id}/edit")
+
+                            # --- NEW: Send Telegram Notification ---
+                            # Kiểm tra xem notifier đã được khởi tạo thành công ở bước trước chưa
+                            if telegram_notifier:
+                                logger.info("Sending notification to Telegram...")
+                                try:
+                                    # --- SỬA ĐỔI CÁCH GỌI ---
+                                    # Tạo coroutine bằng cách gọi hàm async
+                                    coro = telegram_notifier.send_upload_notification_async(
+                                        video_id=youtube_video_id,
+                                        video_title=yt_title,
+                                        video_url=f"https://www.youtube.com/watch?v={youtube_video_id}",
+                                        studio_url=f"https://studio.youtube.com/video/{youtube_video_id}/edit"
+                                    )
+                                    # Chạy coroutine bằng asyncio.run()
+                                    import asyncio # Đảm bảo asyncio đã được import ở đầu main.py
+                                    sent_telegram_msg = asyncio.run(coro)
+                                    # --- KẾT THÚC SỬA ĐỔI ---
+
+                                    if sent_telegram_msg:
+                                        logger.info("Telegram notification sent successfully.")
+                                    else:
+                                        logger.warning("Sending Telegram notification seems to have failed (check logs above).")
+                                except Exception as notify_err:
+                                    logger.error(f"Unexpected error sending Telegram notification: {notify_err}", exc_info=True)
+                            else:
+                                logger.info("Telegram notifier was not initialized, skipping notification.")
+                            # --- END NEW: Send Telegram Notification ---
+                            
                         else:
                             logger.error("--- YouTube Upload Failed ---")
                             print("Upload failed. Please check the application logs (app.log) for more details.")

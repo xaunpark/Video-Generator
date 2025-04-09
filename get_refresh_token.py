@@ -10,8 +10,10 @@ CLIENT_SECRETS_FILE = "client_secrets.json"
 
 # Phạm vi quyền cần thiết để quản lý video YouTube
 # Đảm bảo bạn đã bật YouTube Data API v3 trong Google Cloud Console
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
-          "https://www.googleapis.com/auth/youtube.readonly"] # Thêm readonly nếu cần đọc thông tin
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly"
+]
 
 # Tên file để lưu trữ tạm thời credentials (bao gồm refresh token) sau khi xác thực
 # File này không cần thiết sau khi bạn đã lấy và lưu refresh token vào .env

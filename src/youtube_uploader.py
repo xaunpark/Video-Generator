@@ -7,6 +7,7 @@ import logging
 import google.oauth2.credentials
 # import google_auth_oauthlib.flow # Vẫn không cần flow ở đây
 from google.auth.transport.requests import Request
+import googleapiclient
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
@@ -26,7 +27,10 @@ if not logger.hasHandlers():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Define the scopes needed for uploading
-YOUTUBE_UPLOAD_SCOPE = ["https://www.googleapis.com/auth/youtube.upload"]
+YOUTUBE_UPLOAD_SCOPE = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly"
+]
 YOUTUBE_API_SERVICE_NAME = "youtube"
 YOUTUBE_API_VERSION = "v3"
 
@@ -382,6 +386,58 @@ class YouTubeUploader:
             logger.error(f"An unexpected error occurred during video upload: {e}", exc_info=True)
             return None
 
+    def update_video_status(self, video_id, new_status="public"):
+        valid_statuses = ["public", "private", "unlisted"]
+        if new_status not in valid_statuses:
+            logger.error(f"Invalid new status '{new_status}'.")
+            return False
+
+        youtube = self._initialize_youtube_client()
+        if not youtube: return False
+
+        logger.info(f"Attempting DIRECT status update for video '{video_id}' to '{new_status}' (skipping pre-check)...") # Log khác đi
+        try:
+            # --- BỎ QUA HOÀN TOÀN BƯỚC LIST ---
+
+            update_body = {
+                "id": video_id,
+                "status": {
+                    "privacyStatus": new_status
+                    # Có thể thêm các thuộc tính status khác nếu API yêu cầu khi update
+                    # Ví dụ: "embeddable": True, "license": "youtube" (ít khi cần)
+                }
+            }
+
+            update_request = youtube.videos().update(
+                part="status", # Chỉ định rõ chỉ cập nhật status
+                body=update_body
+            )
+            update_response = update_request.execute()
+
+            # Kiểm tra kết quả update trực tiếp
+            updated_status = update_response.get("status", {}).get("privacyStatus")
+            if updated_status == new_status:
+                logger.info(f"Successfully updated video '{video_id}' status to '{new_status}'.")
+                return True
+            else:
+                logger.error(f"Status update call succeeded but status did not change as expected for '{video_id}'. Response: {update_response}")
+                return False
+
+        except googleapiclient.errors.HttpError as e:
+            error_content = e.content.decode('utf-8') if e.content else str(e)
+            if e.resp.status == 404:
+                logger.error(f"Video with ID '{video_id}' not found when attempting to update status.")
+            elif e.resp.status == 403:
+                # Lỗi vẫn là 403 ở đây thì vấn đề chắc chắn là scope 'upload'
+                logger.error(f"Permission error (403) when attempting direct status UPDATE for '{video_id}': {error_content}")
+                logger.error("This strongly indicates the refresh token lacks 'youtube.upload' scope.")
+            else:
+                logger.error(f"An HTTP error occurred while updating video status for '{video_id}': {e.resp.status} {error_content}", exc_info=True)
+            return False
+        except Exception as e:
+            logger.error(f"An unexpected error occurred updating video status for '{video_id}': {e}", exc_info=True)
+            return False
+        
 # Example usage (Optional - for testing this module directly)
 if __name__ == '__main__':
      print("--- Testing YouTubeUploader (reading secrets file path) ---")
