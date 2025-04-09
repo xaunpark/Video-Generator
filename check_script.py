@@ -1,34 +1,23 @@
-# --- START OF FILE main.py ---
-
-# main.py
+# check_script.py
 import logging
 import os
-import re
 import sys
 import json
-import time
 from datetime import datetime
-from urllib.parse import urlparse, parse_qs
-import pprint
-from newspaper import Article
 from src.news_scraper import NewsScraper
 from src.script_generator import ScriptGenerator
 from src.image_generator import ImageGenerator
 from src.voice_generator import VoiceGenerator
 from src.video_editor import VideoEditor
+from config.settings import OUTPUT_DIR, TEMP_DIR, ASSETS_DIR
+from config.settings import VIDEO_SETTINGS
+import pprint
 
-from src.youtube_uploader import YouTubeUploader
+from newspaper import Article
+import time
 
-from config.credentials import (
-    OPENAI_API_KEY,
-    YOUTUBE_CLIENT_SECRETS_FILE,
-    YOUTUBE_REFRESH_TOKEN
-)
-
-from config.settings import (
-    OUTPUT_DIR, TEMP_DIR, ASSETS_DIR,
-    YOUTUBE_SETTINGS
-)
+from urllib.parse import urlparse, parse_qs
+import re
 
 # Setup logging
 logging.basicConfig(
@@ -452,231 +441,42 @@ def main():
         logger.error(f"Error saving script: {e}")
         return # Critical error, cannot proceed without script
 
-    # --- Display Final Script Info ---
-    print("\n" + "="*50)
-    print(f"Script Generated: {script.get('title', 'N/A')}")
-    print(f"Input Source Type: {choice}")
-    print(f"Chosen Style: {selected_style}")
-    print(f"Chosen Visual Source: {visual_source_choice}")
-    print(f"Output Language: {language}")
-    print(f"Number of Shots (Scenes): {len(script.get('scenes', []))}")
-    print(f"Number of Speech Units: {len(script.get('speech_units', []))}")
-    print("="*50 + "\n")
-    print("Proceeding with Voice, Visuals, and Video Editing...")
+    # --- NEW: Display Script and Exit for Testing ---
+    print("\n" + "="*20 + " SCRIPT GENERATION TEST RESULT " + "="*20)
+    print(f"Input Method Choice: {choice}")
+    print(f"Selected Video Mode: {video_mode}")
+    print(f"Selected Style: {selected_style}")
+    print(f"Breakdown Enabled Setting: {VIDEO_SETTINGS.get('enable_sentence_to_shot_breakdown', True)}") # Hiển thị cài đặt
+    print("-" * 50)
+    if script:
+        print(f"Generated Title: {script.get('title', 'N/A')}")
+        print(f"Script Mode Detected: {script.get('script_mode', 'N/A')}")
+        is_chapter_based = script.get('is_chapter_based', False)
+        print(f"Is Chapter Based: {is_chapter_based}")
 
-    # --- Voice Generation ---
-    logger.info("Generating voice...")
-    voice_generator = VoiceGenerator()
-    # Optionally set voice/model based on language/style here if needed
-    # voice_generator.set_voice(...)
-    audio_files = voice_generator.generate_audio_for_script(script)
-    if not audio_files:
-        logger.error("Audio generation failed. Cannot proceed.")
-        return
-    logger.info(f"Generated {len(audio_files)} audio files for speech units.")
+        scenes = script.get('scenes', [])
+        speech_units = script.get('speech_units', [])
+        print(f"Total Scenes (Shots): {len(scenes)}")
+        print(f"Total Speech Units: {len(speech_units)}")
 
-    # --- Image/Video Generation ---
-    logger.info("Generating visuals...")
-    image_generator = ImageGenerator()
+        if is_chapter_based and scenes:
+            # Đếm số chapter duy nhất từ thông tin trong scenes
+            chapters = set(s.get('chapter_number') for s in scenes if s.get('chapter_number') is not None)
+            print(f"Total Chapters Generated: {len(chapters)}")
 
-    # Add source image URL to script if applicable (RSS/URL choices)
-    if choice in ["1", "2"] and selected_article and 'image_url' in selected_article:
-        script['image_url'] = selected_article['image_url']
+        print("\n--- Full Generated Script Structure: ---")
+        pprint.pprint(script) # In cấu trúc dict ra console
+        # Hoặc dùng json.dumps:
+        # print(json.dumps(script, ensure_ascii=False, indent=2))
+
+        print(f"\nScript also saved to (if saving succeeded): {script_path}")
     else:
-        script['image_url'] = None # No source image for keyword/transcript
+        # Trường hợp này không nên xảy ra nếu kiểm tra `if not script:` ở trên hoạt động
+        print("ERROR: Script object is None after generation attempt.")
 
-    # Generate visuals using the chosen method (search or AI)
-    images = image_generator.generate_images_for_script(
-        script,
-        audio_files_info=audio_files, # Pass audio info (mainly for intro/outro timing now)
-        visual_source=visual_source_choice # Pass the user's choice
-    )
-    if not images:
-        logger.error("Visual generation failed. Cannot proceed.")
-        return
-    logger.info(f"Generated {len(images)} visual items (images/videos).")
-
-    # Save image info (optional)
-    images_path = os.path.join(TEMP_DIR, f"images_{timestamp}.json")
-    try:
-        image_info = []
-        for img in images:
-            img_copy = {k: v for k, v in img.items() if k not in ['path']}
-            img_copy['filename'] = os.path.basename(img.get('path', ''))
-            image_info.append(img_copy)
-        with open(images_path, 'w', encoding='utf-8') as f:
-            json.dump(image_info, f, ensure_ascii=False, indent=2)
-        logger.info(f"Saved visual items info to: {images_path}")
-    except Exception as e: logger.warning(f"Could not save visual items info: {e}")
-
-    # --- Save Project Information ---
-    article_info = {}
-    creation_method = "unknown"
-    if choice == "3": # Keyword
-        article_info = {"title": script['title'], "url": f"keyword://{keyword}", "source": "AI Generated from Keyword"}
-        creation_method = "ai_keyword"
-    elif choice == "4": # YouTube Subtitles
-         article_info = {"title": script['title'], "url": youtube_url, "source": f"YouTube Transcript ({youtube_url})"}
-         creation_method = "youtube_subtitle"
-    elif choice in ["1", "2"]: # RSS or Article URL
-        article_info = {"title": selected_article['title'], "url": selected_article.get('url', ''), "source": selected_article.get('source', '')}
-        creation_method = "url" if choice == "2" else "rss"
-
-    project_info = {
-        "title": script['title'],
-        "timestamp": timestamp,
-        "style": selected_style,
-        "visual_source": visual_source_choice,
-        "article": article_info,
-        "script": {
-            "path": script_path,
-            "scenes_count": len(script['scenes']),
-            "speech_units_count": len(script.get('speech_units', []))
-        },
-        "images": [{"type": img['type'], "filename": os.path.basename(img.get('path',''))} for img in images],
-        "audio": [{"type": audio['type'], "filename": os.path.basename(audio.get('path',''))} for audio in audio_files],
-        "creation_method": creation_method,
-        "language": language
-    }
-    project_path = os.path.join(TEMP_DIR, f"project_{timestamp}.json")
-    try:
-        with open(project_path, 'w', encoding='utf-8') as f:
-            json.dump(project_info, f, ensure_ascii=False, indent=2)
-        logger.info(f"Project information saved to: {project_path}")
-    except Exception as e: logger.error(f"Failed to save project information: {e}")
-
-    # --- Video Editing ---
-    try:
-        logger.info("Starting final video editing process...")
-        video_editor = VideoEditor()
-
-        # Find background music
-        background_music = None
-        music_dir = os.path.join(ASSETS_DIR, "music")
-        if os.path.exists(music_dir):
-            music_files = [f for f in os.listdir(music_dir) if f.endswith(('.mp3', '.wav', '.m4a'))]
-            if music_files:
-                background_music = os.path.join(music_dir, music_files[0]) # Take the first one
-                logger.info(f"Using background music: {music_files[0]}")
-
-        # Sanitize title for filename
-        def sanitize_filename(filename):
-            import unicodedata
-            filename = unicodedata.normalize('NFKD', filename).encode('ascii', 'ignore').decode('ascii')
-            filename = re.sub(r'[^\w\s-]', '', filename).strip()
-            filename = re.sub(r'[-\s]+', '_', filename)
-            return filename[:100] # Limit length
-
-        safe_title = sanitize_filename(script.get('title', 'untitled_video'))
-        video_filename = f"{timestamp}_{safe_title}.mp4"
-        output_path_final = os.path.join(OUTPUT_DIR, video_filename)
-
-        # Create the video
-        final_video_path = video_editor.create_video(
-            script=script,
-            media_items=images,
-            audio_files_info=audio_files,
-            output_path=output_path_final,
-            background_music_path=background_music
-        )
-
-        # --- Final Output ---
-        print("\n" + "="*50)
-        if final_video_path and os.path.exists(final_video_path):
-            print(f"Video successfully created!")
-            print(f"Title: {script['title']}")
-            print(f"Style: {selected_style}")
-            if FORCE_CONTROVERSIAL_STYLE and choice in ["1", "2"]: # Chỉ áp dụng khi FORCE bật
-                print("(FORCED CONTROVERSIAL MODE ENABLED)")
-            print(f"Output: {final_video_path}")
-
-            # --- NEW: Ask for YouTube Upload ---
-            # Chỉ hỏi upload nếu video thực sự được tạo thành công
-            upload_choice = input("\nDo you want to upload this video to YouTube? (y/N): ").strip().lower()
-            if upload_choice == 'y':
-                logger.info("Attempting to upload video to YouTube...")
-                # Kiểm tra các credentials cần thiết cho việc upload
-                if not YOUTUBE_CLIENT_SECRETS_FILE or not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
-                    logger.error(f"YouTube client secrets file not found or path not set ('{YOUTUBE_CLIENT_SECRETS_FILE}'). Cannot upload.")
-                elif not YOUTUBE_REFRESH_TOKEN:
-                    logger.error("YOUTUBE_REFRESH_TOKEN not found in environment variables. Cannot upload.")
-                    logger.error("Please run the 'get_refresh_token.py' script once to obtain it.")
-                else:
-                    # Nếu có đủ thông tin, tiến hành upload
-                    try:
-                        # Chuẩn bị thông tin video cho YouTube
-                        yt_title = script.get('title', 'AI Generated Video')
-                        # Tạo description động hơn
-                        yt_description = f"Video generated based on: {article_info.get('source', 'N/A')}\n"
-                        if article_info.get('url'):
-                            yt_description += f"Source URL: {article_info.get('url')}\n"
-                        yt_description += f"Style: {selected_style}\nMode: {video_mode}"
-                        # Thêm phần tóm tắt ngắn nếu có (ví dụ từ script hoặc article)
-                        # yt_summary = script.get('summary', article_info.get('summary', ''))
-                        # if yt_summary: yt_description += f"\n\nSummary:\n{yt_summary[:500]}" # Giới hạn độ dài summary
-
-                        # Lấy tags và các cài đặt khác từ settings
-                        yt_tags = YOUTUBE_SETTINGS.get("tags", [])
-                        # Thêm style và keyword (nếu có) vào tags
-                        if selected_style: yt_tags.append(selected_style)
-                        if keyword: yt_tags.extend(keyword.split()) # Thêm từng từ của keyword
-                        yt_tags = list(set(yt_tags)) # Loại bỏ trùng lặp
-
-                        yt_category_id = YOUTUBE_SETTINGS.get("category_id", "28") # 28 = Science & Technology
-                        yt_privacy_status = YOUTUBE_SETTINGS.get("privacy_status", "private")
-                        yt_language = language # Ngôn ngữ đã xác định khi tạo script
-
-                        logger.info("Initializing YouTube Uploader...")
-                        uploader = YouTubeUploader(
-                            client_secrets_file=YOUTUBE_CLIENT_SECRETS_FILE,
-                            refresh_token=YOUTUBE_REFRESH_TOKEN
-                        )
-
-                        logger.info(f"Starting upload for video: '{yt_title}'")
-                        youtube_video_id = uploader.upload_video(
-                            video_path=final_video_path, # Đường dẫn file video đã tạo
-                            title=yt_title,
-                            description=yt_description,
-                            tags=yt_tags,
-                            category_id=yt_category_id,
-                            privacy_status=yt_privacy_status,
-                            language=yt_language
-                        )
-
-                        if youtube_video_id:
-                            logger.info(f"--- YouTube Upload Successful! ---")
-                            print(f"Video ID: {youtube_video_id}")
-                            print(f"Watch Link: https://www.youtube.com/watch?v={youtube_video_id}")
-                            print(f"Studio Link: https://studio.youtube.com/video/{youtube_video_id}/edit")
-                        else:
-                            logger.error("--- YouTube Upload Failed ---")
-                            print("Upload failed. Please check the application logs (app.log) for more details.")
-
-                    except FileNotFoundError as fnf_err:
-                        # Lỗi này thường xảy ra nếu client_secrets.json không tìm thấy khi khởi tạo Uploader
-                        logger.error(f"Upload initialization failed: {fnf_err}")
-                    except ValueError as val_err:
-                        # Lỗi này thường xảy ra nếu refresh_token rỗng
-                        logger.error(f"Upload initialization failed: {val_err}")
-                    except Exception as upload_err:
-                        logger.error(f"An unexpected error occurred during YouTube upload process: {upload_err}", exc_info=True)
-                        print("An unexpected error occurred during upload. Check logs.")
-            else:
-                logger.info("Skipping YouTube upload as requested.")
-            # --- END NEW ---
-
-
-        else:
-            print("Video creation failed. Check logs for details.")
-            logger.error(f"Video creation process did not return a valid path or the file does not exist: {final_video_path}")
-        print("="*50 + "\n")
-
-    except Exception as e:
-        # --- Sửa lỗi: Đảm bảo khối này bắt lỗi từ VideoEditor ---
-        logger.error(f"An error occurred during the main video processing pipeline: {str(e)}", exc_info=True)
-        print("An unexpected error stopped the process. Check app.log for details.")
+    logger.info("Exiting after script generation test.")
+    return # Hoặc dùng sys.exit(0) - Thoát khỏi hàm main
+    # --- END NEW ---
 
 if __name__ == "__main__":
     main()
-
-# --- END OF FILE main.py ---

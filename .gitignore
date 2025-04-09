@@ -7,6 +7,8 @@ __pycache__/
 
 # File chứa biến môi trường nhạy cảm
 .env
+client_secrets.json
+readme.txt
 
 # Thư mục tạm và output (tùy chọn, nhưng nên có)
 temp/
