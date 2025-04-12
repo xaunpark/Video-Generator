@@ -110,7 +110,12 @@ VIDEO_SETTINGS = {
     "visual_timing_mode": "sync_to_audio", # Chỉ 2 lựa chọn: 'sync_to_audio', 'overall_theme_fixed_duration'
     "fixed_visual_duration": 15.0,        # Dùng cho 'overall_theme_fixed_duration'
     "theme_visual_query_count": 7,       # Số query/prompt cho chế độ theme
-    "theme_visual_generation_factor": 1.5 # Tạo dư visual cho chế độ theme
+    "theme_visual_generation_factor": 1.5, # Tạo dư visual cho chế độ theme
+    # -------------TĂNG CƯỜNG CHẤT LƯỢNG VIDEO----------------------
+    "enable_video_enhancement": True,  # Bật/tắt tính năng tăng cường
+    "enhancement_saturation": 1.1,     # Giá trị saturation (1.0 là gốc, >1 tăng, <1 giảm)
+    "enhancement_contrast": 1.05,      # Giá trị contrast (1.0 là gốc, >1 tăng, <1 giảm)
+    "enhancement_brightness": 0.0,      # Giá trị brightness (-1.0 đến 1.0, 0 là gốc)    
 }
 
 # --- LLM Provider Settings ---
