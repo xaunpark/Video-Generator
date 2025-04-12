@@ -1,0 +1,107 @@
+# Prompts for the 'News Summary' video type
+
+config: # (Tùy chọn) Metadata cho bộ prompt này
+  name: "Standard News Summary"
+  version: 1.1
+  description: "Prompts optimized for summarizing news articles efficiently and engagingly."
+
+script_generation:
+  # Prompt để tạo script ban đầu (câu đầy đủ) từ article
+  initial_script_article: |
+    Create a concise and engaging news summary script based on the following article.
+    Focus on the key information and present it clearly.
+    Structure: Start with a hook, develop the main points, end with a brief conclusion.
+    Write ONLY narrative sentences suitable for voice-over. Do NOT include visual cues.
+    Target Style Tone: {style_tone} # Placeholder cho tone (informative, conversational...)
+
+    ARTICLE TITLE: {article_title}
+    ARTICLE CONTENT:
+    {article_content_truncated}
+
+    OUTPUT FORMAT (JSON ONLY):
+    {{
+      "title": "Concise and Accurate Title based on Article",
+      "initial_scenes": [ /* list of sentences */ ]
+    }}
+
+  # Prompt để tạo script ban đầu từ keyword (nếu loại project này hỗ trợ)
+  initial_script_keyword: |
+    Generate an informative news-style script {language_instruction} about the topic: "{keyword}".
+    Keep it factual and concise.
+    Structure: Introduction, Key Points, Conclusion.
+    Write ONLY narrative sentences.
+    Target Style Tone: {style_tone}
+
+    OUTPUT FORMAT (JSON ONLY):
+    {{
+      "title": "Informative Title about {keyword}",
+      "initial_scenes": [ /* list of sentences */ ]
+    }}
+
+  # Prompt để chia câu thành shots ngắn
+  breakdown_sentence: |
+    Break down the following news sentence into very short visual shots.
+    Prioritize clarity and natural pauses. Keep as one shot if short and cohesive.
+    SENTENCE: "{sentence_text}"
+
+    OUTPUT FORMAT (JSON ONLY):
+    {{
+      "shots": [ /* list of shot strings */ ]
+    }}
+
+layout_generation: # Nếu dùng advanced mode cho loại project này
+  generate_layout_article: |
+    Outline a structured news summary video (3-5 chapters) based on this article.
+    Focus on logical flow: Intro, Key Event 1, Key Event 2, Impact/Analysis, Conclusion.
+    Define chapter titles, summaries, and word count targets.
+    Source Article Content:
+    {source_content_truncated}
+
+    OUTPUT FORMAT (JSON ONLY):
+    { ... structure như đã định nghĩa trước ... }
+
+  generate_chapter_content: |
+    Write the narrative script for Chapter {chapter_number}: "{chapter_title}" of the news summary.
+    Focus: {chapter_summary} | Target Words: ~{word_count_target}
+    Source Article:
+    {source_content_full}
+
+    Write ONLY narrative sentences {language_instruction}. Maintain a clear, informative tone.
+    OUTPUT FORMAT (JSON ONLY):
+    { "chapter_content": [ /* list of sentences */ ] }
+
+visual_generation:
+  # Prompt để tạo query tìm kiếm ảnh/video
+  search_query: |
+    Create a specific, 5-7 word image/video search query in English for a news context.
+    Scene Content: "{scene_content}"
+    Video Title: "{video_title}"
+    OUTPUT: Query text only.
+
+  # Prompt để tạo prompt cho AI image generator (ví dụ Imagen)
+  ai_image_prompt: |
+    Generate a detailed prompt for Google Imagen 3 to create a photorealistic image for a news video scene.
+    Video Title: "{video_title}"
+    Scene Content: "{scene_content}"
+    Style Tone: {style_tone_description}
+    Safety Guidelines: {safety_guidelines}
+    OUTPUT: Prompt text only.
+
+  # Prompt để tạo ý tưởng visual theo chủ đề (nếu dùng timing mode đó)
+  generate_theme_visual_ideas: |
+    Brainstorm {count} diverse visual ideas (search queries or AI prompts) for a news video titled: "{main_title}".
+    Focus on concepts, actions, settings relevant to news.
+    Language: {language_instruction}.
+    OUTPUT FORMAT (JSON ONLY):
+    { "theme_visual_ideas": [ /* list of ideas */ ] }
+
+# --- Có thể thêm các loại prompt khác nếu cần ---
+# Ví dụ: prompt cho YouTube description, tags...
+youtube_generation:
+  generate_description: |
+    Write a concise and informative YouTube video description based on the script title and source.
+    Include relevant keywords and a call to action.
+    Video Title: {video_title}
+    Source Info: {source_info_summary}
+    Script Mode: {script_mode}
+    OUTPUT: Description text only.
