@@ -17,7 +17,7 @@ from src.script_generator import ScriptGenerator
 from src.image_generator import ImageGenerator
 from src.voice_generator import VoiceGenerator
 from src.video_editor import VideoEditor
-
+from config.settings import VIDEO_SETTINGS
 from src.youtube_uploader import YouTubeUploader
 
 from config.credentials import (
@@ -30,7 +30,8 @@ from config.credentials import (
 
 from config.settings import (
     OUTPUT_DIR, TEMP_DIR, ASSETS_DIR,
-    YOUTUBE_SETTINGS
+    YOUTUBE_SETTINGS,
+    LLM_PROVIDERS, DEFAULT_LLM_PROVIDER
 )
 
 # Setup logging
@@ -234,12 +235,70 @@ def get_youtube_transcript(video_url, languages=None):
         return None, None
 # --- End of YouTube function ---
 
+# --- Helper function to prompt for LLM Provider ---
+def prompt_for_llm_provider():
+    """Prompts the user to select an LLM provider."""
+    print("\nSelect LLM Provider:")
+    available_providers = list(LLM_PROVIDERS.keys())
+    for i, provider_name in enumerate(available_providers):
+        print(f"{i+1}. {provider_name.capitalize()}")
+
+    default_index = -1
+    try:
+        default_index = available_providers.index(DEFAULT_LLM_PROVIDER)
+    except ValueError:
+        logger.warning(f"Default LLM Provider '{DEFAULT_LLM_PROVIDER}' not found in available list. Using first provider as default.")
+        default_index = 0
+
+    choice = ""
+    valid_choices = [str(j+1) for j in range(len(available_providers))]
+    while choice not in valid_choices:
+        prompt_text = f"Enter LLM provider choice ({','.join(valid_choices)}, default is {default_index+1} '{available_providers[default_index].capitalize()}'): "
+        choice = input(prompt_text).strip()
+        if not choice:
+            choice = str(default_index + 1) # Use default if empty input
+
+    selected_index = int(choice) - 1
+    chosen_provider = available_providers[selected_index]
+    logger.info(f"Selected LLM Provider: {chosen_provider}")
+    return chosen_provider
+# --- End Helper function ---
+
+# --- Helper function to prompt for Visual Timing Mode (SIMPLIFIED) ---
+def prompt_for_visual_timing_mode():
+    print("\n--- Step 3.5: Select Visual Presentation Mode ---")
+    print("1. Sync visuals to audio segments (Default)")
+    print("2. Overall theme visuals with fixed duration")
+
+    timing_choice = ""
+    valid_timing_choices = ["1", "2"]
+    # Lấy default từ settings
+    default_mode_from_settings = VIDEO_SETTINGS.get("visual_timing_mode", "sync_to_audio")
+    # Map default setting to choice number
+    default_choice_str = "1" if default_mode_from_settings == "sync_to_audio" else "2"
+
+    while timing_choice not in valid_timing_choices:
+        prompt_text = f"Enter visual mode choice ({','.join(valid_timing_choices)}, default is {default_choice_str}): "
+        timing_choice = input(prompt_text).strip()
+        if not timing_choice:
+            timing_choice = default_choice_str
+
+    # Map choice number back to mode name
+    mode_map = {"1": "sync_to_audio", "2": "overall_theme_fixed_duration"}
+    chosen_mode = mode_map.get(timing_choice, "sync_to_audio") # Fallback an toàn
+    logger.info(f"Selected Visual Presentation Mode: {chosen_mode}")
+    return chosen_mode
+# --- End Helper function ---
 def main():
     logger.info("="*20 + " Automated News Video Generation " + "="*20)
 
     # Ensure base directories exist
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(TEMP_DIR, exist_ok=True)
+
+    # --- Prompt for LLM Provider FIRST ---
+    print("\n--- Step 0: Select LLM Provider ---")
+    selected_llm = prompt_for_llm_provider()
 
     # --- Gather ALL User Inputs First ---
     print("\n--- Step 1: Select Input Source ---")
@@ -322,7 +381,11 @@ def main():
     print("\n--- Step 3: Select Visual Source ---")
     visual_source_choice = prompt_for_visual_source()
 
+    # --- Get Visual Presentation Mode  ---
+    final_timing_mode = prompt_for_visual_timing_mode()
+
     logger.info("--- User Input Gathering Complete ---")
+    logger.info(f"Selected LLM: {selected_llm}")
     logger.info(f"Input Method: {choice}")
     if article_url: logger.info(f"Article URL: {article_url}")
     logger.info(f"Selected Mode: {video_mode}")
@@ -331,10 +394,11 @@ def main():
     if youtube_url: logger.info(f"YouTube URL: {youtube_url}, Pref Langs: {preferred_langs_yt}")
     logger.info(f"Selected Style: {selected_style}")
     logger.info(f"Visual Source: {visual_source_choice}")
+    logger.info(f"Visual Presentation Mode: {final_timing_mode}")
     print("-" * 50)
 
     # --- Start Processing Based on Inputs ---
-    script_generator = ScriptGenerator()
+    script_generator = ScriptGenerator(selected_provider=selected_llm)
     script = None
     selected_article = None
     transcript_text = None
@@ -388,7 +452,12 @@ def main():
 
         language = selected_article.get('language', 'en')
         logger.info(f"Article language: {language}. Generating script...")
-        script = script_generator.generate_script(selected_article, style=selected_style, language=language, video_mode=video_mode)
+        script = script_generator.generate_script(
+            selected_article,
+            style=selected_style,
+            language=language,
+            video_mode=video_mode # Existing parameters
+        )
 
         # Save article info (optional)
         try:
@@ -403,7 +472,12 @@ def main():
     elif choice == "3": # Keyword
         logger.info(f"Processing Choice 3: Generating script from keyword '{keyword}'...")
         # Language was already set during input gathering
-        script = script_generator.generate_script_from_keyword(keyword, selected_style, language, video_mode=video_mode)
+        script = script_generator.generate_script_from_keyword(
+            keyword,
+            selected_style,
+            language,
+            video_mode=video_mode # Existing parameters
+        )
 
 
     elif choice == "4": # YouTube Transcript
@@ -433,11 +507,11 @@ def main():
 
         logger.info(f"Generating script from transcript (Output Lang: {language})...")
         script = script_generator.generate_script_from_text(
-            input_text=transcript_text,
-            style=selected_style,
-            language=language,
-            context_hint=f"YouTube transcript ({youtube_url})",
-            video_mode=video_mode # <-- THÊM VÀO ĐÂY
+             input_text=transcript_text,
+             style=selected_style,
+             language=language,
+             context_hint=f"YouTube transcript ({youtube_url})",
+             video_mode=video_mode # Existing parameters
         )
 
     # --- Validation and Script Saving ---
@@ -481,24 +555,24 @@ def main():
     # --- Image/Video Generation ---
     logger.info("Generating visuals...")
     image_generator = ImageGenerator()
+    logger.info(f"Requesting images (Source: {visual_source_choice}, Presentation: {final_timing_mode})...")
 
-    # Add source image URL to script if applicable (RSS/URL choices)
-    if choice in ["1", "2"] and selected_article and 'image_url' in selected_article:
-        script['image_url'] = selected_article['image_url']
-    else:
-        script['image_url'] = None # No source image for keyword/transcript
-
-    # Generate visuals using the chosen method (search or AI)
     images = image_generator.generate_images_for_script(
-        script,
-        audio_files_info=audio_files, # Pass audio info (mainly for intro/outro timing now)
-        visual_source=visual_source_choice # Pass the user's choice
-    )
-    if not images:
-        logger.error("Visual generation failed. Cannot proceed.")
-        return
-    logger.info(f"Generated {len(images)} visual items (images/videos).")
+        script=script,
+        audio_files_info=audio_files,
+        visual_source=visual_source_choice,
+        visual_timing_mode=final_timing_mode # Truyền mode timing
+    )    
 
+    if not images:
+        logger.error("Visual generation failed.")
+        return
+    logger.info(f"Image Generator created {len(images)} visual items (intro/outro/scenes/theme).")
+
+    if choice not in ["1", "2"]:
+        if script: # Check if script object exists
+             script['image_url'] = None
+             
     # Save image info (optional)
     images_path = os.path.join(TEMP_DIR, f"images_{timestamp}.json")
     try:
@@ -575,12 +649,14 @@ def main():
         output_path_final = os.path.join(OUTPUT_DIR, video_filename)
 
         # Create the video
+        logger.info(f"Creating video (Presentation Mode: {final_timing_mode})...")
         final_video_path = video_editor.create_video(
             script=script,
-            media_items=images,
+            media_items=images, # Danh sách visual items (scene-specific hoặc theme-based)
             audio_files_info=audio_files,
             output_path=output_path_final,
-            background_music_path=background_music
+            background_music_path=background_music,
+            visual_timing_mode=final_timing_mode # Truyền mode timing
         )
 
         # --- Final Output ---
