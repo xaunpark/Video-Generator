@@ -105,8 +105,34 @@ VIDEO_SETTINGS = {
     "subtitle_font_size": 24,    # Kích thước font chữ phụ đề
     "subtitle_whisper_model": "base",    # Mô hình whisper: tiny, base, small, medium, large
     "subtitle_language": "auto",           # Ngôn ngữ phụ đề (auto để tự động phát hiện)
-    "subtitle_style": "Alignment=2,OutlineColour=&H80000000,BorderStyle=3,Outline=1" # Style cho FFmpeg
+    "subtitle_style": "Alignment=2,OutlineColour=&H80000000,BorderStyle=3,Outline=1", # Style cho FFmpeg
+    # -------------CHẾ ĐỘ CHẠY ẢNH/VIDEO THEO AUDIO HAY THEO TIME CỐ ĐỊNH --------------------
+    "visual_timing_mode": "sync_to_audio", # Chỉ 2 lựa chọn: 'sync_to_audio', 'overall_theme_fixed_duration'
+    "fixed_visual_duration": 15.0,        # Dùng cho 'overall_theme_fixed_duration'
+    "theme_visual_query_count": 7,       # Số query/prompt cho chế độ theme
+    "theme_visual_generation_factor": 1.5 # Tạo dư visual cho chế độ theme
 }
+
+# --- LLM Provider Settings ---
+LLM_PROVIDERS = {
+    "openai": {
+        "api_key_name": "OPENAI_API_KEY", # Name of the key variable in credentials.py
+        "base_url": "https://api.openai.com/v1",
+        "chat_model": "gpt-4o", # Or your preferred OpenAI model
+        "supports_json_mode": True,
+    },
+    "deepseek": {
+        "api_key_name": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com/v1",
+        "chat_model": "deepseek-chat", #deepseek-reasoner không hỗ trợ json mode
+        "supports_json_mode": True, # IMPORTANT: Verify if Deepseek supports a forced JSON output mode like OpenAI. Set to False if not.
+    },
+    # Add other providers here in the future
+}
+
+DEFAULT_LLM_PROVIDER = "openai"
+if DEFAULT_LLM_PROVIDER not in LLM_PROVIDERS:
+    raise ValueError(f"DEFAULT_LLM_PROVIDER ('{DEFAULT_LLM_PROVIDER}') in settings.py is not defined in LLM_PROVIDERS.")
 
 # DALL-E Settings
 DALLE_SETTINGS = {

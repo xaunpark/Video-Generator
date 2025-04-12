@@ -1,5 +1,6 @@
 # src/image_generator.py
 
+import math
 import os
 import requests
 import time
@@ -112,7 +113,200 @@ class ImageGenerator:
         self.video_cache_dir = os.path.join(self.temp_dir, "video_cache")
         os.makedirs(self.video_cache_dir, exist_ok=True)
 
-    def generate_images_for_script(self, script, audio_files_info=None, visual_source="search"):
+    # --- Tạo Theme Queries/Prompts PHỤC VỤ overall_theme_fixed_duration ---
+    def _generate_theme_queries(self, main_title, count, language):
+        """
+        Sử dụng LLM để tạo các truy vấn tìm kiếm/prompt AI đa dạng dựa trên tiêu đề chính.
+
+        Args:
+            main_title (str): Tiêu đề chính của video.
+            count (int): Số lượng ý tưởng cần tạo.
+            language (str): Ngôn ngữ ('en', 'vi', ...).
+
+        Returns:
+            list: Danh sách các chuỗi query/prompt hoặc list fallback nếu lỗi.
+        """
+        logger.info(f"Generating {count} theme-based visual ideas for title: '{main_title}'")
+
+        # Ngôn ngữ hướng dẫn cho prompt
+        lang_instruction = f"in {language}" if language != "vi" else "bằng tiếng Việt"
+
+        # --- Xây dựng Prompt ---
+        prompt = f"""
+        Analyze the main video title: "{main_title}"
+
+        Your task is to brainstorm and generate exactly {count} diverse visual ideas related to this central theme. These ideas should be suitable either as concise image search queries (for stock photos/videos) or as descriptive prompts for an AI image generator (like DALL-E or Imagen).
+
+        **Requirements for each visual idea:**
+        - **Relevance:** Directly relate to the main title's theme or potential sub-topics.
+        - **Diversity:** Each idea should represent a *different facet*, angle, metaphor, or visual style associated with the theme. Avoid simple variations of the same core idea. Think broadly: concepts, actions, objects, settings, emotions, styles (photorealistic, illustration, abstract if relevant).
+        - **Conciseness:** Keep each idea relatively short (ideally 5-15 words).
+        - **Visual Focus:** Emphasize visual elements and descriptions.
+        - **Language:** Generate the ideas {lang_instruction}.
+
+        **Example (Title: "The Rise of Remote Work"):**
+        1. Diverse team collaborating online video call screen. (Action/Setting)
+        2. Person working comfortably laptop home office cozy setting. (Setting/Mood)
+        3. World map connected glowing lines symbolizing global teams. (Concept/Metaphor)
+        4. Empty traditional office space sunlight streaming window. (Contrast/Setting)
+        5. Graph showing upward trend remote work statistics. (Data/Concept)
+        6. Close up hands typing laptop coffee mug nearby. (Detail/Action)
+        7. Futuristic virtual reality workspace illustration. (Style/Concept)
+
+        **Output Format:**
+        Return ONLY a valid JSON object with a single key "theme_visual_ideas". The value should be a list of exactly {count} strings, each being a distinct visual idea.
+        {{
+          "theme_visual_ideas": [
+            "Visual Idea 1 {lang_instruction}",
+            "Visual Idea 2 {lang_instruction}",
+            // ... up to {count} items
+          ]
+        }}
+        """
+
+        # --- Gọi LLM API ---
+        # Giả sử ImageGenerator cũng được khởi tạo với LLM provider hoặc có cách truy cập
+        # Nếu không, cần truyền đối tượng ScriptGenerator hoặc tạo instance mới ở đây.
+        # TẠM THỜI: Giả sử có một phương thức _call_llm_api tương tự ScriptGenerator
+        # Hoặc đơn giản là gọi trực tiếp OpenAI/Deepseek ở đây nếu không cần chuyển đổi LLM cho việc này.
+        # Ví dụ gọi trực tiếp OpenAI (cần điều chỉnh nếu dùng Deepseek hoặc wrapper):
+        if not self.openai_api_key: # Kiểm tra key OpenAI cụ thể ở đây
+            logger.warning("OpenAI API key not available for generating theme queries. Using fallback.")
+        else:
+            try:
+                openai_url = "https://api.openai.com/v1/chat/completions" # URL OpenAI
+                payload = {
+                    "model": "gpt-4o-mini", # Dùng model nhỏ hơn cho task này
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.8, # Tăng nhiệt độ để đa dạng hơn
+                    #"max_tokens": 300, # Đủ cho khoảng 7-10 queries
+                    "response_format": {"type": "json_object"}
+                }
+                response = requests.post(openai_url, headers={"Authorization": f"Bearer {self.openai_api_key}", "Content-Type": "application/json"}, json=payload, timeout=60)
+                response.raise_for_status()
+                data = response.json()
+                if data.get('choices') and data['choices'][0].get('message'):
+                    content_str = data['choices'][0]['message']['content']
+                    parsed_data = json.loads(content_str)
+                    queries = parsed_data.get("theme_visual_ideas")
+                    if queries and isinstance(queries, list) and all(isinstance(q, str) for q in queries):
+                        logger.info(f"LLM generated {len(queries)} theme visual ideas.")
+                        # Trả về đúng số lượng yêu cầu, loại bỏ chuỗi rỗng
+                        return [q for q in queries if q][:count]
+                    else:
+                         logger.warning("LLM response for theme queries had invalid format.")
+            except Exception as e:
+                logger.error(f"Error calling LLM to generate theme queries: {e}", exc_info=True)
+
+        # --- Fallback Logic ---
+        logger.warning("LLM failed or unavailable for theme queries. Using simple fallback based on title.")
+        base_queries = [main_title]
+        keywords = [word for word in main_title.lower().split() if len(word) > 3] # Lấy từ khóa đơn giản
+        if len(keywords) >= 2:
+            base_queries.append(f"{keywords[0]} {keywords[1]}")
+            if len(keywords) >= 3:
+                 base_queries.append(f"{keywords[0]} {keywords[2]}")
+        if keywords:
+            base_queries.append(f"{keywords[0]} concept art")
+            base_queries.append(f"{keywords[-1]} background")
+        base_queries.append(f"Abstract visual theme {main_title[:30]}")
+        base_queries.append(f"Technology related to {main_title[:30]}")
+        base_queries.append(f"People working on {main_title[:30]}")
+
+        # Lấy đủ số lượng yêu cầu, loại bỏ trùng lặp
+        unique_queries = list(dict.fromkeys(base_queries)) # Giữ thứ tự và loại trùng
+        return unique_queries[:count]
+    
+
+    # --- Tìm/Tạo 1 Visual (KHÔNG có text fallback) PHỤC VỤ overall_theme_fixed_duration ---
+    def _find_or_generate_single_visual(self, query, visual_source, project_media_dir, base_filename):
+        """
+        Thực hiện một lượt tìm kiếm (online -> local) hoặc tạo AI cho một query.
+        Không bao gồm fallback tạo ảnh text.
+
+        Args:
+            query (str): Truy vấn tìm kiếm hoặc ý tưởng cho prompt AI.
+            visual_source (str): 'search' hoặc 'ai'.
+            project_media_dir (str): Thư mục để lưu file tạm.
+            base_filename (str): Tên file cơ sở (không có phần mở rộng).
+
+        Returns:
+            tuple: (path_to_visual, visual_type) hoặc (None, None) nếu thất bại.
+                   visual_type là 'image' hoặc 'video'.
+        """
+        # Định nghĩa đường dẫn file tạm
+        temp_image_online_path = os.path.join(project_media_dir, f"{base_filename}_online.jpg")
+        temp_image_local_path = os.path.join(project_media_dir, f"{base_filename}_local.jpg")
+        temp_image_ai_path = os.path.join(project_media_dir, f"{base_filename}_ai.jpg")
+        # Lưu ý: Không cần temp_video_search_path ở đây vì hàm này không tìm video
+
+        visual_path = None
+        visual_type = "unknown"
+
+        logger.debug(f"Attempting to find/generate visual for query: '{query}' using method: {visual_source}")
+
+        if visual_source == 'search':
+            # --- Luồng Tìm kiếm ---
+            # 1. Thử Online Search
+            try:
+                logger.debug(f"  Trying online search for '{query}'...")
+                visual_path = self._get_cached_or_download_image(query, temp_image_online_path)
+                if visual_path:
+                    logger.debug(f"  Online search successful: {visual_path}")
+                    visual_type = "image"
+                    return visual_path, visual_type
+                else:
+                     logger.debug(f"  Online search returned no result for '{query}'.")
+            except Exception as online_err:
+                logger.warning(f"  Online search failed for '{query}': {online_err}")
+                # Không return, tiếp tục thử local
+
+            # 2. Thử Local Fallback (chỉ khi online thất bại)
+            if not visual_path:
+                try:
+                    logger.debug(f"  Trying local fallback for '{query}'...")
+                    visual_path = self._use_local_fallback_image(query, temp_image_local_path)
+                    if visual_path:
+                        logger.debug(f"  Local fallback successful: {visual_path}")
+                        visual_type = "image"
+                        return visual_path, visual_type
+                    else:
+                        logger.debug(f"  Local fallback returned no result for '{query}'.")
+                except Exception as local_err:
+                    logger.warning(f"  Local fallback failed for '{query}': {local_err}")
+
+        elif visual_source == 'ai':
+            # --- Luồng Tạo AI ---
+            if not self.gemini_client:
+                logger.warning(f"  Cannot generate AI image for '{query}': Gemini client not available.")
+            else:
+                try:
+                    logger.debug(f"  Trying AI generation for '{query}'...")
+                    # Tạo prompt AI từ query (có thể cần hàm helper riêng nếu muốn phức tạp hơn)
+                    # Tạm thời coi query là content để tạo prompt đơn giản
+                    imagen_prompt = self._create_imagen_prompt(query, query, "informative")
+                    if imagen_prompt:
+                        img_bytes = self._generate_image_with_imagen(imagen_prompt)
+                        if img_bytes:
+                            img = Image.open(BytesIO(img_bytes)).convert('RGB')
+                            processed = self._resize_image(img)
+                            processed.save(temp_image_ai_path, "JPEG", 90)
+                            visual_path = temp_image_ai_path
+                            visual_type = "image"
+                            logger.debug(f"  AI generation successful: {visual_path}")
+                            return visual_path, visual_type
+                        else:
+                            logger.warning(f"  AI generation (Imagen API) returned no bytes for prompt based on '{query}'.")
+                    else:
+                        logger.warning(f"  Could not generate Imagen prompt for query '{query}'.")
+                except Exception as ai_err:
+                    logger.warning(f"  AI generation failed for '{query}': {ai_err}")
+
+        # --- Nếu tất cả các phương pháp trong luồng đã chọn đều thất bại ---
+        logger.debug(f"  No visual found/generated for query '{query}' using method '{visual_source}'.")
+        return None, None # Trả về None để hàm gọi biết và xử lý   
+
+    def generate_images_for_script(self, script, audio_files_info=None, visual_source="search", visual_timing_mode="sync_to_audio"):
             """Tạo ảnh hoặc video cho tất cả các scenes (shots) trong script.
             Không còn dựa vào audio_files_info để xác định target duration cho từng shot ở bước này.
 
@@ -140,6 +334,7 @@ class ImageGenerator:
             os.makedirs(project_media_dir, exist_ok=True)
 
             logger.info(f"Bắt đầu tạo media cho script: '{script['title']}' (Project: {project_id}) trong thư mục: {project_media_dir}")
+            logger.info(f"Visual Source Method: '{visual_source}', Visual Timing Mode: '{visual_timing_mode}'")
 
             # --- 1. Xử lý intro card ---
             try:
@@ -183,227 +378,320 @@ class ImageGenerator:
                 logger.info("No source image URL provided in the script.")
 
             # --- 3. Images/Videos for Each Scene (Shot) ---
-            total_scenes = len(script.get('scenes', []))
-            for i, scene in enumerate(script.get('scenes', [])):
-                scene_number = scene.get('number', 'unknown')
-                scene_content = scene.get('content', '').strip()
-                search_query_used = "N/A"
-                media_path_for_scene = None
-                media_type_for_scene = "unknown"
-                # final_media_duration = None # Không còn cần lấy duration từ audio ở đây
 
-                logger.info(f"--- Processing Scene (Shot) {scene_number}/{total_scenes} ---")
+            #------------------------------------------------------------#
+            #==== PHÂN NHÁNH LOGIC CHÍNH DỰA TRÊN visual_timing_mode ====#
+            #------------------------------------------------------------#
+            
+            if visual_timing_mode == 'overall_theme_fixed_duration':
 
-                # --- Xóa phần lấy target_duration từ audio_lookup ---
-                # scene_audio_info = audio_lookup.get(scene_number)
-                # target_duration_for_finder = scene_audio_info.get("duration") if scene_audio_info else default_clip_target_duration
-                # Sử dụng duration mặc định từ settings khi tìm video clip
-                target_duration_for_finder = default_clip_target_duration
+                # --- CHẾ ĐỘ VISUAL THEO CHỦ ĐỀ ---
+                logger.info("Generating visuals based on overall theme...")
+                fixed_duration_per_visual = VIDEO_SETTINGS.get("fixed_visual_duration", 5.0)
+                query_count = VIDEO_SETTINGS.get("theme_visual_query_count", 7)
+                generation_factor = VIDEO_SETTINGS.get("theme_visual_generation_factor", 1.5)
 
-                # if target_duration_for_finder is None or target_duration_for_finder <= 0:
-                #      logger.warning(f"Scene {scene_number}: Invalid target duration {target_duration_for_finder}. Using default clip duration.")
-                #      target_duration_for_finder = default_clip_target_duration
+                # 1. Ước tính tổng thời lượng audio speech units
+                total_estimated_audio_duration = sum(a.get('duration', 0) for a in audio_files_info if a.get('type') == 'speech_unit')
+                if total_estimated_audio_duration <= 0:
+                    logger.error("Cannot estimate audio duration for theme visuals.")
+                    return media_items # Trả về những gì đã có (intro/source)
 
-                # final_media_duration = target_duration_for_finder # Duration này không còn chính xác
+                # 2. Tính số lượng visual cần tạo (có dự phòng)
+                estimated_visual_slots = math.ceil(total_estimated_audio_duration / fixed_duration_per_visual)
+                target_pool_size = math.ceil(estimated_visual_slots * generation_factor)
+                logger.info(f"Estimated audio: {total_estimated_audio_duration:.2f}s => Estimated visual slots: {estimated_visual_slots}. Target visual pool size: {target_pool_size}")
 
-                # Tạo search query (giữ nguyên)
-                if not scene_content:
-                    logger.warning(f"Scene {scene_number}: Empty content. Skipping media generation.")
-                    # Có thể tạo ảnh text fallback ở đây nếu muốn
-                    # text_image_output_path = os.path.join(project_media_dir, f"scene_{scene_number}_text.png")
-                    # media_path_for_scene = self._create_text_only_image(f"Scene {scene_number}", text_image_output_path)
-                    # media_type_for_scene = "image"
-                    continue # Bỏ qua nếu không muốn fallback
+                # 3. Tạo các truy vấn/prompt theo chủ đề
+                theme_queries = self._generate_theme_queries(script.get('title', ''), query_count, script.get('language', 'en'))
 
-                search_query = self._create_search_query_with_openai(scene_content, script['title'])
-                search_query_used = search_query
+                # 4. Tạo/Tìm visuals cho từng theme query
+                theme_visuals_generated = []
+                visual_count = 0
+                max_attempts_per_query = 3
+                for q_idx, current_query in enumerate(theme_queries):
+                    if visual_count >= target_pool_size: break # Đã đủ số lượng
+                    logger.info(f"Processing theme query {q_idx + 1}/{len(theme_queries)}: '{current_query}' (Target: {target_pool_size}, Current: {visual_count})")
+                    for attempt in range(max_attempts_per_query):
+                        visual_path, visual_type = self._find_or_generate_single_visual(
+                            query=current_query,
+                            visual_source=visual_source,
+                            project_media_dir=project_media_dir,
+                            base_filename=f"theme_{q_idx + 1}_attempt{attempt + 1}"
+                        )
+                        if visual_path:
+                            theme_visuals_generated.append({
+                                "type": visual_type,
+                                "media_type": "theme_visual", # Đánh dấu loại
+                                "path": visual_path,
+                                "duration": fixed_duration_per_visual, # Gán sẵn duration
+                                "query_source": current_query
+                            })
+                            visual_count += 1
+                            logger.info(f"  Success (Attempt {attempt + 1}). Total collected: {visual_count}")
+                            break # Chuyển sang query tiếp theo
+                        else:
+                            logger.warning(f"  Attempt {attempt + 1} failed for query '{current_query}'.")
+                            if attempt < max_attempts_per_query - 1: time.sleep(1) # Đợi trước khi thử lại
 
-                # --- Tên file cơ sở ---
-                scene_base_filename = f"scene_{scene_number}"
-                temp_video_output_path = os.path.join(project_media_dir, f"{scene_base_filename}.mp4")
-                temp_image_output_path = os.path.join(project_media_dir, f"{scene_base_filename}.jpg")
-                text_image_output_path = os.path.join(project_media_dir, f"{scene_base_filename}_text.png")
-                temp_image_ai_output_path = os.path.join(project_media_dir, f"{scene_base_filename}_ai.jpg")
+                if visual_count == 0:
+                    logger.error("Failed to generate ANY theme visuals.")
+                    # Cân nhắc: Có nên tạo ảnh text dựa trên title ở đây làm fallback cuối cùng không?
+                    # try:
+                    #     fb_path = self._create_text_only_image(script.get('title', 'Theme Visual Error'), os.path.join(project_media_dir, "theme_fallback_text.png"))
+                    #     if fb_path: theme_visuals_generated.append({"type": "image", "media_type": "theme_visual", "path": fb_path, "duration": fixed_duration_per_visual, "query_source": "Fallback Text"})
+                    # except: pass
+                elif visual_count < estimated_visual_slots:
+                    logger.warning(f"Collected only {visual_count} theme visuals, less than estimated required {estimated_visual_slots}.")
 
-                # ==============================================================
-                # === PHÂN NHÁNH DỰA TRÊN visual_source ===
-                # ==============================================================
+                media_items.extend(theme_visuals_generated) # Thêm vào list tổng
 
-                # Option 1: Tìm kiếm ảnh/video từ Serper.dev API để tạo medio
+            elif visual_timing_mode == 'sync_to_audio':
+            # --- CHẾ ĐỘ SYNC TO AUDIO (LOGIC CŨ) ---
+                logger.info("Generating visuals synced to audio segments (per scene/shot)...")
+                total_scenes = len(script.get('scenes', []))
+                for i, scene in enumerate(script.get('scenes', [])):
+                    scene_number = scene.get('number', 'unknown')
+                    scene_content = scene.get('content', '').strip()
+                    search_query_used = "N/A"
+                    media_path_for_scene = None
+                    media_type_for_scene = "unknown"
+                    target_duration_for_finder = default_clip_target_duration # Dùng duration mặc định
 
-                if visual_source == "search":
-                    logger.debug(f"Scene {scene_number}: Using SEARCH method.")
-                    use_image_fallback = False
-                    prefer_video_flag = scene.get('prefer_video', False)
+                    logger.info(f"--- Processing Scene (Shot) {scene_number}/{total_scenes} ---")
 
-                # --- Gọi Video Clip Finder với duration mặc định ---
-                    if prefer_video_flag and VIDEO_SETTINGS.get("enable_video_clips", False):
-                        logger.info(f"Scene {scene_number}: Flag 'prefer_video' is True. Attempting find_video_clip (Target duration for search: {target_duration_for_finder:.1f}s)")
-                        try:
-                            if self.video_finder is None:
-                                self.video_finder = VideoClipFinder()
-                                logger.info("Initialized VideoClipFinder.")
+                    if not scene_content:
+                        logger.warning(f"Scene {scene_number}: Empty content. Skipping media generation.")
+                        continue
 
-                            if self.video_finder:
-                                # Gọi find_video_clip với default duration
-                                processed_clip_path = self.video_finder.find_video_clip(
-                                    query=search_query,
-                                    scene_content=scene_content,
-                                    output_path=temp_video_output_path,
-                                    target_duration=target_duration_for_finder # <--- TRUYỀN DURATION MẶC ĐỊNH/ƯỚC TÍNH
-                                )
+                    # Tạo search query (giữ nguyên)
+                    search_query = self._create_search_query_with_openai(scene_content, script['title'])
+                    search_query_used = search_query
 
-                                if processed_clip_path:
-                                    logger.info(f"Scene {scene_number}: VideoClipFinder returned processed clip: {os.path.basename(processed_clip_path)}")
-                                    media_path_for_scene = processed_clip_path
-                                    media_type_for_scene = "video"
-                                else:
-                                    logger.warning(f"Scene {scene_number}: find_video_clip did not return a suitable video. Falling back to image search.")
-                                    use_image_fallback = True
-                            else:
-                                logger.error("Scene {scene_number}: Video finder not initialized. Falling back.")
-                                use_image_fallback = True
+                    # --- Tên file cơ sở (Đổi tên để rõ ràng hơn) ---
+                    scene_base_filename = f"scene_{scene_number}"
+                    temp_video_search_path = os.path.join(project_media_dir, f"{scene_base_filename}_vid_search.mp4")
+                    temp_image_online_path = os.path.join(project_media_dir, f"{scene_base_filename}_img_online.jpg")
+                    temp_image_local_path = os.path.join(project_media_dir, f"{scene_base_filename}_img_local.jpg") # File riêng cho local fallback
+                    temp_image_ai_path = os.path.join(project_media_dir, f"{scene_base_filename}_img_ai.jpg") # File riêng cho AI
+                    temp_image_text_path = os.path.join(project_media_dir, f"{scene_base_filename}_img_text.png") # File riêng cho text
 
-                        except ImportError as ie:
-                            logger.error(f"Cannot import VideoClipFinder: {ie}. Disabling video clips.")
-                            VIDEO_SETTINGS["enable_video_clips"] = False
-                            use_image_fallback = True
-                        except Exception as video_err:
-                            logger.warning(f"Scene {scene_number}: Error during find_video_clip: {video_err}. Falling back.", exc_info=True)
-                            use_image_fallback = True
-                    else:
-                        logger.info(f"Scene {scene_number}: Not attempting video search (prefer_video={prefer_video_flag}, enable_clips={VIDEO_SETTINGS.get('enable_video_clips', False)}).")
-                        use_image_fallback = True
+                    # ==============================================================
+                    # === PHÂN NHÁNH DỰA TRÊN visual_source ===
+                    # ==============================================================
 
-                    # --- Xử lý Ảnh Fallback ---
-                    if use_image_fallback:
-                        logger.info(f"Scene {scene_number}: Searching for static image...")
-                        try:
-                            image_path = self._get_cached_or_download_image(search_query, temp_image_output_path)
-                            if image_path:
-                                logger.info(f"Scene {scene_number}: Found online image: {os.path.basename(image_path)}")
-                                media_path_for_scene = image_path
-                                media_type_for_scene = "image"
-                            else:
-                                # ... (logic fallback ảnh local và ảnh text giữ nguyên) ...
-                                logger.debug(f"Scene {scene_number}: Online image search failed. Trying local fallback...")
-                                local_fallback_path = self._use_local_fallback_image(search_query, temp_image_output_path)
-                                if local_fallback_path:
-                                    logger.info(f"Scene {scene_number}: Used local fallback image: {os.path.basename(local_fallback_path)}")
-                                    media_path_for_scene = local_fallback_path
+                    use_image_fallback_chain = False # Biến điều khiển chuỗi fallback ảnh
+                    # --- OPTION 1: Primary Source is SEARCH ---
+                    if visual_source == "search":
+                        logger.debug(f"Scene {scene_number}: Using SEARCH as primary source.")
+                        attempt_video = scene.get('prefer_video', False) and VIDEO_SETTINGS.get("enable_video_clips", False)
+
+                        # 1a. Thử Video Finder (nếu được yêu cầu và bật)
+                        if attempt_video:
+                            logger.info(f"Scene {scene_number}: Attempting find_video_clip...")
+                            try:
+                                if self.video_finder is None: self.video_finder = VideoClipFinder()
+                                if self.video_finder:
+                                    processed_clip_path = self.video_finder.find_video_clip(
+                                        query=search_query,
+                                        scene_content=scene_content,
+                                        output_path=temp_video_search_path, # Đường dẫn file tạm riêng
+                                        target_duration=target_duration_for_finder
+                                    )
+                                    if processed_clip_path:
+                                        logger.info(f"Scene {scene_number}: VideoClipFinder successful: {os.path.basename(processed_clip_path)}")
+                                        media_path_for_scene = processed_clip_path
+                                        media_type_for_scene = "video"
+                                    else:
+                                        logger.warning(f"Scene {scene_number}: VideoClipFinder did not find a suitable video.")
+                                else: logger.error("Scene {scene_number}: Video finder not initialized.")
+                            except ImportError as ie:
+                                logger.error(f"Cannot import VideoClipFinder: {ie}. Disabling video clips.")
+                                VIDEO_SETTINGS["enable_video_clips"] = False
+                            except Exception as video_err:
+                                logger.warning(f"Scene {scene_number}: Error during find_video_clip: {video_err}. Proceeding without video.")
+
+                        # 1b. Fallback sang Ảnh nếu Video không tìm thấy hoặc không thử
+                        if not media_path_for_scene:
+                            logger.info(f"Scene {scene_number}: Attempting Image Fallbacks (Search Path)...")
+
+                            # --- Fallback 1: Online Image Search ---
+                            try:
+                                logger.debug(f"Scene {scene_number}: Trying Online Image Search (Serper)...")
+                                image_path_online = self._get_cached_or_download_image(search_query, temp_image_online_path)
+                                if image_path_online:
+                                    logger.info(f"Scene {scene_number}: Found Online Image.")
+                                    media_path_for_scene = image_path_online
                                     media_type_for_scene = "image"
+                                else: logger.warning(f"Scene {scene_number}: Online Image Search returned no result.")
+                            except Exception as online_err:
+                                logger.warning(f"Scene {scene_number}: Online Image Search failed: {online_err}. Proceeding to next fallback.")
+
+                            # --- Fallback 2: Local Image Fallback ---
+                            if not media_path_for_scene:
+                                try:
+                                    logger.debug(f"Scene {scene_number}: Trying Local Fallback Image...")
+                                    local_fallback_path = self._use_local_fallback_image(search_query, temp_image_local_path) # Lưu vào file tạm riêng
+                                    if local_fallback_path:
+                                        logger.info(f"Scene {scene_number}: Used Local Fallback Image.")
+                                        media_path_for_scene = local_fallback_path
+                                        media_type_for_scene = "image"
+                                    else: logger.warning(f"Scene {scene_number}: Local Fallback Image returned no result.")
+                                except Exception as local_err:
+                                    logger.warning(f"Scene {scene_number}: Local Image Fallback failed: {local_err}. Proceeding to next fallback.")
+
+                            # --- Fallback 3: AI Image Generation (NEW) ---
+                            if not media_path_for_scene:
+                                # Chỉ thử AI nếu có client và được bật (thêm setting nếu cần)
+                                if self.gemini_client: # and VIDEO_SETTINGS.get("enable_ai_image_fallback", True):
+                                    logger.info(f"Scene {scene_number}: Trying AI Image Generation Fallback (Imagen)...")
+                                    try:
+                                        imagen_prompt = self._create_imagen_prompt(scene_content, script['title'], script.get('style', 'informative'))
+                                        if imagen_prompt:
+                                            generated_image_bytes = self._generate_image_with_imagen(prompt=imagen_prompt)
+                                            if generated_image_bytes:
+                                                img = Image.open(BytesIO(generated_image_bytes))
+                                                if img.mode != 'RGB': img = img.convert('RGB')
+                                                processed_image = self._resize_image(img)
+                                                processed_image.save(temp_image_ai_path, "JPEG", quality=90) # Lưu vào file tạm riêng
+                                                logger.info(f"Scene {scene_number}: AI Image Generation Fallback Successful.")
+                                                media_path_for_scene = temp_image_ai_path
+                                                media_type_for_scene = "image"
+                                            else: logger.warning(f"Scene {scene_number}: AI Generation Fallback: Imagen API returned no image bytes.")
+                                        else: logger.warning(f"Scene {scene_number}: AI Generation Fallback: Could not create Imagen prompt.")
+                                    except Exception as ai_fallback_err:
+                                        logger.warning(f"Scene {scene_number}: AI Image Generation Fallback failed: {ai_fallback_err}. Proceeding to next fallback.")
                                 else:
-                                    logger.warning(f"Scene {scene_number}: All image searches failed. Creating text-only fallback image.")
-                                    text_fallback_path = self._create_text_only_image(scene_content, text_image_output_path)
+                                    logger.debug(f"Scene {scene_number}: Skipping AI Image Fallback (Gemini client not available or AI fallback disabled).")
+
+                            # --- Fallback 4: Text-Only Image ---
+                            if not media_path_for_scene:
+                                try:
+                                    logger.warning(f"Scene {scene_number}: All visual fallbacks failed. Creating Text-Only Image.")
+                                    text_fallback_path = self._create_text_only_image(scene_content, temp_image_text_path) # Lưu vào file tạm riêng
                                     if text_fallback_path:
-                                        logger.info(f"Scene {scene_number}: Created text-only fallback image: {os.path.basename(text_fallback_path)}")
+                                        logger.info(f"Scene {scene_number}: Created Text-Only Fallback Image.")
                                         media_path_for_scene = text_fallback_path
                                         media_type_for_scene = "image"
+                                    else: logger.error(f"Scene {scene_number}: CRITICAL - Failed to create Text-Only fallback.")
+                                except Exception as text_err:
+                                    logger.error(f"Scene {scene_number}: CRITICAL - Error creating Text-Only fallback: {text_err}", exc_info=True)
+
+                    # --- OPTION 2: Primary Source is AI ---
+                    elif visual_source == "ai":
+                        logger.debug(f"Scene {scene_number}: Using AI Generation (Imagen) as primary source.")
+                        media_type_for_scene = "image" # AI luôn tạo ảnh
+
+                        if not self.gemini_client:
+                            logger.error(f"Scene {scene_number}: Cannot use AI primary source - Gemini client not initialized.")
+                            # ---> NHẢY XUỐNG PHẦN FALLBACK NGAY LẬP TỨC
+                        else:
+                            try:
+                                # 1. Tạo Imagen prompt
+                                imagen_prompt = self._create_imagen_prompt(scene_content, script['title'], script.get('style', 'informative'))
+                                search_query_used = f"Imagen Prompt: {imagen_prompt[:100]}..." if imagen_prompt else "N/A"
+
+                                if imagen_prompt:
+                                    # 2. Gọi API Imagen
+                                    generated_image_bytes = self._generate_image_with_imagen(prompt=imagen_prompt)
+                                    if generated_image_bytes:
+                                        # 3. Xử lý và lưu ảnh AI
+                                        img = Image.open(BytesIO(generated_image_bytes))
+                                        if img.mode != 'RGB': img = img.convert('RGB')
+                                        processed_image = self._resize_image(img)
+                                        processed_image.save(temp_image_ai_path, "JPEG", quality=90)
+                                        logger.info(f"Scene {scene_number}: Primary AI Image Generation Successful.")
+                                        media_path_for_scene = temp_image_ai_path
                                     else:
-                                        logger.error(f"Scene {scene_number}: CRITICAL - Failed even to create text-only fallback.")
+                                        logger.warning(f"Scene {scene_number}: Primary AI: Imagen API returned no image bytes.")
+                                else:
+                                    logger.warning(f"Scene {scene_number}: Primary AI: Could not generate Imagen prompt.")
+                            except Exception as ai_err:
+                                logger.error(f"Scene {scene_number}: Error during primary AI image generation: {ai_err}", exc_info=True)
 
-                        except Exception as img_err:
-                            logger.error(f"Scene {scene_number}: Error during image fallback process: {img_err}", exc_info=True)
+                        # --- Fallback cho AI Primary (THỬ SEARCH TRƯỚC KHI TEXT) ---
+                        if not media_path_for_scene:
+                            logger.warning(f"Scene {scene_number}: Primary AI failed. Attempting Search/Local fallbacks...")
 
-                # Option 2: Sử dụng AI Generation (Imagen 3) để tạo ảnh mới
-                elif visual_source == "ai":
-                    logger.debug(f"Scene {scene_number}: Using AI Generation (Imagen) method.")
-                    media_type_for_scene = "image"
-                    imagen_prompt = None # Đổi tên biến
-                    try:
-                        # 1. Tạo Imagen prompt
-                        # --- Đổi tên hàm gọi ---
-                        imagen_prompt = self._create_imagen_prompt(scene_content, script['title'], script.get('style', 'informative'))
-                        # ----------------------
-                        search_query_used = f"Imagen Prompt: {imagen_prompt[:100]}..." if imagen_prompt else "N/A"
+                            # --- Fallback 1 (cho AI): Online Image Search ---
+                            try:
+                                logger.debug(f"Scene {scene_number}: (AI Path Fallback) Trying Online Image Search...")
+                                image_path_online = self._get_cached_or_download_image(search_query, temp_image_online_path) # Dùng search_query đã tạo
+                                if image_path_online:
+                                    logger.info(f"Scene {scene_number}: (AI Path Fallback) Found Online Image.")
+                                    media_path_for_scene = image_path_online
+                                    media_type_for_scene = "image"
+                                else: logger.warning(f"Scene {scene_number}: (AI Path Fallback) Online Image Search returned no result.")
+                            except Exception as online_err_f:
+                                logger.warning(f"Scene {scene_number}: (AI Path Fallback) Online Image Search failed: {online_err_f}. Proceeding to next fallback.")
 
-                        if imagen_prompt:
-                            # 2. Gọi API Imagen để tạo ảnh (trả về bytes)
-                            # --- Đổi tên hàm gọi ---
-                            generated_image_bytes = self._generate_image_with_imagen(prompt=imagen_prompt)
-                            # ----------------------
-
-                            if generated_image_bytes:
-                                # 3. Xử lý image bytes (không cần download)
-                                logger.info(f"Scene {scene_number}: Imagen generated image bytes obtained. Processing...")
-                                # --- XỬ LÝ BYTES ---
+                            # --- Fallback 2 (cho AI): Local Image Fallback ---
+                            if not media_path_for_scene:
                                 try:
-                                    img = Image.open(BytesIO(generated_image_bytes))
-                                    if img.mode != 'RGB': img = img.convert('RGB')
+                                    logger.debug(f"Scene {scene_number}: (AI Path Fallback) Trying Local Fallback Image...")
+                                    local_fallback_path = self._use_local_fallback_image(search_query, temp_image_local_path)
+                                    if local_fallback_path:
+                                        logger.info(f"Scene {scene_number}: (AI Path Fallback) Used Local Fallback Image.")
+                                        media_path_for_scene = local_fallback_path
+                                        media_type_for_scene = "image"
+                                    else: logger.warning(f"Scene {scene_number}: (AI Path Fallback) Local Fallback Image returned no result.")
+                                except Exception as local_err_f:
+                                    logger.warning(f"Scene {scene_number}: (AI Path Fallback) Local Image Fallback failed: {local_err_f}. Proceeding to text fallback.")
 
-                                    # Resize/crop ảnh về kích thước video
-                                    processed_image = self._resize_image(img) # Dùng lại hàm resize cũ
+                            # --- Fallback 3 (cho AI): Text-Only Image ---
+                            if not media_path_for_scene:
+                                try:
+                                    logger.warning(f"Scene {scene_number}: Primary AI and Search/Local fallbacks failed. Creating Text-Only Image.")
+                                    text_fallback_path = self._create_text_only_image(scene_content, temp_image_text_path)
+                                    if text_fallback_path:
+                                        logger.info(f"Scene {scene_number}: (AI Path Fallback) Created Text-Only Fallback Image.")
+                                        media_path_for_scene = text_fallback_path
+                                        media_type_for_scene = "image"
+                                    else: logger.error(f"Scene {scene_number}: CRITICAL - Failed to create Text-Only fallback after AI failure.")
+                                except Exception as text_err_f:
+                                    logger.error(f"Scene {scene_number}: CRITICAL - Error creating Text-Only fallback after AI failure: {text_err_f}", exc_info=True)
 
-                                    # Lưu ảnh đã xử lý
-                                    processed_image.save(temp_image_ai_output_path, "JPEG", quality=90)
-                                    logger.info(f"Scene {scene_number}: Successfully processed and saved Imagen image.")
-                                    media_path_for_scene = temp_image_ai_output_path
-                                except Exception as proc_err:
-                                    logger.error(f"Scene {scene_number}: Failed to process Imagen image bytes: {proc_err}", exc_info=True)
-                                # --- KẾT THÚC XỬ LÝ BYTES ---
-                            else:
-                                logger.warning(f"Scene {scene_number}: Imagen API did not return valid image bytes.")
-                        else:
-                            logger.warning(f"Scene {scene_number}: Could not generate an Imagen prompt.")
+                    # --- Invalid visual_source ---
+                    else:
+                        logger.error(f"Scene {scene_number}: Invalid visual_source '{visual_source}'. Skipping.")
+                        continue # Bỏ qua scene này
 
-                    except Exception as ai_err:
-                        logger.error(f"Scene {scene_number}: Error during Imagen image generation pipeline: {ai_err}", exc_info=False)
+                    # --- Thêm media vào danh sách ---
+                    if media_path_for_scene and media_type_for_scene != "unknown":
+                        # Lấy duration gốc của video nếu là video, nếu không dùng default cho ảnh
+                        media_final_duration_placeholder = 0
+                        if media_type_for_scene == 'video':
+                            try:
+                                clip = VideoFileClip(media_path_for_scene)
+                                media_final_duration_placeholder = clip.duration
+                                clip.close()
+                            except Exception as e:
+                                logger.warning(f"Could not get duration for video {os.path.basename(media_path_for_scene)}: {e}")
+                                media_final_duration_placeholder = default_clip_target_duration # Fallback
+                            finally:
+                                # Đảm bảo đóng clip ngay cả khi có lỗi (trừ lỗi không mở được)
+                                if clip:
+                                    try:
+                                        clip.close()
+                                    except Exception as close_err:
+                                        logger.warning(f"Error closing video clip {os.path.basename(media_path_for_scene)} after duration check: {close_err}")                             
+                        elif media_type_for_scene == 'image':
+                            media_final_duration_placeholder = default_image_duration
 
-                    # --- Fallback cho AI Generation (nếu thất bại) ---
-                    if not media_path_for_scene:
-                        logger.warning(f"Scene {scene_number}: AI image generation failed. Creating text-only fallback.")
-                        text_fallback_path = self._create_text_only_image(scene_content, text_image_output_path)
-                        if text_fallback_path:
-                            logger.info(f"Scene {scene_number}: Created text-only fallback.")
-                            media_path_for_scene = text_fallback_path
-                            media_type_for_scene = "image"
-                        else:
-                            logger.error(f"Scene {scene_number}: CRITICAL - Failed text-only fallback after AI failure.")
-                    # --- Kết thúc fallback AI ---
-                    # ----------------------------------------------------------
-                    # --- KẾT THÚC LOGIC TẠO ẢNH AI ---
-                    # ----------------------------------------------------------
-
-                else: # Trường hợp visual_source không hợp lệ
-                    logger.error(f"Scene {scene_number}: Invalid visual_source '{visual_source}'. Skipping.")
-                    continue # Bỏ qua scene này
-
-                # --- Thêm media vào danh sách ---
-                if media_path_for_scene and media_type_for_scene != "unknown":
-                    # Lấy duration gốc của video nếu là video, nếu không dùng default cho ảnh
-                    media_final_duration_placeholder = 0
-                    if media_type_for_scene == 'video':
-                        try:
-                            clip = VideoFileClip(media_path_for_scene)
-                            media_final_duration_placeholder = clip.duration
-                            clip.close()
-                        except Exception as e:
-                             logger.warning(f"Could not get duration for video {os.path.basename(media_path_for_scene)}: {e}")
-                             media_final_duration_placeholder = default_clip_target_duration # Fallback
-                        finally:
-                             # Đảm bảo đóng clip ngay cả khi có lỗi (trừ lỗi không mở được)
-                             if clip:
-                                 try:
-                                     clip.close()
-                                 except Exception as close_err:
-                                      logger.warning(f"Error closing video clip {os.path.basename(media_path_for_scene)} after duration check: {close_err}")                             
-                    elif media_type_for_scene == 'image':
-                        media_final_duration_placeholder = default_image_duration
-
-                    media_items.append({
-                        "type": media_type_for_scene,
-                        "media_type": "scene", # Đánh dấu là media cho scene (shot)
-                        "number": scene_number,
-                        "path": media_path_for_scene,
-                        # QUAN TRỌNG: Duration này chỉ là placeholder hoặc duration gốc
-                        # Nó sẽ bị ghi đè trong video_editor
-                        "duration": media_final_duration_placeholder,
-                        "content": scene_content, # Giữ lại content để debug/tham khảo
-                        "search_query": search_query_used
-                    })
-                    logger.info(f"Scene {scene_number}: Added {media_type_for_scene} media (Placeholder duration: {media_final_duration_placeholder:.2f}s).")
-                else:
-                    logger.error(f"Scene {scene_number}: FAILED TO ADD ANY MEDIA for content: '{scene_content[:50]}...'")
+                        media_items.append({
+                            "type": media_type_for_scene,
+                            "media_type": "scene", # Đánh dấu là media cho scene (shot)
+                            "number": scene_number,
+                            "path": media_path_for_scene,
+                            # QUAN TRỌNG: Duration này chỉ là placeholder hoặc duration gốc
+                            # Nó sẽ bị ghi đè trong video_editor
+                            "duration": media_final_duration_placeholder,
+                            "content": scene_content, # Giữ lại content để debug/tham khảo
+                            "search_query": search_query_used
+                        })
+                        logger.info(f"Scene {scene_number}: Added {media_type_for_scene} media (Method: {'Primary' if media_path_for_scene.endswith(('_search.mp4', '_img_online.jpg', '_img_ai.jpg')) else 'Fallback'}).")
+                    else:
+                        logger.error(f"Scene {scene_number}: FAILED TO ADD ANY MEDIA after trying primary source and all fallback methods for content: '{scene_content[:50]}...'")
 
             # --- 4. Outro Card ---
             try:
@@ -411,15 +699,18 @@ class ImageGenerator:
                 # Vẫn dùng audio_files_info để lấy duration outro nếu có
                 outro_audio = next((a for a in audio_files_info if a.get('type') == 'outro'), None) if audio_files_info else None
                 outro_duration_final = outro_audio['duration'] if outro_audio and outro_audio.get('duration', 0) > 0 else VIDEO_SETTINGS.get("outro_duration", 5)
-                media_items.append({
-                    "type": "image",
-                    "media_type": "outro",
-                    "path": outro_image_path,
-                    "duration": outro_duration_final # Duration này là chính xác cho outro
-                })
-                logger.info(f" Outro Card created (Duration: {outro_duration_final:.2f}s)")
+                if outro_image_path: # Chỉ thêm nếu tạo thành công
+                    media_items.append({
+                        "type": "image",
+                        "media_type": "outro",
+                        "path": outro_image_path,
+                        "duration": outro_duration_final # Duration này là chính xác cho outro
+                    })
+                    logger.info(f" Outro Card created (Duration: {outro_duration_final:.2f}s)")
+                else:
+                    logger.warning("Failed to create outro card image path.")
             except Exception as e:
-                logger.error(f"Lỗi khi tạo outro card: {e}", exc_info=True)
+                logger.error(f"Lỗi khi tạo outro card (nhưng vẫn tiếp tục): {e}", exc_info=True) # Log lỗi nhưng không dừng lại
 
             # --- 5. Save Metadata ---
             try:
@@ -428,9 +719,42 @@ class ImageGenerator:
             except Exception as e:
                 logger.error(f"Lỗi khi lưu metadata: {e}", exc_info=True)
 
-            image_count = sum(1 for item in media_items if item.get('type') == 'image')
-            video_count = sum(1 for item in media_items if item.get('type') == 'video')
-            logger.info(f"Hoàn thành tạo media: {len(media_items)} items ({image_count} ảnh, {video_count} video)")
+                # *** THÊM LOG DEBUG Ở ĐÂY ***
+                logger.debug("---------------------------------------------")
+                logger.debug(f"Final check before returning from generate_images_for_script")
+                logger.debug(f"Visual Timing Mode was: {visual_timing_mode}")
+                logger.debug(f"Total media items generated: {len(media_items)}")
+                media_types_summary = {}
+                for item in media_items:
+                    m_type = item.get("media_type", "unknown")
+                    media_types_summary[m_type] = media_types_summary.get(m_type, 0) + 1
+                logger.debug(f"Media types breakdown: {media_types_summary}")
+                if not media_items:
+                    logger.error("!!! media_items list IS EMPTY before final return !!!")
+                else:
+                    logger.debug(f"First item type: {media_items[0].get('media_type', 'N/A')}") # Log thử item đầu tiên
+                logger.debug("---------------------------------------------")
+                # *** KẾT THÚC LOG DEBUG ***
+
+                image_count = sum(1 for item in media_items if item.get('type') == 'image')
+                video_count = sum(1 for item in media_items if item.get('type') == 'video')
+                logger.info(f"Hoàn thành tạo media: {len(media_items)} items ({image_count} ảnh, {video_count} video)")
+
+                # *** LOG DEBUG Ở ĐÂY ***
+                logger.debug("---------------------------------------------")
+                logger.debug(f"Final check before returning from generate_images_for_script")
+                logger.debug(f"Visual Timing Mode was: {visual_timing_mode}")
+                logger.debug(f"Total media items generated: {len(media_items)}")
+                # Log loại media để xem có theme visuals không
+                media_types_summary = {}
+                for item in media_items:
+                    m_type = item.get("media_type", "unknown")
+                    media_types_summary[m_type] = media_types_summary.get(m_type, 0) + 1
+                logger.debug(f"Media types breakdown: {media_types_summary}")
+                if not media_items:
+                    logger.error("!!! media_items list IS EMPTY before final return !!!")
+                logger.debug("---------------------------------------------")
+                # *** KẾT THÚC LOG DEBUG ***
 
             return media_items
 
@@ -480,7 +804,7 @@ class ImageGenerator:
                     {"role": "user", "content": gpt_prompt}
                 ],
                 "temperature": 0.6, # More creative for prompts
-                "max_tokens": 150
+                #"max_tokens": 150
             }
             logger.debug(f"Generating DALL-E prompt for: '{scene_content[:80]}...'")
             response = requests.post(url, headers=self.openai_headers, json=payload, timeout=25)
@@ -1297,7 +1621,7 @@ class ImageGenerator:
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.3, # Lower temperature for more consistent results
-                "max_tokens": 30    # Limit tokens for concise query
+                #"max_tokens": 30    # Limit tokens for concise query
             }
 
             logger.debug(f"Calling OpenAI for search query generation: {scene_content[:100]}...")

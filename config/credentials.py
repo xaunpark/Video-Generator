@@ -32,6 +32,7 @@ SERPER_API_KEY = os.getenv('SERPER_API_KEY')
 PEXELS_API_KEY = os.getenv('PEXELS_API_KEY')
 PIXABAY_API_KEY = os.getenv('PIXABAY_API_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 
 # --- Đọc và Xử lý YouTube Credentials ---
 SECRETS_FILENAME = os.getenv('YOUTUBE_CLIENT_SECRETS_FILE', 'client_secrets.json') # Lấy tên file từ .env
@@ -57,6 +58,8 @@ if not PEXELS_API_KEY:
     missing_keys_files.append('PEXELS_API_KEY')
 if not PIXABAY_API_KEY:
     missing_keys_files.append('PIXABAY_API_KEY')
+if not DEEPSEEK_API_KEY:
+    missing_keys_files.append('DEEPSEEK_API_KEY')
 
 # Kiểm tra sự tồn tại của file secrets bằng đường dẫn tuyệt đối
 if not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE_PATH):
