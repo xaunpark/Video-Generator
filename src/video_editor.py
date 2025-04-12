@@ -356,22 +356,71 @@ class VideoEditor:
 
             cmd = []
             if media_type == 'image':
-                vf_filter = f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=pix_fmts=yuv420p"
-                if self.image_animation == "zoom":
+                vf_filter_parts = []
+                # --- Phần Animation (nếu bật) ---
+                apply_animation = self.image_animation != "none" and target_duration > 0.5 # Chỉ áp dụng nếu đủ thời gian và animation khác none
+                animation_type = "none" # Mặc định
+
+                if apply_animation:
                     intensity = self.animation_intensity
                     total_frames = max(1, int(self.fps * target_duration)) # Đảm bảo > 0
-                    # Công thức zoom ổn định hơn: zoom dần từ 1.0 đến 1.0 + intensity
-                    zoom_expr = f"'1+({intensity}*(on/{total_frames}))'"
-                    # Công thức zoom pan đơn giản hơn:
-                    # zoom_expr = f"'min(zoom+({intensity}*2/{total_frames}),1.5)'" # Giới hạn max zoom
-                    vf_filter = f"zoompan=z={zoom_expr}:d={total_frames}:s={self.width}x{self.height}:fps={self.fps},{vf_filter}"
-                    logger.debug(f"  Applying zoom effect (intensity: {intensity})")
+
+                    # Chọn ngẫu nhiên kiểu animation (zoom, pan_left, pan_right)
+                    # Giống cách làm file cũ hơn là chỉ dựa vào setting cứng
+                    animation_choices = ["zoom"]
+                    # Chỉ thêm pan nếu intensity đủ lớn để thấy rõ
+                    if intensity > 0.01:
+                        animation_choices.extend(["pan_left", "pan_right"])
+                    animation_type = random.choice(animation_choices)
+                    logger.debug(f"  Applying random animation: {animation_type} (intensity: {intensity})")
+
+                    # Xây dựng filter zoompan dựa trên lựa chọn
+                    if animation_type == "zoom":
+                        # Zoom dần từ 1.0 đến 1.0 + intensity
+                        zoom_expr = f"'1+({intensity}*(on/{total_frames}))'"
+                        # Giữ cố định ở giữa
+                        x_expr = "'(iw-iw/zoom)/2'"
+                        y_expr = "'(ih-ih/zoom)/2'"
+                        vf_filter_parts.append(f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:d={total_frames}:s={self.width}x{self.height}:fps={self.fps}")
+
+                    elif animation_type in ["pan_left", "pan_right"]:
+                        # Giữ zoom cố định nhẹ để có không gian pan
+                        zoom_level = f"'1+{intensity}'"
+                        # Tính toán khoảng cách pan tối đa theo chiều ngang
+                        # iw=input width, ow=output width (self.width), z=zoom_level
+                        max_x_offset = f"(iw*{zoom_level}-{self.width})"
+
+                        if animation_type == "pan_left": # Nội dung ảnh dịch sang phải (view nhìn sang trái)
+                            x_expr = f"'{max_x_offset}*(1-on/{total_frames})'" # Đi từ max offset về 0
+                        else: # pan_right - Nội dung ảnh dịch sang trái (view nhìn sang phải)
+                            x_expr = f"'{max_x_offset}*(on/{total_frames})'" # Đi từ 0 đến max offset
+
+                        # Giữ y ở giữa
+                        y_expr = f"'(ih*{zoom_level}-{self.height})/2'"
+                        vf_filter_parts.append(f"zoompan=z={zoom_level}:x={x_expr}:y={y_expr}:d={total_frames}:s={self.width}x{self.height}:fps={self.fps}")
+
+                    # Thêm format sau zoompan nếu có animation
+                    vf_filter_parts.append(f"format=pix_fmts=yuv420p")
+
+                else: # Không animation hoặc không đủ điều kiện
+                    logger.debug(f"  No animation applied (Setting: {self.image_animation}, Duration: {target_duration:.2f}s)")
+                    # Chỉ scale và pad nếu không có animation
+                    vf_filter_parts.append(f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease")
+                    vf_filter_parts.append(f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2")
+                    vf_filter_parts.append(f"setsar=1")
+                    vf_filter_parts.append(f"format=pix_fmts=yuv420p")
+
+                # Kết hợp các phần filter
+                final_vf_filter = ",".join(vf_filter_parts)
 
                 cmd = [
-                    self.ffmpeg_path, "-y", "-loop", "1", "-i", media_path, "-t", str(target_duration),
-                    "-vf", vf_filter, "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                    self.ffmpeg_path, "-y",
+                    "-loop", "1", "-i", media_path, "-t", str(target_duration),
+                    "-vf", final_vf_filter,
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "23",
                     "-r", str(self.fps), "-an", output_path
                 ]
+            # --- Phần Video (nếu là video) ---
             elif media_type == 'video':
                 source_duration = self._get_video_duration_ffprobe(media_path)
                 start_time = 0
@@ -434,7 +483,18 @@ class VideoEditor:
                 raise ValueError("Missing required input: script, media_items, or audio_files_info.")
             language = script.get('language', 'en')
             script_mode = script.get("script_mode", "basic") # Dùng cho chapter card
+            is_advanced_mode = (script_mode == "advanced") # Chế độ nâng cao cho chapter cards
             logger.info(f"Script Mode: {script_mode}")
+
+           # *** Khởi tạo ImageGenerator nếu là advanced mode ***
+            image_gen = None
+            if is_advanced_mode:
+                try:
+                    image_gen = ImageGenerator() # Khởi tạo để tạo card
+                    logger.info("ImageGenerator initialized for chapter cards.")
+                except Exception as ig_err:
+                    logger.error(f"Failed to initialize ImageGenerator for chapter cards: {ig_err}. Chapter cards will be skipped.")
+                    image_gen = None # Đảm bảo là None nếu lỗi
 
             # --- 1. Tạo file tạm cho Intro & Outro (Video+Audio) ---
             intro_video_path = None
@@ -503,20 +563,51 @@ class VideoEditor:
                     self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
                     return None
 
+                if not main_audio_track_path or total_main_audio_duration <= 0:
+                    raise ValueError("Failed to create or get duration for main audio track.")
+
                 # --- 3. Chuẩn bị Visual Track Chính (Tùy theo Mode) ---
                 main_visual_track_path = None # Đường dẫn video chỉ hình ảnh của phần nội dung
                 temp_visual_segments = [] # List đường dẫn các đoạn visual tạm (unit segments hoặc theme clips)
-
+                current_chapter_processed = 0 # Biến theo dõi chapter hiện tại - Dùng để biết khi nào cần chèn card
+                
                 if visual_timing_mode == 'sync_to_audio':
                     logger.info("Creating visual track synced to audio units...")
                     media_map = {item.get('number'): item for item in media_items if item.get('media_type') == 'scene'}
-                    speech_units_audio = sorted([a for a in audio_files_info if a.get('type') == 'speech_unit'], key=lambda x: x['unit_number'])
+                    speech_units_audio = sorted([a for a in audio_files_info if a.get('type') == 'speech_unit'], key=lambda x: x.get('unit_number', 0))
 
                     for unit_info in speech_units_audio:
                         unit_number = unit_info['unit_number']
                         unit_audio_dur = unit_info.get('duration', 0)
                         segment_output_path = os.path.join(temp_project_dir, f"unit{unit_number}_vis_segment.mp4")
-                        # KHÔNG thêm segment_output_path vào temp_files_to_clean ở đây, sẽ thêm sau khi nó thực sự được tạo
+                        unit_chapter_num = unit_info.get('chapter_number') # Lấy chapter của unit (nếu có)
+                        unit_chapter_title = unit_info.get('chapter_title')
+
+                        # *** CHÈN CHAPTER CARD (NẾU CẦN) ***
+                        if is_advanced_mode and image_gen and unit_chapter_num is not None and unit_chapter_num > current_chapter_processed:
+                            logger.info(f"--- Inserting Chapter Card for Chapter {unit_chapter_num}: '{unit_chapter_title}' ---")
+                            card_img_path = os.path.join(temp_project_dir, f"chapter_{unit_chapter_num}_card.png")
+                            card_video_path = os.path.join(temp_project_dir, f"chapter_{unit_chapter_num}_card_video.mp4")
+                            temp_files_to_clean.extend([card_img_path, card_video_path])
+
+                            created_card_img = image_gen._create_chapter_title_card(unit_chapter_title, card_img_path, unit_chapter_num)
+                            if created_card_img:
+                                card_duration = VIDEO_SETTINGS.get("chapter_title_duration", 2.5)
+                                # Tạo video từ ảnh card (không tiếng)
+                                created_card_video = self._create_temp_visual_clip(
+                                    {"path": created_card_img, "type": "image"}, # Giả lập media item
+                                    card_duration,
+                                    card_video_path
+                                )
+                                if created_card_video:
+                                    temp_visual_segments.append(created_card_video)
+                                    logger.info(f"Chapter {unit_chapter_num} card video created.")
+                                else:
+                                    logger.warning(f"Failed to create video for chapter {unit_chapter_num} card.")
+                            else:
+                                logger.warning(f"Failed to create image for chapter {unit_chapter_num} card.")
+                            current_chapter_processed = unit_chapter_num # Đánh dấu đã xử lý card cho chapter này
+                        # *** KẾT THÚC CHÈN CARD ***
 
                         if unit_audio_dur <= 0.1:
                             logger.warning(f"Unit {unit_number} duration too short ({unit_audio_dur:.2f}s). Creating black clip.")
@@ -812,6 +903,51 @@ class VideoEditor:
                 # Input cho sub là file không có nhạc
                 video_input_for_subs = current_video_input
 
+            # --- 7.5. Tăng cường chất lượng Video (Tùy chọn) ---
+            enhanced_video_path = None # Biến tạm để lưu đường dẫn video đã tăng cường
+            if VIDEO_SETTINGS.get("enable_video_enhancement", False) and video_input_for_subs and os.path.exists(video_input_for_subs):
+                logger.info("Applying video enhancement filters...")
+                enhanced_video_path = os.path.join(temp_project_dir, f"enhanced_{project_id}.mp4")
+                temp_files_to_clean.append(enhanced_video_path) # Thêm vào danh sách dọn dẹp
+
+                sat = VIDEO_SETTINGS.get("enhancement_saturation", 1.0)
+                con = VIDEO_SETTINGS.get("enhancement_contrast", 1.0)
+                bri = VIDEO_SETTINGS.get("enhancement_brightness", 0.0)
+
+                # Xây dựng chuỗi filter eq
+                # Chỉ thêm nếu khác giá trị gốc để tối ưu
+                eq_filters = []
+                if abs(sat - 1.0) > 0.01: eq_filters.append(f"saturation={sat:.2f}")
+                if abs(con - 1.0) > 0.01: eq_filters.append(f"contrast={con:.2f}")
+                if abs(bri - 0.0) > 0.01: eq_filters.append(f"brightness={bri:.2f}")
+
+                if eq_filters:
+                    vf_enhance_str = f"eq={' : '.join(eq_filters)}"
+                    enhance_cmd = [
+                        self.ffmpeg_path, "-y",
+                        "-i", video_input_for_subs, # Input là video đã có audio/nhạc
+                        "-vf", vf_enhance_str,
+                        "-c:v", "libx264", "-crf", "22", "-preset", "medium", # Re-encode video
+                        "-c:a", "copy", # SAO CHÉP audio, không re-encode lại
+                        enhanced_video_path
+                    ]
+                    try:
+                        logger.debug(f"Running enhancement command: {' '.join(enhance_cmd)}")
+                        process = subprocess.run(enhance_cmd, check=False, capture_output=True, text=True, encoding='utf-8')
+                        if process.returncode == 0 and os.path.exists(enhanced_video_path) and os.path.getsize(enhanced_video_path) > 1000:
+                            logger.info(f"Video enhancement successful: {os.path.basename(enhanced_video_path)}")
+                            video_input_for_subs = enhanced_video_path # Cập nhật input cho bước tiếp theo (subtitles)
+                        else:
+                            logger.error(f"Video enhancement failed. FFmpeg stderr: {process.stderr.strip()}")
+                            # Không cập nhật video_input_for_subs, tiếp tục với video gốc
+                            enhanced_video_path = None # Đặt lại để không bị xóa nhầm file gốc
+                    except Exception as enhance_err:
+                        logger.error(f"Error during video enhancement: {enhance_err}", exc_info=True)
+                        enhanced_video_path = None
+                else:
+                    logger.info("Skipping enhancement as all values are default.")
+                    enhanced_video_path = None # Không có gì để làm
+
             # --- 8. Thêm Phụ Đề (Input là video_input_for_subs) ---
             #    Nguồn audio cho SRT LÀ main_audio_track_path (chỉ lời thoại chính)
             final_video_generated_path = video_input_for_subs # Đường dẫn file hiện tại trước khi move/copy cuối cùng
@@ -888,6 +1024,50 @@ class VideoEditor:
                  logger.error("The expected final video file path is invalid or does not exist before final move/copy.")
                  final_output_video_path = None # Đánh dấu lỗi
 
+            # --- 9.5. Lưu Metadata ---
+            if final_output_video_path and os.path.exists(final_output_video_path):
+                try:
+                    metadata_path = os.path.splitext(final_output_video_path)[0] + ".json"
+                    logger.info(f"Saving video metadata to: {metadata_path}")
+
+                    # Lấy duration của video cuối cùng
+                    final_duration = self._get_video_duration_ffprobe(final_output_video_path)
+
+                    # Thu thập thông tin metadata
+                    metadata = {
+                        'project_id': project_id,
+                        'title': script.get('title', 'N/A'),
+                        'output_path': final_output_video_path,
+                        'creation_time': time.strftime('%Y-%m-%d %H:%M:%S'),
+                        'language': language,
+                        'script_mode': script_mode,
+                        'dimensions': f"{self.width}x{self.height}",
+                        'fps': self.fps,
+                        'estimated_main_audio_duration_sec': total_main_audio_duration,
+                        'final_video_duration_sec': final_duration if final_duration else 'N/A',
+                        'visual_timing_mode': visual_timing_mode,
+                        'num_speech_units': len(speech_units_audio),
+                        'num_total_media_items': len(media_items),
+                        'num_scene_media_items': len([m for m in media_items if m.get('media_type') == 'scene']),
+                        'num_theme_media_items': len([m for m in media_items if m.get('media_type') == 'theme_visual']),
+                        'has_intro': intro_video_path is not None and os.path.exists(intro_video_path),
+                        'has_outro': outro_video_path is not None and os.path.exists(outro_video_path),
+                        'background_music_used': background_music_path is not None and os.path.exists(background_music_path) and video_input_for_subs != current_video_input,
+                        'subtitles_added': 'generated_srt' in locals() and generated_srt is not None and final_video_generated_path == subtitled_temp_path,
+                        'image_animation_setting': self.image_animation, # Lưu setting gốc
+                        'transitions_enabled': self.enable_transitions,
+                        'transition_duration': self.transition_duration,
+                        'ffmpeg_path': self.ffmpeg_path,
+                        'ffprobe_path': self.ffprobe_path
+                    }
+
+                    # Ghi file JSON
+                    with open(metadata_path, 'w', encoding='utf-8') as f:
+                        json.dump(metadata, f, indent=4, ensure_ascii=False)
+                    logger.info(f"Metadata successfully saved.")
+
+                except Exception as meta_err:
+                    logger.warning(f"Could not save metadata file: {meta_err}", exc_info=False) # Chỉ cảnh báo, không dừng hẳn
 
             # --- 10. Dọn dẹp cuối cùng ---
             self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
@@ -1812,82 +1992,6 @@ class VideoEditor:
             if not os.path.exists(output_video) or os.path.getsize(output_video) < 10000:
                 shutil.copy(input_video, output_video)
             return output_video
-
-    def create_simple_video(self, title, media_paths, audio_paths, output_path):
-        """
-        Tạo một video đơn giản từ danh sách media và audio.
-        
-        Args:
-            title (str): Tiêu đề video
-            media_paths (list): Danh sách các đường dẫn đến các media (ảnh, video)
-            audio_paths (list): Danh sách các đường dẫn đến các file audio tương ứng
-            output_path (str): Đường dẫn file video đầu ra
-            
-        Returns:
-            str: Đường dẫn đến video đã tạo
-        """
-        if len(media_paths) != len(audio_paths):
-            raise ValueError("Số lượng media và audio phải bằng nhau")
-        
-        logger.info(f"Tạo video đơn giản cho: '{title}'")
-        
-        # Tạo thư mục tạm
-        temp_dir = os.path.join(self.temp_video_dir, f"simple_{int(time.time())}")
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # Tạo video cho từng cặp media-audio
-        scene_videos = []
-        
-        for i, (media_path, audio_path) in enumerate(zip(media_paths, audio_paths)):
-            if not os.path.exists(media_path) or not os.path.exists(audio_path):
-                logger.warning(f"Bỏ qua cặp {i+1}: file không tồn tại.")
-                continue
-            
-            # Xác định loại media (ảnh hay video)
-            media_type = "video" if media_path.lower().endswith(('.mp4', '.mov', '.avi')) else "image"
-            
-            # Tạo media item
-            media_item = {
-                "type": media_type,
-                "media_type": "scene",
-                "number": i+1,
-                "path": media_path,
-                "duration": 5  # Default duration
-            }
-            
-            # Tạo output path cho scene này
-            output_video = os.path.join(temp_dir, f"scene_{i+1}.mp4")
-            
-            try:
-                # Xử lý media và audio
-                scene_video = self.process_scene_media(media_item, audio_path, output_video)
-                scene_videos.append(scene_video)
-                logger.info(f"Đã xử lý cặp {i+1}: {os.path.basename(media_path)} + {os.path.basename(audio_path)}")
-            except Exception as e:
-                logger.error(f"Lỗi khi xử lý cặp {i+1}: {str(e)}")
-        
-        if not scene_videos:
-            raise Exception("Không có scene video nào được tạo thành công")
-        
-        # Nối các scene videos
-        logger.info(f"Nối {len(scene_videos)} scene videos thành video cuối cùng")
-        logger.info(f"Điều kiện transition: enable={self.enable_transitions}, types={self.transition_types}, 'fade' in types={('fade' in self.transition_types) if self.transition_types else False}")
-        if self.enable_transitions and self.transition_types and "fade" in self.transition_types:
-            logger.info(f"Áp dụng hiệu ứng chuyển cảnh fade với thời lượng {self.transition_duration}s")
-            final_video = self.concatenate_scene_videos_with_fade(scene_videos, output_path, self.transition_duration)
-        else:
-            logger.info(f"Nối video không có hiệu ứng chuyển cảnh")
-            final_video = self.concatenate_scene_videos(scene_videos, output_path)
-        
-        # Dọn dẹp
-        if VIDEO_SETTINGS.get("cleanup_temp_files", True):
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
-                pass
-        
-        logger.info(f"Đã tạo video đơn giản thành công: {output_path}")
-        return final_video
     
     def _get_video_duration(self, video_path):
         """Lấy thời lượng của video."""
