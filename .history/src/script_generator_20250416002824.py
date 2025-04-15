@@ -1664,34 +1664,34 @@ class ScriptGenerator:
             article_image_url = article_data.get('image_url')
         # *** Kết thúc lấy image_url ***
 
-        # === BƯỚC PHÂN TÍCH VIDEO PREFERENCE (THÊM VÀO) ===
-        logger.info("Analyzing scenes for video clip suitability...")
-        # Gọi hàm phân tích cho danh sách scenes cuối cùng
-        analysis_results = self._analyze_shots_for_video_batch(final_scenes)
+            # === BƯỚC PHÂN TÍCH VIDEO PREFERENCE (THÊM VÀO) ===
+            logger.info("Analyzing scenes for video clip suitability...")
+            # Gọi hàm phân tích cho danh sách scenes cuối cùng
+            analysis_results = self._analyze_shots_for_video_batch(final_scenes)
 
-        if analysis_results:
-            logger.info(f"Updating {len(final_scenes)} scenes with video preference analysis results...")
-            updated_scene_count = 0
-            for scene in final_scenes:
-                scene_num = scene.get('number')
-                if scene_num is not None:
-                    # Lấy kết quả phân tích (True/False) cho scene này, mặc định là False nếu không tìm thấy
-                    prefer_video_flag = analysis_results.get(scene_num, False)
-                    # Thêm hoặc cập nhật key 'prefer_video' vào dictionary của scene
-                    scene['prefer_video'] = prefer_video_flag
-                    if prefer_video_flag:
-                        updated_scene_count += 1
-                else:
-                    # Xử lý trường hợp scene không có 'number' (dù không nên xảy ra)
+            if analysis_results:
+                logger.info(f"Updating {len(final_scenes)} scenes with video preference analysis results...")
+                updated_scene_count = 0
+                for scene in final_scenes:
+                    scene_num = scene.get('number')
+                    if scene_num is not None:
+                        # Lấy kết quả phân tích (True/False) cho scene này, mặc định là False nếu không tìm thấy
+                        prefer_video_flag = analysis_results.get(scene_num, False)
+                        # Thêm hoặc cập nhật key 'prefer_video' vào dictionary của scene
+                        scene['prefer_video'] = prefer_video_flag
+                        if prefer_video_flag:
+                            updated_scene_count += 1
+                    else:
+                        # Xử lý trường hợp scene không có 'number' (dù không nên xảy ra)
+                        scene['prefer_video'] = False
+                logger.info(f"Marked {updated_scene_count} scenes as preferring video.")
+            else:
+                # Log nếu phân tích bị tắt, lỗi hoặc không trả về kết quả hợp lệ
+                logger.warning("Video analysis skipped or failed. Proceeding without 'prefer_video' flags in scenes.")
+                # Đảm bảo key 'prefer_video' tồn tại và là False nếu không có phân tích
+                for scene in final_scenes:
                     scene['prefer_video'] = False
-            logger.info(f"Marked {updated_scene_count} scenes as preferring video.")
-        else:
-            # Log nếu phân tích bị tắt, lỗi hoặc không trả về kết quả hợp lệ
-            logger.warning("Video analysis skipped or failed. Proceeding without 'prefer_video' flags in scenes.")
-            # Đảm bảo key 'prefer_video' tồn tại và là False nếu không có phân tích
-            for scene in final_scenes:
-                scene['prefer_video'] = False
-        # === KẾT THÚC BƯỚC PHÂN TÍCH VIDEO PREFERENCE ===
+            # === KẾT THÚC BƯỚC PHÂN TÍCH VIDEO PREFERENCE ===
 
         script_result = {
             "project_id": project_id,
