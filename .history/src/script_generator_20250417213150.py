@@ -1566,20 +1566,15 @@ class ScriptGenerator:
             if style_name == "senior_conversational":
                 # --- Hướng dẫn Hook RIÊNG cho Senior Conversational ---
                 prompt_stage2_chapter += """
-            **CRITICAL - HOOK GENERATION (Chapter 1 ONLY):**
-            **Hook (opening)**: Start with one of the following proven hook styles tailored for a senior audience (60+). The goal is to instantly grab attention by speaking directly to their current concerns or goals:
-            • Highlight a common struggle or pain point 
-            (e.g., “Do you feel like your family no longer listens to you? This video will help you change that…”).
-            • Ask a thought-provoking question 
-            (e.g., “Do you still need friends after 70? What you’ll hear may surprise you…”).
-            • Lead with a striking statistic or health warning 
-            (e.g., “99% of deaths after age 75 are caused by these 5 things – here's how to avoid them.”).
-            • Present a powerful personal transformation 
-            (e.g., “At 74, I stay sharp and active every day thanks to these 4 simple habits…”).
-            • Make a clear and motivating promise 
-            (e.g., “If you eat these 5 foods, your constipation could disappear after age 60.”).
-
-            Use language that feels empathetic, inspiring, and easy to follow – avoid overly complex or fast-paced delivery.
+            **CRITICAL - HOOK GENERATION (Chapter 1 - Senior Conversational Style ONLY):**
+            - **Warm & Relatable Start:** Begin *immediately* with a warm greeting and a question or statement that directly addresses a common experience, feeling, or interest relevant to seniors (60+) regarding the topic "{chapter_title}". Make them feel seen and understood right away.
+                - *Example Approach 1 (Relatable Question):* "Xin chào các cô chú, các bác. Có bao giờ mình cảm thấy [nêu một cảm giác/trải nghiệm chung liên quan đến topic] chưa ạ?" (Adjust language based on `lang_instruction`)
+                - *Example Approach 2 (Empathy):* "Cuộc sống ở tuổi này đôi khi mang đến những [thử thách/niềm vui] rất riêng phải không ạ? Hôm nay, chúng ta cùng trò chuyện về [topic] nhé."
+                - *Example Approach 3 (Benefit Focus):* "Chào mừng quý vị đến với kênh! Hôm nay chúng ta sẽ khám phá một cách đơn giản để [nêu lợi ích chính] mà không cần tốn nhiều công sức."
+                # ===> Thêm các gợi ý hook cụ thể khác cho người lớn tuổi tại đây <===
+            - **Goal:** Create an instant connection, build trust, and gently spark curiosity. The tone must be friendly, respectful, positive, and easy to follow. Avoid anything jarring, complex, or overly technical in the opening.
+            - **Conciseness & Clarity:** The very first sentences should be exceptionally clear, simple, and inviting.
+            - **Set the Stage:** Smoothly transition from the warm opening into the main point of Chapter 1.
             """
             else:
                 # --- Hướng dẫn Hook CHUNG cho các style khác ---
@@ -1593,7 +1588,8 @@ class ScriptGenerator:
             • A bold promise or outcome-driven tease (e.g., “After watching this, you’ll know how to rank on YouTube in 48h.”).
             Use language that evokes curiosity, emotion, or urgency—designed to retain viewer interest in the first 15 seconds.
             - Target word count (~{word_count_target} words.
-            """       
+            """
+        # === KẾT THÚC PHẦN HOOK ===             
 
         # --- 3d. Hướng dẫn Chung (Đã cập nhật) ---
         prompt_stage2_chapter += f"""

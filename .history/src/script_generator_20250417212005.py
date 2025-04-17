@@ -1495,12 +1495,6 @@ class ScriptGenerator:
         word_count_target = current_chapter_outline.get('word_count_target', 150) # Lấy target từ outline
         target_audience = style_config.get("target_audience") # Lấy target audience từ style config
 
-        style_name = None
-        for name, config in cfg.style_configs.items(): # Cần import cfg hoặc truy cập style_configs đúng cách
-             if config == style_config:
-                 style_name = name
-                 break
-
         logger.info(f"  Stage 2: Generating content for Chapter {chapter_num}: '{chapter_title}' (Target: ~{word_count_target} words)...")
         if target_audience:
             logger.info(f"    Target Audience: {target_audience}")
@@ -1562,39 +1556,17 @@ class ScriptGenerator:
         """
         # --- 3c. Thêm hướng dẫn Hook cho Chapter 1 ---
         if chapter_num == 1:
-            # === KIỂM TRA STYLE ===
-            if style_name == "senior_conversational":
-                # --- Hướng dẫn Hook RIÊNG cho Senior Conversational ---
-                prompt_stage2_chapter += """
-            **CRITICAL - HOOK GENERATION (Chapter 1 ONLY):**
-            **Hook (opening)**: Start with one of the following proven hook styles tailored for a senior audience (60+). The goal is to instantly grab attention by speaking directly to their current concerns or goals:
-            • Highlight a common struggle or pain point 
-            (e.g., “Do you feel like your family no longer listens to you? This video will help you change that…”).
-            • Ask a thought-provoking question 
-            (e.g., “Do you still need friends after 70? What you’ll hear may surprise you…”).
-            • Lead with a striking statistic or health warning 
-            (e.g., “99% of deaths after age 75 are caused by these 5 things – here's how to avoid them.”).
-            • Present a powerful personal transformation 
-            (e.g., “At 74, I stay sharp and active every day thanks to these 4 simple habits…”).
-            • Make a clear and motivating promise 
-            (e.g., “If you eat these 5 foods, your constipation could disappear after age 60.”).
-
-            Use language that feels empathetic, inspiring, and easy to follow – avoid overly complex or fast-paced delivery.
-            """
-            else:
-                # --- Hướng dẫn Hook CHUNG cho các style khác ---
-                prompt_stage2_chapter += """
-            **CRITICAL - HOOK GENERATION (Chapter 1 ONLY):**
-            **Hook (opening)**: Begin with one of the following styles to instantly grab attention:
-            • A shocking statistic or surprising truth (e.g., “95% of YouTubers fail because of THIS!”).
-            • A thought-provoking question (e.g., “If you only had 3 days to rank your video, what would you do first?”).
-            • A specific result or transformation (e.g., “I gained 100,000 views in 2 weeks using this simple trick…”).
-            • A direct call-out to the viewer’s pain point (e.g., “Still stuck at 50 views? This video is your breakthrough.”).
-            • A bold promise or outcome-driven tease (e.g., “After watching this, you’ll know how to rank on YouTube in 48h.”).
-            Use language that evokes curiosity, emotion, or urgency—designed to retain viewer interest in the first 15 seconds.
-            - Target word count (~{word_count_target} words.
-            """       
-
+             prompt_stage2_chapter += """
+        **CRITICAL - HOOK GENERATION (Chapter 1 ONLY):**
+        **Hook (opening)**: Begin with one of the following styles to instantly grab attention:
+        • A shocking statistic or surprising truth (e.g., “95% of YouTubers fail because of THIS!”).
+        • A thought-provoking question (e.g., “If you only had 3 days to rank your video, what would you do first?”).
+        • A specific result or transformation (e.g., “I gained 100,000 views in 2 weeks using this simple trick…”).
+        • A direct call-out to the viewer’s pain point (e.g., “Still stuck at 50 views? This video is your breakthrough.”).
+        • A bold promise or outcome-driven tease (e.g., “After watching this, you’ll know how to rank on YouTube in 48h.”).
+        Use language that evokes curiosity, emotion, or urgency—designed to retain viewer interest in the first 15 seconds.
+        - Target word count (~{word_count_target} words.
+        """
         # --- 3d. Hướng dẫn Chung (Đã cập nhật) ---
         prompt_stage2_chapter += f"""
         **General Instructions (Apply to all sentences written for Chapter {chapter_num}):**

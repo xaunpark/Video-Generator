@@ -1593,7 +1593,8 @@ class ScriptGenerator:
             • A bold promise or outcome-driven tease (e.g., “After watching this, you’ll know how to rank on YouTube in 48h.”).
             Use language that evokes curiosity, emotion, or urgency—designed to retain viewer interest in the first 15 seconds.
             - Target word count (~{word_count_target} words.
-            """       
+            """
+        # === KẾT THÚC PHẦN HOOK ===             
 
         # --- 3d. Hướng dẫn Chung (Đã cập nhật) ---
         prompt_stage2_chapter += f"""
