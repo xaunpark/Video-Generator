@@ -549,7 +549,7 @@ class ScriptGenerator:
             logger.warning(f"Step 2 Failed: Unexpected error parsing result: {e}", exc_info=True)
             return None
 
-    # --- HÀM CHÍNH: generate_script (Sử dụng 2 bước) ---
+    # --- HÀM CHÍNH: generate_script (Sử dụng 2 bước: "Tạo Script với câu hoàn chỉnh" sau đó "Chia câu thành Shots") ---
     def generate_script(self, article, style="informative", language=None, video_mode="basic"):
         """
         Tạo kịch bản sử dụng quy trình 2 bước: câu -> shots.
@@ -1032,7 +1032,7 @@ class ScriptGenerator:
             logger.info("Advanced script generation completed all stages.")
             return script_result # Trả về script hoàn chỉnh
         
-    # --- NEW Main function for TRANSCRIPT/TEXT input ---
+    # --- function for TRANSCRIPT/TEXT input ---
     def generate_script_from_text(self, input_text, style="informative", language="en", context_hint=None, video_mode="basic"):
         """
         Generates a script from raw text (like a transcript) using the 2-step process.
@@ -1286,7 +1286,7 @@ class ScriptGenerator:
         # --- 1. Kiểm tra và Lấy Cấu hình Layout Override ---
         layout_config = style_config.get("layout_override", {})
         use_override_layout = layout_config.get("enabled", False)
-        target_audience = style_config.get("target_audience") # Lấy target audience nếu có
+        target_audience = style_config.get("target_audience")
 
         # --- 2. Xác định Tham số Layout Động ---
         if use_override_layout:
@@ -1294,7 +1294,7 @@ class ScriptGenerator:
             # Lấy các tham số từ cấu hình override, cung cấp defaults an toàn
             ch_min, ch_max = layout_config.get("chapter_count_range", (3, 5)) # VD: Default cho override
             wt_min, wt_max = layout_config.get("chapter_word_target_range", (400, 700)) # VD: Default cao cho override
-            ttw_min, ttw_max = layout_config.get("target_total_word_range", (2500, 4500)) # VD: Default cao cho override
+            ttw_min, ttw_max = layout_config.get("target_total_word_range", (1500, 3000)) # VD: Default cao cho override
             # Lấy và format structure_prompt (nếu có)
             raw_structure_instruction = layout_config.get("structure_prompt", "")
             structure_instruction = raw_structure_instruction.format(chapter_count_min=ch_min, chapter_count_max=ch_max) if raw_structure_instruction else ""
@@ -1333,7 +1333,7 @@ class ScriptGenerator:
         if input_type == 'article':
             prompt_step1_layout += f"- Type: News Article\n"
             prompt_step1_layout += f"- Title: {content_data.get('title', '')}\n"
-            prompt_step1_layout += f"- Content to Analyze:\n{safe_truncate(content_data.get('content', ''), 8000)}\n" # Giữ giới hạn cũ
+            prompt_step1_layout += f"- Content to Analyze:\n{safe_truncate(content_data.get('content', ''), 8000)}\n"
             prompt_step1_layout += "\nTask: Based on the article, define a main video title and logical chapters."
         elif input_type == 'keyword':
             prompt_step1_layout += f"- Type: Keyword/Topic\n"
@@ -1341,7 +1341,7 @@ class ScriptGenerator:
             prompt_step1_layout += f"\nTask: Develop a video outline {lang_instruction} about '{content_data}'. Define a main title and logical chapters."
         elif input_type == 'text':
             prompt_step1_layout += f"- Type: Input Text {f'({context_hint})' if context_hint else ''}\n"
-            prompt_step1_layout += f"- Text Content to Structure:\n{safe_truncate(content_data, 10000)}\n" # Giữ giới hạn cũ
+            prompt_step1_layout += f"- Text Content to Structure:\n{safe_truncate(content_data, 10000)}\n"
             prompt_step1_layout += f"\nTask: Structure the provided text {lang_instruction} into a video outline. Define a main title and logical chapters."
         else:
             logger.error("Invalid source data type for layout generation.")
@@ -1495,6 +1495,12 @@ class ScriptGenerator:
         word_count_target = current_chapter_outline.get('word_count_target', 150) # Lấy target từ outline
         target_audience = style_config.get("target_audience") # Lấy target audience từ style config
 
+        style_name = None
+        for name, config in cfg.style_configs.items(): # Cần import cfg hoặc truy cập style_configs đúng cách
+             if config == style_config:
+                 style_name = name
+                 break
+
         logger.info(f"  Stage 2: Generating content for Chapter {chapter_num}: '{chapter_title}' (Target: ~{word_count_target} words)...")
         if target_audience:
             logger.info(f"    Target Audience: {target_audience}")
@@ -1554,15 +1560,40 @@ class ScriptGenerator:
 
         **Your Task & Instructions:**
         """
-        # --- 3c. Thêm hướng dẫn Hook cho Chapter 1 (Không đổi) ---
+        # --- 3c. Thêm hướng dẫn Hook cho Chapter 1 ---
         if chapter_num == 1:
-             prompt_stage2_chapter += """
-        **CRITICAL - HOOK GENERATION (Chapter 1 ONLY):**
-        - **Immediate Impact:** Start *instantly* with the MOST surprising, intriguing, emotionally resonant, or visually striking piece of information... [Giữ nguyên]
-        - **Goal:** Grab the viewer's attention... [Giữ nguyên]
-        - **Conciseness:** While aiming for the target word count (~{word_count_target} words), ensure the *opening sentences* are particularly punchy... [Giữ nguyên]
-        - **Connect to Topic:** Ensure the hook directly relates... [Giữ nguyên]
-        """
+            # === KIỂM TRA STYLE ===
+            if style_name == "senior_conversational":
+                # --- Hướng dẫn Hook RIÊNG cho Senior Conversational ---
+                prompt_stage2_chapter += """
+            **CRITICAL - HOOK GENERATION (Chapter 1 ONLY):**
+            **Hook (opening)**: Start with one of the following proven hook styles tailored for a senior audience (60+). The goal is to instantly grab attention by speaking directly to their current concerns or goals:
+            • Highlight a common struggle or pain point 
+            (e.g., “Do you feel like your family no longer listens to you? This video will help you change that…”).
+            • Ask a thought-provoking question 
+            (e.g., “Do you still need friends after 70? What you’ll hear may surprise you…”).
+            • Lead with a striking statistic or health warning 
+            (e.g., “99% of deaths after age 75 are caused by these 5 things – here's how to avoid them.”).
+            • Present a powerful personal transformation 
+            (e.g., “At 74, I stay sharp and active every day thanks to these 4 simple habits…”).
+            • Make a clear and motivating promise 
+            (e.g., “If you eat these 5 foods, your constipation could disappear after age 60.”).
+
+            Use language that feels empathetic, inspiring, and easy to follow – avoid overly complex or fast-paced delivery.
+            """
+            else:
+                # --- Hướng dẫn Hook CHUNG cho các style khác ---
+                prompt_stage2_chapter += """
+            **CRITICAL - HOOK GENERATION (Chapter 1 ONLY):**
+            **Hook (opening)**: Begin with one of the following styles to instantly grab attention:
+            • A shocking statistic or surprising truth (e.g., “95% of YouTubers fail because of THIS!”).
+            • A thought-provoking question (e.g., “If you only had 3 days to rank your video, what would you do first?”).
+            • A specific result or transformation (e.g., “I gained 100,000 views in 2 weeks using this simple trick…”).
+            • A direct call-out to the viewer’s pain point (e.g., “Still stuck at 50 views? This video is your breakthrough.”).
+            • A bold promise or outcome-driven tease (e.g., “After watching this, you’ll know how to rank on YouTube in 48h.”).
+            Use language that evokes curiosity, emotion, or urgency—designed to retain viewer interest in the first 15 seconds.
+            - Target word count (~{word_count_target} words.
+            """       
 
         # --- 3d. Hướng dẫn Chung (Đã cập nhật) ---
         prompt_stage2_chapter += f"""
