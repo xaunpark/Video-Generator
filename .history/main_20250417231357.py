@@ -98,12 +98,10 @@ def prompt_for_visual_source():
     print("1. Search online (Serper, Pexels, Pixabay) - Default")
     print("2. Generate images with AI (Google Imagen 3)")
     print("3. Search ONLY videos online (Pexels, Pixabay)")
-
+    
     vis_choice = ""
-    valid_choices = ["1", "2", "3"]
-
-    while vis_choice not in valid_choices:
-        vis_choice = input(f"Enter visual source choice ({','.join(valid_choices)}, default is 1): ").strip()
+    while vis_choice not in ["1", "2"]:
+        vis_choice = input("Enter visual source choice (1 or 2, default is 1): ").strip()
         if not vis_choice:
             vis_choice = "1"
 
@@ -111,12 +109,6 @@ def prompt_for_visual_source():
         logger.info("Selected AI image generation (Google Imagen 3).")
         print("Note: AI image generation may take longer and incur costs.")
         return "ai"
-    elif vis_choice == "3":
-        logger.info("Selected online search for ONLY videos.")
-        if not VIDEO_SETTINGS.get("enable_video_clips", False):
-             logger.warning("Video clips are disabled in settings (VIDEO_SETTINGS['enable_video_clips']). Selecting 'Video Only' might result in no visuals.")
-             print("WARNING: Video clips are disabled in settings. This option might not work as expected.")
-        return "video_only"  
     else:
         logger.info("Selected online search for images/videos.")
         return "search" # default

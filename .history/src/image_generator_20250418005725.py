@@ -308,68 +308,9 @@ class ImageGenerator:
                 except Exception as ai_err:
                     logger.warning(f"  AI generation failed for '{query}': {ai_err}")
 
-        elif visual_source == 'video_only':
-            logger.debug(f"  Trying VIDEO ONLY sources for '{query}'...")
-            # 1. Thử Online Video Finder
-            # Đảm bảo finder được init nếu cần
-            if self.video_finder is None and VIDEO_SETTINGS.get("enable_video_clips", False):
-                try:
-                    self.video_finder = VideoClipFinder()
-                except Exception as vf_err:
-                    logger.error(f"Error initializing VideoClipFinder in helper: {vf_err}")
-                    self.video_finder = None
-
-            if VIDEO_SETTINGS.get("enable_video_clips", False) and self.video_finder:
-                try:
-                    # Đường dẫn tạm cho video tìm được
-                    temp_video_theme_online_path = os.path.join(project_media_dir, f"{base_filename}_vid_online.mp4")
-                    # Gọi finder, dùng target duration mặc định cho theme mode (hoặc lấy từ settings)
-                    theme_target_duration = VIDEO_SETTINGS.get("fixed_visual_duration", 7) # Lấy từ settings
-                    visual_path = self.video_finder.find_video_clip(
-                        query=query,
-                        scene_content=query, # Dùng query làm context
-                        output_path=temp_video_theme_online_path,
-                        target_duration=theme_target_duration
-                    )
-                    if visual_path:
-                        logger.debug(f"  Online video search successful: {visual_path}")
-                        visual_type = "video"
-                        # Trả về ngay khi tìm thấy online
-                        return visual_path, visual_type
-                    else:
-                        logger.debug(f"  Online video search returned no result for '{query}'.")
-                except Exception as online_vid_err:
-                    logger.warning(f"  Online video search failed for '{query}': {online_vid_err}")
-                    # Không return, tiếp tục thử fallback local
-
-            # 2. Thử Local Video Fallback (chỉ khi online thất bại)
-            if not visual_path:
-                try:
-                    logger.debug(f"  Trying local fallback video for '{query}'...")
-                    local_fallback_path = self._use_local_fallback_video(query) # Chỉ lấy path
-                    if local_fallback_path:
-                        # Copy file fallback vào thư mục project để xử lý sau
-                        temp_video_theme_local_path = os.path.join(project_media_dir, f"{base_filename}_vid_local_fallback.mp4")
-                        shutil.copy2(local_fallback_path, temp_video_theme_local_path)
-                        visual_path = temp_video_theme_local_path
-                        visual_type = "video"
-                        logger.debug(f"  Local video fallback successful: {visual_path}")
-                        # Trả về ngay khi tìm thấy local fallback
-                        return visual_path, visual_type
-                    else:
-                        logger.debug(f"  Local video fallback returned no result for '{query}'.")
-                except Exception as local_vid_err:
-                    logger.warning(f"  Local video fallback failed for '{query}': {local_vid_err}")
-            # Nếu cả online và local video đều thất bại, visual_path sẽ là None
-
         # --- Nếu tất cả các phương pháp trong luồng đã chọn đều thất bại ---
-        if visual_path:
-            logger.debug(f"  Successfully obtained visual: {visual_path} (Type: {visual_type})")
-        else:
-            logger.debug(f"  No visual found/generated for query '{query}' using method '{visual_source}'.")
-
-        # Trả về kết quả (có thể là None, None nếu thất bại)
-        return visual_path, visual_type
+        logger.debug(f"  No visual found/generated for query '{query}' using method '{visual_source}'.")
+        return None, None # Trả về None để hàm gọi biết và xử lý   
 
     def generate_images_for_script(self, script, audio_files_info=None, visual_source="search", visual_timing_mode="sync_to_audio"):
             """Tạo ảnh hoặc video cho tất cả các scenes (shots) trong script.
@@ -541,35 +482,12 @@ class ImageGenerator:
                 final_visual_list_for_editor = [] # Danh sách cuối cùng gửi cho VideoEditor
 
                 if num_unique_collected == 0:
-                    logger.error("Failed to collect ANY unique theme visuals (Online or Local Fallback).")
-                    # --- THÊM LOGIC FALLBACK TẠO CLIP ĐEN Ở ĐÂY ---
-                    logger.warning(f"Creating {estimated_visual_slots} black video clips as fallback for theme mode.")
-                    for slot_idx in range(estimated_visual_slots):
-                         black_clip_filename = f"theme_black_fallback_{slot_idx + 1}.mp4"
-                         black_clip_path = os.path.join(project_media_dir, black_clip_filename)
-                         try:
-                             created_black_path = self._create_black_clip(fixed_duration_per_visual, black_clip_path)
-                             if created_black_path:
-                                 # Thêm clip đen vào danh sách cuối cùng
-                                 final_visual_list_for_editor.append({
-                                     "type": "video", # Vẫn là video
-                                     "media_type": "theme_visual_fallback", # Đánh dấu là fallback
-                                     "path": created_black_path,
-                                     "duration": fixed_duration_per_visual, # Duration cố định
-                                     "query_source": "Black Clip Fallback"
-                                 })
-                                 # Không cần thêm vào collected_paths vì đây là fallback cuối
-                             else:
-                                 logger.error(f"Failed to create black clip fallback #{slot_idx + 1}.")
-                         except Exception as black_gen_err:
-                             logger.error(f"Error generating black clip fallback #{slot_idx + 1}: {black_gen_err}", exc_info=True)
-                    # Kiểm tra lại xem có tạo được clip đen nào không
-                    if not final_visual_list_for_editor:
-                         logger.critical("CRITICAL: Failed to create even black clip fallbacks. Cannot proceed.")
-                         # Có thể return media_items rỗng ở đây hoặc raise Exception
-                         return media_items # Trả về list rỗng hiện tại (sẽ gây lỗi sau)
-                    # --- KẾT THÚC LOGIC FALLBACK TẠO CLIP ĐEN ---
-                    
+                    logger.error("Failed to collect ANY unique theme visuals.")
+                    # Fallback: Tạo ảnh text từ tiêu đề chính? Hoặc dừng lại?
+                    # Hiện tại sẽ dẫn đến lỗi ở VideoEditor, cần xử lý tốt hơn
+                    # TODO: Implement fallback (e.g., single text image repeated)
+                    # Tạm thời trả về list rỗng (sẽ gây lỗi sau)
+                    pass # Để logic dưới xử lý
                 elif num_unique_collected >= estimated_visual_slots:
                     # Đủ visual duy nhất, chỉ cần lấy đủ số lượng cần
                     final_visual_list_for_editor = unique_visuals_collected[:estimated_visual_slots]

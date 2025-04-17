@@ -363,13 +363,8 @@ class ImageGenerator:
             # Nếu cả online và local video đều thất bại, visual_path sẽ là None
 
         # --- Nếu tất cả các phương pháp trong luồng đã chọn đều thất bại ---
-        if visual_path:
-            logger.debug(f"  Successfully obtained visual: {visual_path} (Type: {visual_type})")
-        else:
-            logger.debug(f"  No visual found/generated for query '{query}' using method '{visual_source}'.")
-
-        # Trả về kết quả (có thể là None, None nếu thất bại)
-        return visual_path, visual_type
+        logger.debug(f"  No visual found/generated for query '{query}' using method '{visual_source}'.")
+        return None, None # Trả về None để hàm gọi biết và xử lý   
 
     def generate_images_for_script(self, script, audio_files_info=None, visual_source="search", visual_timing_mode="sync_to_audio"):
             """Tạo ảnh hoặc video cho tất cả các scenes (shots) trong script.
@@ -541,35 +536,12 @@ class ImageGenerator:
                 final_visual_list_for_editor = [] # Danh sách cuối cùng gửi cho VideoEditor
 
                 if num_unique_collected == 0:
-                    logger.error("Failed to collect ANY unique theme visuals (Online or Local Fallback).")
-                    # --- THÊM LOGIC FALLBACK TẠO CLIP ĐEN Ở ĐÂY ---
-                    logger.warning(f"Creating {estimated_visual_slots} black video clips as fallback for theme mode.")
-                    for slot_idx in range(estimated_visual_slots):
-                         black_clip_filename = f"theme_black_fallback_{slot_idx + 1}.mp4"
-                         black_clip_path = os.path.join(project_media_dir, black_clip_filename)
-                         try:
-                             created_black_path = self._create_black_clip(fixed_duration_per_visual, black_clip_path)
-                             if created_black_path:
-                                 # Thêm clip đen vào danh sách cuối cùng
-                                 final_visual_list_for_editor.append({
-                                     "type": "video", # Vẫn là video
-                                     "media_type": "theme_visual_fallback", # Đánh dấu là fallback
-                                     "path": created_black_path,
-                                     "duration": fixed_duration_per_visual, # Duration cố định
-                                     "query_source": "Black Clip Fallback"
-                                 })
-                                 # Không cần thêm vào collected_paths vì đây là fallback cuối
-                             else:
-                                 logger.error(f"Failed to create black clip fallback #{slot_idx + 1}.")
-                         except Exception as black_gen_err:
-                             logger.error(f"Error generating black clip fallback #{slot_idx + 1}: {black_gen_err}", exc_info=True)
-                    # Kiểm tra lại xem có tạo được clip đen nào không
-                    if not final_visual_list_for_editor:
-                         logger.critical("CRITICAL: Failed to create even black clip fallbacks. Cannot proceed.")
-                         # Có thể return media_items rỗng ở đây hoặc raise Exception
-                         return media_items # Trả về list rỗng hiện tại (sẽ gây lỗi sau)
-                    # --- KẾT THÚC LOGIC FALLBACK TẠO CLIP ĐEN ---
-                    
+                    logger.error("Failed to collect ANY unique theme visuals.")
+                    # Fallback: Tạo ảnh text từ tiêu đề chính? Hoặc dừng lại?
+                    # Hiện tại sẽ dẫn đến lỗi ở VideoEditor, cần xử lý tốt hơn
+                    # TODO: Implement fallback (e.g., single text image repeated)
+                    # Tạm thời trả về list rỗng (sẽ gây lỗi sau)
+                    pass # Để logic dưới xử lý
                 elif num_unique_collected >= estimated_visual_slots:
                     # Đủ visual duy nhất, chỉ cần lấy đủ số lượng cần
                     final_visual_list_for_editor = unique_visuals_collected[:estimated_visual_slots]

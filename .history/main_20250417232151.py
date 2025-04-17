@@ -111,8 +111,9 @@ def prompt_for_visual_source():
         logger.info("Selected AI image generation (Google Imagen 3).")
         print("Note: AI image generation may take longer and incur costs.")
         return "ai"
-    elif vis_choice == "3":
+    elif vis_choice == "3": # <-- Xử lý lựa chọn mới
         logger.info("Selected online search for ONLY videos.")
+        # Kiểm tra xem video clips có được bật trong settings không
         if not VIDEO_SETTINGS.get("enable_video_clips", False):
              logger.warning("Video clips are disabled in settings (VIDEO_SETTINGS['enable_video_clips']). Selecting 'Video Only' might result in no visuals.")
              print("WARNING: Video clips are disabled in settings. This option might not work as expected.")
