@@ -342,132 +342,84 @@ class VideoEditor:
     def _create_temp_visual_clip(self, media_item, target_duration, output_path):
         """Tạo clip video TẠM THỜI (không audio) từ ảnh/video với thời lượng mục tiêu."""
         media_path = media_item['path']
-        media_type = media_item.get('type', 'image')
-        scene_num = media_item.get('number', 'theme')
+        media_type = media_item.get('type', 'image') # Mặc định là image nếu thiếu
+        scene_num = media_item.get('number', 'theme') # Lấy số scene hoặc đánh dấu là theme
 
-        logger.debug(f"Creating temp visual clip (Incremental Effect) for Scene/Item '{scene_num}' ({media_type}, Target: {target_duration:.2f}s) -> {os.path.basename(output_path)}")
+        logger.debug(f"Creating temp visual clip for Scene/Item '{scene_num}' ({media_type}, Target: {target_duration:.2f}s) -> {os.path.basename(output_path)}")
 
         try:
             if not os.path.exists(media_path):
                 raise FileNotFoundError(f"Media file not found: {media_path}")
-            if target_duration <= 0.1: # Tăng nhẹ ngưỡng tối thiểu
-                logger.warning(f"Target duration {target_duration:.2f}s too short. Using 0.2s.")
-                target_duration = 0.2
+            if target_duration <= 0.05: # Ngưỡng tối thiểu
+                 logger.warning(f"Target duration {target_duration:.2f}s too short for {os.path.basename(media_path)}. Using 0.1s.")
+                 target_duration = 0.1
 
             cmd = []
             if media_type == 'image':
                 vf_filter_parts = []
-                animation_type_setting = VIDEO_SETTINGS.get("image_animation", "none")
-                # Intensity sẽ dùng để điều chỉnh tốc độ thay đổi
-                intensity = VIDEO_SETTINGS.get("animation_intensity", 0.03)
-                # Tính tổng số frame DỰA TRÊN target_duration và fps của project
-                total_frames = max(1, int(round(target_duration * self.fps)))
-
-                # Xác định kiểu animation cuối cùng (sau khi xử lý "random")
-                final_animation_type = animation_type_setting
-                if animation_type_setting == "random":
-                    choices = ["zoom_in", "zoom_out"]
-                    if target_duration > 1.5:
-                        choices.extend(["pan_left", "pan_right"])
-                    final_animation_type = random.choice(choices)
-                    logger.debug(f"  Randomly selected animation: {final_animation_type}")
-
-                apply_animation = final_animation_type != "none" and target_duration > 0.5
-
-                # --- LUÔN SCALE LỚN TRƯỚC ---
-                # Scale đủ lớn để pan không bị lộ viền đen
-                # Có thể tăng lên 5 hoặc 6 nếu pan vẫn thấy viền
-                pre_scale_factor = 4
-                pre_scale_width = self.width * pre_scale_factor
-                vf_filter_parts.append(f"scale={pre_scale_width}:-1")
-                # -----------------------------
+                # --- Phần Animation (nếu bật) ---
+                apply_animation = self.image_animation != "none" and target_duration > 0.5 # Chỉ áp dụng nếu đủ thời gian và animation khác none
+                animation_type = "none" # Mặc định
 
                 if apply_animation:
-                    logger.debug(f"  Applying {final_animation_type} effect.")
-                    # --- Zoom/Pan Expressions (Logic tăng/giảm dần) ---
-                    zoompan_filter = ""
-                    zoompan_duration_frames = total_frames # Filter chạy đủ số frame
-                    zoompan_output_size = f"{self.width}x{self.height}"
-                    zoompan_output_fps = self.fps
+                    intensity = self.animation_intensity
+                    total_frames = max(1, int(self.fps * target_duration)) # Đảm bảo > 0
 
-                    # Tính tốc độ thay đổi mỗi frame dựa trên intensity và duration
-                    # Cần giá trị rất nhỏ cho mỗi frame
-                    base_speed = 0.0015 # Giá trị cơ bản (tương tự lệnh test của bạn)
-                    # Điều chỉnh tốc độ dựa trên intensity (ví dụ: intensity 0.03 ~ tốc độ gốc)
-                    adjusted_speed = base_speed * (intensity / 0.03)
-                    # Điều chỉnh tốc độ dựa trên thời lượng (clip dài hơn -> chậm hơn để không quá nhanh)
-                    # Dùng căn bậc hai để giảm ảnh hưởng của duration
-                    duration_factor = math.sqrt(max(1, target_duration) / 5.0) # Chuẩn hóa quanh 5s
-                    final_increment = max(0.0001, adjusted_speed / duration_factor) # Tốc độ cuối cùng/frame
+                    # Chọn ngẫu nhiên kiểu animation (zoom, pan_left, pan_right)
+                    # Giống cách làm file cũ hơn là chỉ dựa vào setting cứng
+                    animation_choices = ["zoom"]
+                    # Chỉ thêm pan nếu intensity đủ lớn để thấy rõ
+                    if intensity > 0.01:
+                        animation_choices.extend(["pan_left", "pan_right"])
+                    animation_type = random.choice(animation_choices)
+                    logger.debug(f"  Applying random animation: {animation_type} (intensity: {intensity})")
 
-                    logger.debug(f"  Calculated increment per frame: {final_increment:.6f}")
+                    # Xây dựng filter zoompan dựa trên lựa chọn
+                    if animation_type == "zoom":
+                        # Zoom dần từ 1.0 đến 1.0 + intensity
+                        zoom_expr = f"'1+({intensity}*(on/{total_frames}))'"
+                        # Giữ cố định ở giữa
+                        x_expr = "'(iw-iw/zoom)/2'"
+                        y_expr = "'(ih-ih/zoom)/2'"
+                        vf_filter_parts.append(f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:d={total_frames}:s={self.width}x{self.height}:fps={self.fps}")
 
-                    if final_animation_type == "zoom_in":
-                        zoom_expr = f"'min(1.5, zoom+{final_increment})'" # Giới hạn max zoom
-                        x_expr = "'iw/2-(iw/zoom/2)'"
-                        y_expr = "'ih/2-(ih/zoom/2)'"
-                        zoompan_filter = f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:d={zoompan_duration_frames}:s={zoompan_output_size}:fps={zoompan_output_fps}"
+                    elif animation_type in ["pan_left", "pan_right"]:
+                        # Giữ zoom cố định nhẹ để có không gian pan
+                        zoom_level = f"'1+{intensity}'"
+                        # Tính toán khoảng cách pan tối đa theo chiều ngang
+                        # iw=input width, ow=output width (self.width), z=zoom_level
+                        max_x_offset = f"(iw*{zoom_level}-{self.width})"
 
-                    elif final_animation_type == "zoom_out":
-                        start_zoom_out = 1.5 # Bắt đầu zoom out từ 1.5x
-                        zoom_expr = f"'if(lte(zoom,1.0),{start_zoom_out},max(1.001,zoom-{final_increment}))'" # Giới hạn min zoom
-                        x_expr = "'iw/2-(iw/zoom/2)'"
-                        y_expr = "'ih/2-(ih/zoom/2)'"
-                        zoompan_filter = f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:d={zoompan_duration_frames}:s={zoompan_output_size}:fps={zoompan_output_fps}"
+                        if animation_type == "pan_left": # Nội dung ảnh dịch sang phải (view nhìn sang trái)
+                            x_expr = f"'{max_x_offset}*(1-on/{total_frames})'" # Đi từ max offset về 0
+                        else: # pan_right - Nội dung ảnh dịch sang trái (view nhìn sang phải)
+                            x_expr = f"'{max_x_offset}*(on/{total_frames})'" # Đi từ 0 đến max offset
 
-                    elif final_animation_type in ["pan_left", "pan_right"]:
-                         # Giữ zoom cố định hơi lớn hơn 1
-                        fixed_zoom_pan = f"'1.1'" # Ví dụ zoom cố định 1.1x khi pan
-                        # Tốc độ pan ngang (pixels/frame) - cần lớn hơn zoom
-                        pan_increment = final_increment * (self.width / 4) # Tốc độ pan tỉ lệ với chiều rộng
+                        # Giữ y ở giữa
+                        y_expr = f"'(ih*{zoom_level}-{self.height})/2'"
+                        vf_filter_parts.append(f"zoompan=z={zoom_level}:x={x_expr}:y={y_expr}:d={total_frames}:s={self.width}x{self.height}:fps={self.fps}")
 
-                        # Tính x_start, y_start để giữ ảnh ở giữa lúc đầu
-                        x_start = f"(iw*{fixed_zoom_pan}-{self.width})/2"
-                        y_start = f"(ih*{fixed_zoom_pan}-{self.height})/2"
+                    # Thêm format sau zoompan nếu có animation
+                    vf_filter_parts.append(f"format=pix_fmts=yuv420p")
 
-                        if final_animation_type == "pan_left": # Di chuyển x sang trái (x giảm dần)
-                             # Bắt đầu ở giữa, di chuyển về 0
-                             x_expr = f"'max(0, x - {pan_increment})'"
-                        else: # pan_right - Di chuyển x sang phải (x tăng dần)
-                             # Bắt đầu ở giữa, di chuyển đến max_offset
-                             max_x_offset = f"iw*{fixed_zoom_pan}-{self.width}"
-                             x_expr = f"'min({max_x_offset}, x + {pan_increment})'"
-
-                        # Giữ y cố định ở giữa
-                        y_expr = y_start
-                        # Khởi tạo vị trí ban đầu
-                        init_expr = f":x={x_start}:y={y_start}"
-
-                        zoompan_filter = f"zoompan=z={fixed_zoom_pan}{init_expr}:x={x_expr}:y={y_expr}:d={zoompan_duration_frames}:s={zoompan_output_size}:fps={zoompan_output_fps}"
-
-                    vf_filter_parts.append(zoompan_filter)
-                    # --- Kết thúc Zoom/Pan Expressions ---
-                else:
-                    # Ảnh tĩnh: Chỉ pad sau scale
-                    logger.debug(f"  Using static image (Setting: {animation_type_setting}, Duration: {target_duration:.2f}s)")
+                else: # Không animation hoặc không đủ điều kiện
+                    logger.debug(f"  No animation applied (Setting: {self.image_animation}, Duration: {target_duration:.2f}s)")
+                    # Chỉ scale và pad nếu không có animation
+                    vf_filter_parts.append(f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease")
                     vf_filter_parts.append(f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2")
+                    vf_filter_parts.append(f"setsar=1")
+                    vf_filter_parts.append(f"format=pix_fmts=yuv420p")
 
-                # --- Luôn thêm setsar và format cuối cùng ---
-                vf_filter_parts.append("setsar=1")
-                vf_filter_parts.append("format=pix_fmts=yuv420p")
-                # ------------------------------------------
-
+                # Kết hợp các phần filter
                 final_vf_filter = ",".join(vf_filter_parts)
 
-                # --- Xây dựng lệnh FFmpeg (Dùng -t, thêm -r input) ---
                 cmd = [
                     self.ffmpeg_path, "-y",
-                    "-r", str(self.fps),      # *** THÊM: Chỉ định input framerate ***
-                    "-loop", "1", "-i", media_path,
+                    "-loop", "1", "-i", media_path, "-t", str(target_duration),
                     "-vf", final_vf_filter,
-                    "-t", str(target_duration), # *** DÙNG LẠI -t để giới hạn output ***
-                    "-c:v", "libx264",
-                    "-preset", "medium",     # Giữ preset trung bình
-                    "-crf", "23",
-                    "-r", str(self.fps),      # Output framerate
-                    "-an", output_path
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                    "-r", str(self.fps), "-an", output_path
                 ]
-
             # --- Phần Video (nếu là video) ---
             elif media_type == 'video':
                 source_duration = self._get_video_duration_ffprobe(media_path)
@@ -493,7 +445,7 @@ class VideoEditor:
                     *input_options, "-i", media_path,
                     "-t", str(duration_to_use),
                     "-vf", f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=pix_fmts=yuv420p",
-                    "-c:v", "libx264", "-preset", "slow", "-crf", "23",
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "23",
                     "-r", str(self.fps), "-an", output_path
                 ]
             else:
@@ -731,86 +683,88 @@ class VideoEditor:
                             if created_segment: temp_visual_segments.append(created_segment)
 
                 elif visual_timing_mode == 'overall_theme_fixed_duration':
-                    logger.info("Assembling visual track from overall theme visuals...")
-                    fixed_duration = VIDEO_SETTINGS.get("fixed_visual_duration", 5.0)
-                    # Lấy danh sách các theme visuals đã được tạo bởi ImageGenerator
-                    theme_visuals_available = [item for item in media_items if item.get("media_type") == "theme_visual"]
+                                logger.info("Assembling visual track from overall theme visuals...")
 
-                    if not theme_visuals_available:
-                        logger.warning("No theme visuals provided for 'overall_theme' mode. Creating black track.")
-                        main_visual_track_path = os.path.join(temp_project_dir, f"black_track_{project_id}.mp4")
-                        if not self._create_black_clip(total_main_audio_duration, main_visual_track_path):
-                            logger.error("Failed to create fallback black track.")
-                            self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
-                            return None
-                        # Nếu tạo black clip thành công, gán nó làm main_visual_track_path và bỏ qua bước ghép nối dưới
-                        temp_visual_segments = [] # Không cần ghép nữa
-                    else:
-                        # Ước tính số visual cần để phủ hết audio
-                        num_visual_slots_needed = math.ceil(total_main_audio_duration / fixed_duration) if total_main_audio_duration > 0 and fixed_duration > 0 else 1
+                                # --- 1. Lấy các theme visuals đã được chuẩn bị ---
+                                # Giả định ImageGenerator đã thêm các item với media_type='theme_visual' vào media_items
+                                theme_visuals_available = [item for item in media_items if item.get("media_type") == "theme_visual"]
 
-                        # Chọn visual (lặp lại visual cuối nếu thiếu)
-                        if len(theme_visuals_available) >= num_visual_slots_needed:
-                            selected_theme_visuals = theme_visuals_available[:num_visual_slots_needed]
-                        else:
-                            if theme_visuals_available: # Đảm bảo có ít nhất 1 visual để lặp lại
-                                selected_theme_visuals = theme_visuals_available + [theme_visuals_available[-1]] * (num_visual_slots_needed - len(theme_visuals_available))
-                            else: # Trường hợp cực hiếm: có list nhưng rỗng?
-                                selected_theme_visuals = [] # Để logic sau xử lý
+                                # --- 2. Xử lý trường hợp không có theme visuals ---
+                                if not theme_visuals_available:
+                                    logger.warning("No theme visuals provided for 'overall_theme_fixed_duration' mode. Creating black track.")
+                                    # Tạo video đen với tổng thời lượng audio chính
+                                    main_visual_track_path = os.path.join(temp_project_dir, f"black_track_{project_id}.mp4")
+                                    temp_files_to_clean.append(main_visual_track_path) # Thêm vào danh sách dọn dẹp
 
-                        logger.info(f"Selected {len(selected_theme_visuals)} theme visuals for assembly.")
+                                    if not self._create_black_clip(total_main_audio_duration, main_visual_track_path):
+                                        logger.error("Failed to create fallback black track.")
+                                        self._cleanup_temp_files(temp_files_to_clean, temp_project_dir) # Dọn dẹp trước khi thoát
+                                        return None # Không thể tiếp tục nếu không có visual track
 
-                        # Tạo clip tạm thời (không audio) cho từng visual đã chọn
-                        for idx, visual_item in enumerate(selected_theme_visuals):
-                            clip_temp_path = os.path.join(temp_project_dir, f"theme_vis_{idx+1}_final.mp4")
-                            temp_files_to_clean.append(clip_temp_path) # Thêm vào dọn dẹp
-                            # Tạo clip với duration cố định
-                            created_clip = self._create_temp_visual_clip(visual_item, fixed_duration, clip_temp_path)
-                            if created_clip:
-                                temp_visual_segments.append(created_clip)
-                            else:
-                                logger.warning(f"Failed to create temp clip for theme visual {idx+1}. Skipping.")
+                                    # Nếu tạo black track thành công, BỎ QUA bước tạo và ghép nối segments bên dưới
+                                    # main_visual_track_path đã được gán ở trên
+                                    temp_visual_segments = [] # Reset danh sách segments
+                                    logger.info(f"Using black track ({total_main_audio_duration:.2f}s) as main visual track.")
 
-                        # Nếu không tạo được clip nào (dù có visual item) -> lỗi
-                        if not temp_visual_segments:
-                            logger.error("Failed to create any temporary clips for theme visuals.")
-                            # Cân nhắc tạo black clip fallback ở đây nếu muốn
-                            self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
-                            return None
+                                # --- 3. Xử lý khi CÓ theme visuals ---
+                                else:
+                                    fixed_duration = VIDEO_SETTINGS.get("fixed_visual_duration", 5.0)
+                                    if fixed_duration <= 0:
+                                        logger.error("Invalid fixed_visual_duration (<= 0). Cannot proceed with theme mode.")
+                                        self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
+                                        return None
 
-                else: # Mode không hợp lệ
-                    logger.error(f"Invalid visual_timing_mode: {visual_timing_mode}")
-                    self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
-                    return None
-                # --- KẾT THÚC PHÂN NHÁNH ---
+                                    # Ước tính số visual cần để phủ hết audio
+                                    num_visual_slots_needed = math.ceil(total_main_audio_duration / fixed_duration) if total_main_audio_duration > 0 else 1
+
+                                    # Chọn visual (lặp lại visual cuối nếu thiếu)
+                                    if len(theme_visuals_available) >= num_visual_slots_needed:
+                                        selected_theme_visuals = theme_visuals_available[:num_visual_slots_needed]
+                                    else:
+                                        # Lặp lại visual cuối cùng để đủ số lượng
+                                        num_missing = num_visual_slots_needed - len(theme_visuals_available)
+                                        selected_theme_visuals = theme_visuals_available + [theme_visuals_available[-1]] * num_missing
+                                        logger.warning(f"Not enough unique theme visuals ({len(theme_visuals_available)} found, {num_visual_slots_needed} needed). Repeating the last visual {num_missing} times.")
+
+                                    logger.info(f"Selected {len(selected_theme_visuals)} theme visuals for assembly (target duration per visual: {fixed_duration:.2f}s).")
+
+                                    # Tạo clip tạm thời (không audio) cho từng visual đã chọn
+                                    for idx, visual_item in enumerate(selected_theme_visuals):
+                                        clip_temp_path = os.path.join(temp_project_dir, f"theme_vis_{idx+1}_temp.mp4") # Đổi tên để tránh trùng lặp
+                                        temp_files_to_clean.append(clip_temp_path) # Thêm vào dọn dẹp
+
+                                        # Tạo clip với duration cố định
+                                        created_clip = self._create_temp_visual_clip(visual_item, fixed_duration, clip_temp_path)
+                                        if created_clip:
+                                            temp_visual_segments.append(created_clip)
+                                        else:
+                                            logger.warning(f"Failed to create temp clip for theme visual {idx+1} ({visual_item.get('path')}). Skipping this visual.")
+                                            # Không thêm vào temp_visual_segments nếu lỗi
+
+                                    # Nếu không tạo được clip nào (dù có visual item ban đầu) -> lỗi
+                                    if not temp_visual_segments:
+                                        logger.error("Failed to create any temporary clips for theme visuals, even though source visuals were available.")
+                                        # Cân nhắc tạo black clip fallback ở đây nếu muốn
+                                        self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
+                                        return None
 
                 # --- Ghép nối các Visual Segments thành Track Chính ---
-                # Bước này chạy cho cả 2 mode (nếu có temp_visual_segments)
-                if not main_visual_track_path and temp_visual_segments: # Chỉ ghép nếu chưa có black track và có segment
-                    main_visual_track_path = os.path.join(temp_project_dir, f"main_visual_track_{project_id}.mp4")
-                    # Quyết định có thêm transition khi ghép main visual track hay không
-                    # Chỉ thêm nếu là theme mode VÀ được bật trong settings
-                    add_main_vis_transitions = (visual_timing_mode == 'overall_theme_fixed_duration' and self.enable_transitions)
-                    logger.info(f"Concatenating main visual track ({len(temp_visual_segments)} segments, Transitions: {add_main_vis_transitions})...")
-                    main_visual_track_path = self.concatenate_videos_with_ffmpeg(
-                        temp_visual_segments,
-                        main_visual_track_path,
-                        add_transitions=add_main_vis_transitions # Truyền cờ transition
-                    )
-                    if not main_visual_track_path:
-                        logger.error("Failed to concatenate main visual track.")
-                        self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
-                        return None
-                    temp_files_to_clean.append(main_visual_track_path) # Thêm vào cleanup sau khi tạo thành công
-
-                elif not main_visual_track_path and not temp_visual_segments:
-                    # Trường hợp không có visual nào được tạo/chọn
-                    logger.error("No visual segments available to create the main visual track.")
+                if not temp_visual_segments:
+                    logger.error("No visual segments were created. Cannot proceed.")
                     self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
                     return None
-                elif main_visual_track_path and not temp_visual_segments:
-                    # Trường hợp đã tạo black track fallback
-                    logger.info("Using pre-generated black track as main visual track.")                         
+
+                main_visual_track_path = os.path.join(temp_project_dir, f"main_visual_track_{project_id}.mp4")
+                temp_files_to_clean.append(main_visual_track_path)
+                # Quyết định có thêm transition khi ghép main visual track hay không
+                # Chỉ thêm nếu là theme mode VÀ được bật
+                add_main_vis_transitions = (visual_timing_mode == 'overall_theme_fixed_duration')
+                main_visual_track_path = self.concatenate_videos_with_ffmpeg(temp_visual_segments, main_visual_track_path, add_transitions=add_main_vis_transitions)
+
+                if not main_visual_track_path:
+                    logger.error("Failed to concatenate main visual track.")
+                    self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
+                    return None                            
 
             # --- 4. Ghép nối Video Cuối Cùng (Intro + Visual Track + Outro - Chỉ hình ảnh) ---
             final_video_segments_no_audio = []

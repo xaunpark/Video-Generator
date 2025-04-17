@@ -345,20 +345,20 @@ class VideoEditor:
         media_type = media_item.get('type', 'image')
         scene_num = media_item.get('number', 'theme')
 
-        logger.debug(f"Creating temp visual clip (Incremental Effect) for Scene/Item '{scene_num}' ({media_type}, Target: {target_duration:.2f}s) -> {os.path.basename(output_path)}")
+        logger.debug(f"Creating temp visual clip (Stable Incremental Logic) for Scene/Item '{scene_num}' ({media_type}, Target: {target_duration:.2f}s) -> {os.path.basename(output_path)}")
 
         try:
             if not os.path.exists(media_path):
                 raise FileNotFoundError(f"Media file not found: {media_path}")
-            if target_duration <= 0.1: # Tăng nhẹ ngưỡng tối thiểu
-                logger.warning(f"Target duration {target_duration:.2f}s too short. Using 0.2s.")
-                target_duration = 0.2
+            if target_duration <= 0.05:
+                logger.warning(f"Target duration {target_duration:.2f}s too short. Using 0.1s.")
+                target_duration = 0.1
 
             cmd = []
             if media_type == 'image':
                 vf_filter_parts = []
                 animation_type_setting = VIDEO_SETTINGS.get("image_animation", "none")
-                # Intensity sẽ dùng để điều chỉnh tốc độ thay đổi
+                # Lấy intensity, nhưng có thể không dùng trực tiếp trong biểu thức zoom/pan tăng dần
                 intensity = VIDEO_SETTINGS.get("animation_intensity", 0.03)
                 # Tính tổng số frame DỰA TRÊN target_duration và fps của project
                 total_frames = max(1, int(round(target_duration * self.fps)))
@@ -366,86 +366,74 @@ class VideoEditor:
                 # Xác định kiểu animation cuối cùng (sau khi xử lý "random")
                 final_animation_type = animation_type_setting
                 if animation_type_setting == "random":
-                    choices = ["zoom_in", "zoom_out"]
-                    if target_duration > 1.5:
-                        choices.extend(["pan_left", "pan_right"])
+                    choices = ["zoom_in", "zoom_out"] # Bắt đầu với zoom
+                    # Chỉ thêm pan nếu đủ thời gian
+                    if target_duration > 1.5: # Cần thời gian dài hơn cho pan
+                         choices.extend(["pan_left", "pan_right"])
                     final_animation_type = random.choice(choices)
                     logger.debug(f"  Randomly selected animation: {final_animation_type}")
 
                 apply_animation = final_animation_type != "none" and target_duration > 0.5
 
-                # --- LUÔN SCALE LỚN TRƯỚC ---
-                # Scale đủ lớn để pan không bị lộ viền đen
-                # Có thể tăng lên 5 hoặc 6 nếu pan vẫn thấy viền
-                pre_scale_factor = 4
-                pre_scale_width = self.width * pre_scale_factor
+                # --- LUÔN THỰC HIỆN SCALE LỚN TRƯỚC ---
+                pre_scale_width = self.width * 4 # Scale ảnh rộng gấp 4 lần target width
                 vf_filter_parts.append(f"scale={pre_scale_width}:-1")
-                # -----------------------------
+                # --------------------------------------
 
                 if apply_animation:
                     logger.debug(f"  Applying {final_animation_type} effect.")
-                    # --- Zoom/Pan Expressions (Logic tăng/giảm dần) ---
+                    # --- Zoom/Pan Expressions (Logic mới) ---
                     zoompan_filter = ""
-                    zoompan_duration_frames = total_frames # Filter chạy đủ số frame
+                    # Đặt thời lượng filter zoompan bằng số frame đã tính
+                    zoompan_duration_frames = total_frames
+                    # Đặt kích thước và fps output theo project settings
                     zoompan_output_size = f"{self.width}x{self.height}"
                     zoompan_output_fps = self.fps
 
-                    # Tính tốc độ thay đổi mỗi frame dựa trên intensity và duration
-                    # Cần giá trị rất nhỏ cho mỗi frame
-                    base_speed = 0.0015 # Giá trị cơ bản (tương tự lệnh test của bạn)
-                    # Điều chỉnh tốc độ dựa trên intensity (ví dụ: intensity 0.03 ~ tốc độ gốc)
-                    adjusted_speed = base_speed * (intensity / 0.03)
-                    # Điều chỉnh tốc độ dựa trên thời lượng (clip dài hơn -> chậm hơn để không quá nhanh)
-                    # Dùng căn bậc hai để giảm ảnh hưởng của duration
-                    duration_factor = math.sqrt(max(1, target_duration) / 5.0) # Chuẩn hóa quanh 5s
-                    final_increment = max(0.0001, adjusted_speed / duration_factor) # Tốc độ cuối cùng/frame
-
-                    logger.debug(f"  Calculated increment per frame: {final_increment:.6f}")
+                    # Điều chỉnh tốc độ zoom/pan dựa trên intensity (ước lượng)
+                    # Giá trị nhỏ hơn -> chậm hơn, lớn hơn -> nhanh hơn
+                    zoom_speed_factor = intensity * 30 # Điều chỉnh số 30 này để thay đổi tốc độ zoom
+                    pan_speed_factor = intensity * 1500 # Điều chỉnh số 1500 này cho tốc độ pan
 
                     if final_animation_type == "zoom_in":
-                        zoom_expr = f"'min(1.5, zoom+{final_increment})'" # Giới hạn max zoom
-                        x_expr = "'iw/2-(iw/zoom/2)'"
-                        y_expr = "'ih/2-(ih/zoom/2)'"
+                        # Tăng dần zoom từ 1.0
+                        zoom_expr = f"'min(1.5, zoom+{zoom_speed_factor/zoompan_duration_frames})'" # Giới hạn zoom tối đa 1.5x
+                        x_expr = "'iw/2-(iw/zoom/2)'" # Giữ tâm
+                        y_expr = "'ih/2-(ih/zoom/2)'" # Giữ tâm
                         zoompan_filter = f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:d={zoompan_duration_frames}:s={zoompan_output_size}:fps={zoompan_output_fps}"
 
                     elif final_animation_type == "zoom_out":
-                        start_zoom_out = 1.5 # Bắt đầu zoom out từ 1.5x
-                        zoom_expr = f"'if(lte(zoom,1.0),{start_zoom_out},max(1.001,zoom-{final_increment}))'" # Giới hạn min zoom
+                        # Giảm dần zoom từ mức lớn hơn (ví dụ 1.3) về 1.0
+                        start_zoom_out = 1 + intensity * 10 # Mức zoom bắt đầu, điều chỉnh số 10 nếu cần
+                        zoom_expr = f"'if(lte(zoom,1.0),{start_zoom_out},max(1.001,zoom-{zoom_speed_factor/(zoompan_duration_frames*0.8)}))'" # Giảm nhanh hơn zoom in một chút
                         x_expr = "'iw/2-(iw/zoom/2)'"
                         y_expr = "'ih/2-(ih/zoom/2)'"
                         zoompan_filter = f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:d={zoompan_duration_frames}:s={zoompan_output_size}:fps={zoompan_output_fps}"
 
                     elif final_animation_type in ["pan_left", "pan_right"]:
-                         # Giữ zoom cố định hơi lớn hơn 1
-                        fixed_zoom_pan = f"'1.1'" # Ví dụ zoom cố định 1.1x khi pan
-                        # Tốc độ pan ngang (pixels/frame) - cần lớn hơn zoom
-                        pan_increment = final_increment * (self.width / 4) # Tốc độ pan tỉ lệ với chiều rộng
+                        # Pan cần giữ zoom cố định hoặc zoom nhẹ để tránh viền đen
+                        # Giữ zoom cố định ở mức lớn hơn 1 một chút dựa vào intensity
+                        fixed_zoom_pan = f"'1+{intensity * 1.5}'" # Điều chỉnh 1.5 nếu cần
+                        # Tính toán offset tối đa sau khi scale lớn và zoom nhẹ
+                        # iw, ih ở đây là kích thước *sau khi* đã scale lớn ban đầu
+                        max_x_offset = f"(iw*{fixed_zoom_pan}-{self.width})"
+                        # Tiến trình tuyến tính từ 0 đến 1
+                        progress_expr = f"on/{zoompan_duration_frames}"
 
-                        # Tính x_start, y_start để giữ ảnh ở giữa lúc đầu
-                        x_start = f"(iw*{fixed_zoom_pan}-{self.width})/2"
-                        y_start = f"(ih*{fixed_zoom_pan}-{self.height})/2"
+                        if final_animation_type == "pan_left": # Đi từ phải sang trái (x giảm)
+                             x_expr = f"'{max_x_offset}*(1-{progress_expr})'"
+                        else: # pan_right - Đi từ trái sang phải (x tăng)
+                             x_expr = f"'{max_x_offset}*{progress_expr}'"
 
-                        if final_animation_type == "pan_left": # Di chuyển x sang trái (x giảm dần)
-                             # Bắt đầu ở giữa, di chuyển về 0
-                             x_expr = f"'max(0, x - {pan_increment})'"
-                        else: # pan_right - Di chuyển x sang phải (x tăng dần)
-                             # Bắt đầu ở giữa, di chuyển đến max_offset
-                             max_x_offset = f"iw*{fixed_zoom_pan}-{self.width}"
-                             x_expr = f"'min({max_x_offset}, x + {pan_increment})'"
-
-                        # Giữ y cố định ở giữa
-                        y_expr = y_start
-                        # Khởi tạo vị trí ban đầu
-                        init_expr = f":x={x_start}:y={y_start}"
-
-                        zoompan_filter = f"zoompan=z={fixed_zoom_pan}{init_expr}:x={x_expr}:y={y_expr}:d={zoompan_duration_frames}:s={zoompan_output_size}:fps={zoompan_output_fps}"
+                        y_expr = f"'(ih*{fixed_zoom_pan}-{self.height})/2'" # Giữ tâm y
+                        zoompan_filter = f"zoompan=z={fixed_zoom_pan}:x={x_expr}:y={y_expr}:d={zoompan_duration_frames}:s={zoompan_output_size}:fps={zoompan_output_fps}"
 
                     vf_filter_parts.append(zoompan_filter)
                     # --- Kết thúc Zoom/Pan Expressions ---
                 else:
-                    # Ảnh tĩnh: Chỉ pad sau scale
+                    # Ảnh tĩnh: Chỉ cần pad sau khi đã scale lớn
                     logger.debug(f"  Using static image (Setting: {animation_type_setting}, Duration: {target_duration:.2f}s)")
-                    vf_filter_parts.append(f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2")
+                    vf_filter_parts.append(f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2") # Pad về kích thước target
 
                 # --- Luôn thêm setsar và format cuối cùng ---
                 vf_filter_parts.append("setsar=1")
@@ -462,12 +450,11 @@ class VideoEditor:
                     "-vf", final_vf_filter,
                     "-t", str(target_duration), # *** DÙNG LẠI -t để giới hạn output ***
                     "-c:v", "libx264",
-                    "-preset", "medium",     # Giữ preset trung bình
+                    "-preset", "medium",     # Bắt đầu với medium
                     "-crf", "23",
                     "-r", str(self.fps),      # Output framerate
                     "-an", output_path
                 ]
-
             # --- Phần Video (nếu là video) ---
             elif media_type == 'video':
                 source_duration = self._get_video_duration_ffprobe(media_path)

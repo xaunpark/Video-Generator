@@ -1476,46 +1476,27 @@ class ScriptGenerator:
     def _generate_chapter_content(self, original_source_data, full_layout_data, current_chapter_outline, style_config, language):
         """
         Giai đoạn 2 (Advanced Mode): Tạo nội dung tường thuật chi tiết cho một chapter cụ thể.
-        Sử dụng style_config để điều chỉnh prompt về tone, audience, detail level, và transitions.
 
         Args:
             original_source_data (dict): Dữ liệu gốc ban đầu {'type': ..., 'data': ...}.
             full_layout_data (dict): Toàn bộ layout từ Stage 1 {'title': ..., 'layout': [...]}.
-            current_chapter_outline (dict): Outline của chapter hiện tại {'chapter_number': ..., 'chapter_title': ..., 'summary': ..., 'word_count_target': ...}.
-            style_config (dict): Cấu hình style hiện tại.
+            current_chapter_outline (dict): Outline của chapter hiện tại {'chapter_number': ..., 'chapter_title': ..., 'summary': ...}.
+            style_config (dict): Cấu hình style.
             language (str): Ngôn ngữ.
 
         Returns:
             list: Danh sách các câu tường thuật (strings) cho chapter này, hoặc None nếu lỗi.
         """
-        # --- 1. Trích xuất thông tin cần thiết ---
         chapter_num = current_chapter_outline['chapter_number']
         chapter_title = current_chapter_outline['chapter_title']
-        chapter_summary = current_chapter_outline.get('summary', '')
-        word_count_target = current_chapter_outline.get('word_count_target', 150) # Lấy target từ outline
-        target_audience = style_config.get("target_audience") # Lấy target audience từ style config
+        chapter_summary = current_chapter_outline.get('summary', '') # Lấy summary, mặc định là rỗng nếu thiếu
+        word_count_target = current_chapter_outline.get('word_count_target', 150)
 
         logger.info(f"  Stage 2: Generating content for Chapter {chapter_num}: '{chapter_title}' (Target: ~{word_count_target} words)...")
-        if target_audience:
-            logger.info(f"    Target Audience: {target_audience}")
 
-        # --- 2. Xác định thông tin Chapter tiếp theo (để gợi ý chuyển tiếp) ---
-        next_chapter_title = None
-        layout_list = full_layout_data.get('layout', [])
-        if chapter_num < len(layout_list):
-            next_chapter_outline = layout_list[chapter_num] # Index là chapter_num vì list 0-based, chapter_num 1-based
-            next_chapter_title = next_chapter_outline.get('chapter_title')
-
-        # --- 3. Xây dựng Prompt ---
+        # --- Xây dựng Prompt ---
         prompt_stage2_chapter = f"""
-        You are a detailed and engaging scriptwriter specializing in the style: '{style_config['tone']}'.
-        Your task is to write the narrative script content *ONLY* for a specific chapter of a video, based on the provided context and overall structure.
-        """
-        # --- 3a. Thêm thông tin Target Audience (nếu có) ---
-        if target_audience:
-            prompt_stage2_chapter += f"\n**IMPORTANT: Tailor your language, examples, and explanations specifically for the target audience: {target_audience}.**\n"
-
-        prompt_stage2_chapter += f"""
+        You are a detailed and engaging scriptwriter. Your task is to write the narrative script content *ONLY* for a specific chapter of a video, based on the provided context and overall structure.
 
         **Overall Video Context:**
         - Main Video Title: "{full_layout_data['title']}"
@@ -1528,11 +1509,10 @@ class ScriptGenerator:
         **Current Chapter Focus:**
         - You are writing ONLY for: **Chapter {chapter_num}: "{chapter_title}"**
         - Chapter Summary/Goal: "{chapter_summary}"
-        - **Target Word Count Guideline for this Chapter: Approximately {word_count_target} words.** This target dictates the necessary **depth and detail**.
+        - Target Word Count Guideline for this Chapter: ~{word_count_target} words
 
         **Source Material (Use this for information):**
         """
-        # --- 3b. Thêm Source Material (Không đổi) ---
         input_type = original_source_data.get('type', 'unknown')
         content_data = original_source_data.get('data', '')
         context_hint = original_source_data.get('context', None)
@@ -1541,77 +1521,66 @@ class ScriptGenerator:
         if input_type == 'article':
             prompt_stage2_chapter += f"- Type: News Article\n"
             prompt_stage2_chapter += f"- Source Article Title: {content_data.get('title', '')}\n"
-            prompt_stage2_chapter += f"- Source Article Content:\n{safe_truncate(content_data.get('content', ''), 12000)}\n" # Giữ nguyên limit này
+            # Cung cấp nhiều nội dung gốc hơn cho việc viết chi tiết
+            prompt_stage2_chapter += f"- Source Article Content:\n{safe_truncate(content_data.get('content', ''), 12000)}\n"
         elif input_type == 'keyword':
             prompt_stage2_chapter += f"- Type: Keyword/Topic\n"
             prompt_stage2_chapter += f"- Main Topic: \"{content_data}\"\n"
         elif input_type == 'text':
             prompt_stage2_chapter += f"- Type: Input Text {f'({context_hint})' if context_hint else ''}\n"
-            prompt_stage2_chapter += f"- Source Text Content:\n{safe_truncate(content_data, 15000)}\n" # Giữ nguyên limit này
-        # --- Kết thúc Source Material ---
+            prompt_stage2_chapter += f"- Source Text Content:\n{safe_truncate(content_data, 15000)}\n" # Cung cấp nhiều text hơn
 
         prompt_stage2_chapter += f"""
 
         **Your Task & Instructions:**
         """
-        # --- 3c. Thêm hướng dẫn Hook cho Chapter 1 (Không đổi) ---
+
+        # *** NEW: Thêm hướng dẫn đặc biệt cho Chapter 1 (Hook) ***
         if chapter_num == 1:
-             prompt_stage2_chapter += """
+            prompt_stage2_chapter += """
         **CRITICAL - HOOK GENERATION (Chapter 1 ONLY):**
-        - **Immediate Impact:** Start *instantly* with the MOST surprising, intriguing, emotionally resonant, or visually striking piece of information... [Giữ nguyên]
-        - **Goal:** Grab the viewer's attention... [Giữ nguyên]
-        - **Conciseness:** While aiming for the target word count (~{word_count_target} words), ensure the *opening sentences* are particularly punchy... [Giữ nguyên]
-        - **Connect to Topic:** Ensure the hook directly relates... [Giữ nguyên]
+        - **Immediate Impact:** Start *instantly* with the MOST surprising, intriguing, emotionally resonant, or visually striking piece of information from the Source Material related to this chapter's topic ('{chapter_title}'). NO slow introductions.
+        - **Goal:** Grab the viewer's attention within the first 3-5 seconds. Use a powerful statement, a provocative question directly addressing the viewer, a startling statistic, or a mini-cliffhanger.
+        - **Conciseness:** While aiming for the target word count (~{word_count_target} words), ensure the *opening sentences* are particularly punchy and attention-grabbing. Prioritize impact over length for the very beginning.
+        - **Connect to Topic:** Ensure the hook directly relates to the overall video title and the specific focus of Chapter 1.
         """
 
-        # --- 3d. Hướng dẫn Chung (Đã cập nhật) ---
+        # *** Hướng dẫn chung (áp dụng cho tất cả chapters, bao gồm cả Chapter 1 sau phần hook) ***
         prompt_stage2_chapter += f"""
-        **General Instructions (Apply to all sentences written for Chapter {chapter_num}):**
-        1.  Write detailed, engaging narrative sentences {lang_instruction} that thoroughly explore the key points outlined in the Chapter Summary/Goal. Aim to reach the **Target Word Count Guideline (~{word_count_target} words)** by providing **sufficient depth, detail, examples, and explanation**.
-        2.  Expand significantly on the summary using information *strictly* from the provided Source Material. Do NOT invent facts.
-        3.  Consistently maintain the specified video style ('{style_config['tone']}') and follow the general style instructions: {'; '.join(style_config['instructions'])}
-        4.  Ensure sentences flow logically within the chapter.
-        5.  **Smooth Transitions:**
-            - If this is Chapter > 1, ensure the *first sentence* provides a natural, conversational continuation from the previous chapter's topic (implied from the layout summary). Avoid abrupt starts.
-            - If this is **NOT** the final chapter"""
-        if next_chapter_title:
-             prompt_stage2_chapter += f" (the next chapter is about '{next_chapter_title}')"
-        prompt_stage2_chapter += f""", ensure the **final sentence(s)** naturally and subtly lead into the topic of the next chapter. **DO NOT explicitly state "Next, we'll talk about..."**. Instead, end with a thought or statement that logically bridges to the next subject."""
-        prompt_stage2_chapter += f"""
-        6.  Write ONLY natural-sounding sentences suitable for professional voice-over. **CRITICAL: ABSOLUTELY NO visual descriptions (e.g., "As you can see...", "This image shows..."), camera directions, scene markers (like #SCENE#), bullet points, or mentioning the chapter title itself within the narrative.** Write as one continuous conversational flow.
-        7.  Focus on delivering value and insight according to the target word count. Avoid filler content.
-        """
-        # --- Kết thúc Instructions ---
+        **General Instructions (Apply to all sentences written):**
+        1.  Write detailed, engaging narrative sentences {lang_instruction} that thoroughly cover the key points from the Chapter Summary/Goal, aiming for a total length around the **Target Word Count Guideline (~{word_count_target} words)**. This guideline indicates the desired level of detail.
+        2.  Expand on the summary using information *strictly* from the provided Source Material. Do NOT invent facts.
+        3.  Maintain the specified video {style_config['tone']} and follow general style instructions: {'; '.join(style_config['instructions'])}
+        4.  Ensure sentences flow logically. If Chapter > 1, consider the previous chapter's ending (implied from the layout) for a smooth transition.
+        5.  Write ONLY natural-sounding sentences for voice-over. **CRITICAL: NO visual descriptions, camera directions, scene markers, or the chapter title itself.**
+        6.  Provide sufficient detail according to the target word count.
 
-        # --- 3e. Output Format (Không đổi) ---
-        prompt_stage2_chapter += f"""
         **Output Format:**
         Return ONLY a valid JSON object containing a list of the generated narrative sentences for this chapter.
         {{
         "chapter_content": [
-            "First sentence for Chapter {chapter_num} (Hook if Chapter 1, otherwise smooth transition).",
-            "Second detailed sentence...",
+            "First sentence (Hook if Chapter 1, otherwise logical continuation).",
+            "Second sentence...",
             "...",
-            "Final sentence for Chapter {chapter_num} (potentially bridging to next chapter)."
+            "Final sentence for Chapter {chapter_num}."
         ]
         }}
 
-        **REMEMBER:** JSON ONLY. Focus *solely* on writing the content for Chapter {chapter_num}. Adhere strictly to the target word count guideline ({word_count_target} words) to achieve the required level of detail and depth. Ensure transitions are natural and conversational.
+        **REMEMBER:** JSON ONLY. Focus *solely* on Chapter {chapter_num}. Adhere to the target word count as a guideline for detail level.
         """
-        # --- Kết thúc Output Format ---
 
-        # --- 4. Gọi API (Không đổi) ---
-        timeout = 150 + int(word_count_target / 1.5) # Timeout động, tăng nhẹ
+        # --- Gọi API ---
+        timeout = 150 + int(word_count_target / 2)
         response_json_str = self._call_llm_api(
             user_prompt=prompt_stage2_chapter,
             request_timeout=timeout,
-            require_json=True
+            require_json=True # Need JSON { "chapter_content": [...] }
         )
         if not response_json_str:
             logger.error(f"  Stage 2 Failed: No response from API for Chapter {chapter_num} content.")
             return None
 
-        # --- 5. Parse và Validate Kết quả (Không đổi) ---
+        # --- Parse và Validate ---
         try:
             chapter_content_data = json.loads(response_json_str)
             if not isinstance(chapter_content_data, dict) or \
@@ -1620,20 +1589,16 @@ class ScriptGenerator:
                 logger.error(f"  Stage 2 Failed: Invalid JSON structure for Chapter {chapter_num}. Response: {chapter_content_data}")
                 return None
 
+            # Kiểm tra các phần tử là string và không rỗng
             generated_sentences = [s.strip() for s in chapter_content_data["chapter_content"] if isinstance(s, str) and s.strip()]
 
             if not generated_sentences:
                 logger.warning(f"  Stage 2 Warning: No valid sentences generated for Chapter {chapter_num}.")
-                return [] # Trả về list rỗng
+                # Trả về list rỗng thay vì None để không làm dừng hoàn toàn nếu các chapter khác OK
+                return []
 
-            # Log thêm word count thực tế (ước lượng)
-            actual_words = sum(len(s.split()) for s in generated_sentences)
-            logger.info(f"  Stage 2 Success: Generated {len(generated_sentences)} sentences (~{actual_words} words) for Chapter {chapter_num} (Target: ~{word_count_target}).")
-            # Cảnh báo nếu quá chênh lệch
-            if word_count_target > 0 and abs(actual_words - word_count_target) / word_count_target > 0.4: # Chênh lệch > 40%
-                 logger.warning(f"    Word count deviation significant (Actual: {actual_words}, Target: {word_count_target}). May impact pacing.")
-
-            return generated_sentences # Trả về danh sách câu
+            logger.info(f"  Stage 2 Success: Generated {len(generated_sentences)} sentences for Chapter {chapter_num}.")
+            return generated_sentences
 
         except json.JSONDecodeError as e:
             logger.error(f"  Stage 2 Failed: Could not decode JSON for Chapter {chapter_num}: {e}")

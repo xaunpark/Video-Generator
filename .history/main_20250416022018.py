@@ -72,15 +72,13 @@ def prompt_for_style():
     style_choice = ""
     valid_choices = ["1", "2", "3", "4", "5", "6", "7", "8"]
     while style_choice not in valid_choices:
-        prompt_text = f"Enter style choice ({','.join(valid_choices)}, default is 1): "
-        style_choice = input(prompt_text).strip()
+        style_choice = input(f"Enter style choice ({','.join(valid_choices)}, default is 1): ").strip()
         if not style_choice:
             style_choice = "1"  # Default to Informative
 
     style_map = {
         "1": "informative", "2": "conversational", "3": "dramatic",
-        "4": "controversial", "5": "emotional", "6": "funny", "7": "motivational",
-        "8": "senior_conversational"
+        "4": "controversial", "5": "emotional", "6": "funny", "7": "motivational"
     }
     chosen_style = style_map.get(style_choice, "informative")
 
@@ -319,12 +317,8 @@ def main():
             print("Please install it: pip install youtube-transcript-api")
             choice = "" # Ask again
 
-    # --- Get Style ---
-    print("\n--- Step 2: Select Video Style ---")
-    selected_style = prompt_for_style()
-    
     # --- Get Video Mode ---
-    print("\n--- Step 1.5: Select Video Mode ---")
+    print("\n--- Step 1.5: Select Video Mode ---") # Numeration adjusted for clarity
     print("1. Basic Video (Standard news style) - Default")
     print("2. Advanced Video (Chapters for detailed topics)")
 
@@ -336,29 +330,18 @@ def main():
         if not video_mode_choice:
             video_mode_choice = "1" # Default to Basic
 
-    # --- THÊM LOGIC GHI ĐÈ Ở ĐÂY ---
-    if selected_style == "senior_conversational":
-        if video_mode_choice == "1": # Nếu người dùng chọn Basic
-            logger.warning(f"Style '{selected_style}' selected, but user chose Basic mode. Overriding to Advanced mode for optimal results.")
-            print(f"\nINFO: Style '{selected_style}' requires Advanced (Chapters) mode. Automatically selecting Advanced mode.")
-        else: # Nếu người dùng đã chọn Advanced hoặc không nhập gì (dùng default)
-            logger.info(f"Style '{selected_style}' selected. Using Advanced (Chapters) mode.")
-            print(f"\nINFO: Using Advanced (Chapters) mode for '{selected_style}' style.")
-        video_mode = "advanced" # Buộc sử dụng Advanced mode
-    # --- KẾT THÚC LOGIC GHI ĐÈ ---
-    else: # Nếu không phải style senior, xử lý lựa chọn của người dùng như cũ
-        if video_mode_choice == "2":
-            video_mode = "advanced"
-            # --- Add Guidance ---
-            logger.info("Selected Advanced (Chapters) mode.")
-            print("INFO: Advanced mode works best with 'Keyword/Topic' input or longer 'Article URL'/'YouTube Transcript' inputs.")
-            # Optional: Add warning if incompatible source was chosen earlier (e.g., RSS)
-            if choice == "1":
-                logger.warning("Advanced (Chapters) mode might not be ideal for short news items typically found in RSS feeds.")
-        else:
-            video_mode = "basic"
-            logger.info("Selected Basic (Standard) mode.")
-        # --- End Get Video Mode ---
+    if video_mode_choice == "2":
+        video_mode = "advanced"
+        # --- Add Guidance ---
+        logger.info("Selected Advanced (Chapters) mode.")
+        print("INFO: Advanced mode works best with 'Keyword/Topic' input or longer 'Article URL'/'YouTube Transcript' inputs.")
+        # Optional: Add warning if incompatible source was chosen earlier (e.g., RSS)
+        if choice == "1":
+            logger.warning("Advanced (Chapters) mode might not be ideal for short news items typically found in RSS feeds.")
+    else:
+        video_mode = "basic"
+        logger.info("Selected Basic (Standard) mode.")
+    # --- End Get Video Mode ---
 
     # --- Get specific details based on choice ---
     article_url = None
@@ -390,36 +373,17 @@ def main():
         lang_pref_input = input(f"Enter preferred transcript languages (comma-separated, e.g., en,vi), leave blank for default ({','.join(preferred_langs_yt)}): ").strip().lower()
         if lang_pref_input:
             preferred_langs_yt = [lang.strip() for lang in lang_pref_input.split(',') if lang.strip()]
-    
-    # --- KIỂM TRA VÀ THÔNG BÁO NẾU CHỌN STYLE SENIOR ---
-    if selected_style == "senior_conversational":
-        logger.info("Selected 'Senior Conversational' style. Expecting advanced mode and potentially longer generation times.")
-        # Có thể thêm gợi ý/cảnh báo cho người dùng ở đây
-        print("INFO: 'Senior Conversational' style aims for longer, detailed content and works best in 'Advanced (Chapters)' mode.")
-        # ===> Quan trọng: Có thể muốn buộc/gợi ý người dùng chọn Advanced Mode nếu họ chọn style này
-        #     (Xem phần "Cân nhắc thêm" bên dưới)
-    # ----------------------------------------------------    
+
+    # --- Get Style ---
+    print("\n--- Step 2: Select Video Style ---")
+    selected_style = prompt_for_style()
 
     # --- Get Visual Source ---
     print("\n--- Step 3: Select Visual Source ---")
     visual_source_choice = prompt_for_visual_source()
 
     # --- Get Visual Presentation Mode  ---
-    final_timing_mode_user_choice = prompt_for_visual_timing_mode() # Lấy lựa chọn gốc của người dùng
-
-    # --- THÊM LOGIC GHI ĐÈ Ở ĐÂY ---
-    final_timing_mode = final_timing_mode_user_choice # Gán giá trị ban đầu
-
-    if selected_style == "senior_conversational":
-        if final_timing_mode_user_choice != 'overall_theme_fixed_duration':
-            logger.warning(f"Style '{selected_style}' selected. Overriding visual timing mode to 'overall_theme_fixed_duration' for better results with long-form content.")
-            print("INFO: 'Overall theme visuals' mode automatically selected for the 'Senior Conversational' style.")
-            final_timing_mode = 'overall_theme_fixed_duration' # Buộc sử dụng theme mode
-        else:
-            logger.info(f"Style '{selected_style}' selected. Using 'overall_theme_fixed_duration' timing mode.")
-            # final_timing_mode đã đúng, không cần làm gì thêm
-    # --- KẾT THÚC LOGIC GHI ĐÈ ---
-    # Biến final_timing_mode bây giờ chứa giá trị cuối cùng (có thể đã bị ghi đè)
+    final_timing_mode = prompt_for_visual_timing_mode()
 
     logger.info("--- User Input Gathering Complete ---")
     logger.info(f"Selected LLM: {selected_llm}")

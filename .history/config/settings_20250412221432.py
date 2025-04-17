@@ -92,8 +92,8 @@ VIDEO_SETTINGS = {
     # Cài đặt hiệu ứng cho ảnh tĩnh
     "enable_ken_burns": False,
     "debug_disable_effects": False,
-    "image_animation": "random",     # để random rồi sau đó trong video editor chọn ngẫu nhiên các hiệu ứng 
-    "animation_intensity": 0.05,     # Từ 0.01 (rất nhẹ) đến 0.1 (rõ ràng hơn)
+    "image_animation": "zoom",      # Các tùy chọn: "none", "zoom"
+    "animation_intensity": 0.1,     # Từ 0.01 (rất nhẹ) đến 0.1 (rõ ràng hơn)
     "animation_cycle_seconds": 5,    # Thời gian để hoàn thành một chu kỳ hiệu ứng (giây)
     # --- THÊM CẤU HÌNH CHO SLOW MOTION ---
     "enable_slow_motion_fallback": True, # Bật/tắt tính năng này
@@ -110,7 +110,7 @@ VIDEO_SETTINGS = {
     "visual_timing_mode": "sync_to_audio", # Chỉ 2 lựa chọn: 'sync_to_audio', 'overall_theme_fixed_duration'
     "fixed_visual_duration": 15.0,        # Dùng cho 'overall_theme_fixed_duration'
     "theme_visual_query_count": 7,       # Số query/prompt cho chế độ theme
-    "theme_visual_generation_factor": 1.1, # Tạo dư visual cho chế độ theme
+    "theme_visual_generation_factor": 1.5, # Tạo dư visual cho chế độ theme
     # -------------TĂNG CƯỜNG CHẤT LƯỢNG VIDEO----------------------
     "enable_video_enhancement": True,  # Bật/tắt tính năng tăng cường
     "enhancement_saturation": 1.1,     # Giá trị saturation (1.0 là gốc, >1 tăng, <1 giảm)

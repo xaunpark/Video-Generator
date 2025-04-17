@@ -290,7 +290,7 @@ class ImageGenerator:
                         if img_bytes:
                             img = Image.open(BytesIO(img_bytes)).convert('RGB')
                             processed = self._resize_image(img)
-                            processed.save(temp_image_ai_path, format="JPEG", quality=90)
+                            processed.save(temp_image_ai_path, "JPEG", 90)
                             visual_path = temp_image_ai_path
                             visual_type = "image"
                             logger.debug(f"  AI generation successful: {visual_path}")
@@ -384,132 +384,82 @@ class ImageGenerator:
             #------------------------------------------------------------#
             
             if visual_timing_mode == 'overall_theme_fixed_duration':
-                # --- LOGIC MỚI CHO CHẾ ĐỘ THEME (TỐI ƯU HÓA) ---
-                logger.info("Generating visuals based on overall theme (Optimized Collection)...")
-                fixed_duration_per_visual = VIDEO_SETTINGS.get("fixed_visual_duration", 5.0)
-                query_count = VIDEO_SETTINGS.get("theme_visual_query_count", 7) # Số ý tưởng gốc
 
-                # --- 1. Tính toán số lượng cần thiết ---
+                # --- CHẾ ĐỘ VISUAL THEO CHỦ ĐỀ ---
+                logger.info("Generating visuals based on overall theme...")
+                fixed_duration_per_visual = VIDEO_SETTINGS.get("fixed_visual_duration", 5.0)
+                query_count = VIDEO_SETTINGS.get("theme_visual_query_count", 7)
+                generation_factor = VIDEO_SETTINGS.get("theme_visual_generation_factor", 1.5)
+
+                # 1. Ước tính tổng thời lượng audio speech units
                 total_estimated_audio_duration = sum(a.get('duration', 0) for a in audio_files_info if a.get('type') == 'speech_unit')
                 if total_estimated_audio_duration <= 0:
                     logger.error("Cannot estimate audio duration for theme visuals.")
                     return media_items
-                if fixed_duration_per_visual <= 0:
-                    logger.error("Invalid fixed_visual_duration (<=0). Cannot proceed.")
-                    return media_items
 
-                # Số visual tối thiểu cần cho VideoEditor
+                # 2. Tính số lượng visual cần tạo (có dự phòng)
                 estimated_visual_slots = math.ceil(total_estimated_audio_duration / fixed_duration_per_visual)
-                logger.info(f"Estimated audio: {total_estimated_audio_duration:.2f}s => Estimated visual slots needed: {estimated_visual_slots}")
+                target_pool_size = math.ceil(estimated_visual_slots * generation_factor)
+                logger.info(f"Estimated audio: {total_estimated_audio_duration:.2f}s => Estimated visual slots: {estimated_visual_slots}. Target visual pool size: {target_pool_size}")
 
-                # --- 2. Đặt mục tiêu thu thập visual DUY NHẤT (Realistic Target) ---
-                # Ví dụ: Gấp 3 lần số query gốc, hoặc 50% số slot cần, lấy giá trị lớn hơn
-                # Hoặc đặt một con số cứng tối đa, ví dụ 30-40
-                unique_visual_target_factor = 3.0 # Gấp mấy lần query gốc
-                min_unique_ratio = 0.5 # Tối thiểu % so với slot cần
-                max_api_calls = 40 # Giới hạn cứng số lần gọi API tối đa
-
-                realistic_unique_target = max(
-                    int(query_count * unique_visual_target_factor),
-                    int(estimated_visual_slots * min_unique_ratio)
-                )
-                # Giới hạn số lượt gọi API tối đa
-                num_api_calls_to_make = min(realistic_unique_target, max_api_calls)
-
-                logger.info(f"Targeting collection of ~{realistic_unique_target} unique visuals, performing max {num_api_calls_to_make} API calls.")
-
-                # --- 3. Tạo ý tưởng gốc từ LLM ---
+                # 3. Tạo các truy vấn/prompt theo chủ đề
                 theme_queries = self._generate_theme_queries(
-                    script.get('title', ''), query_count, script.get('language', 'en')
+                    script.get('title', ''), # Dùng tiêu đề chính của video
+                    query_count,
+                    script.get('language', 'en')
                 )
                 if not theme_queries:
-                    logger.warning("Failed to generate theme queries. Using title as fallback query.")
-                    # Fallback: dùng title làm query duy nhất
-                    theme_queries = [script.get('title', 'abstract background')]
-                    # Nếu fallback, chỉ nên gọi API 1 vài lần
-                    num_api_calls_to_make = min(num_api_calls_to_make, 3)
+                    logger.error("Failed to generate theme queries. Cannot proceed with theme visuals.")
+                    return media_items
 
-                # --- 4. Mở rộng danh sách query để thực hiện API calls ---
-                queries_to_process = []
-                if theme_queries:
-                    # Lặp lại các query gốc để đạt đủ num_api_calls_to_make
-                    repeat_factor = math.ceil(num_api_calls_to_make / len(theme_queries)) if len(theme_queries) > 0 else 1
-                    queries_to_process = (theme_queries * repeat_factor)[:num_api_calls_to_make]
-                    random.shuffle(queries_to_process) # Xáo trộn
+                # 4. Tạo/Tìm visuals cho từng theme query bằng hàm _find_or_generate_single_visual
+                theme_visuals_generated = []
+                visual_count = 0
+                max_attempts_per_query = 3 # Số lần thử tối đa cho mỗi query/prompt
 
-                logger.info(f"Prepared {len(queries_to_process)} queries for limited API calls.")
+                # Lặp qua các theme_queries đã tạo
+                for q_idx, current_query in enumerate(theme_queries):
+                    if visual_count >= target_pool_size: break # Đã đủ số lượng mục tiêu
 
-                # --- 5. Thực hiện API calls giới hạn và thu thập visual duy nhất ---
-                unique_visuals_collected = [] # Lưu các visual item duy nhất
-                collected_paths = set() # Lưu các đường dẫn đã thu thập để check trùng
+                    logger.info(f"Processing theme query {q_idx + 1}/{len(theme_queries)}: '{current_query}' (Target Pool: {target_pool_size}, Current: {visual_count})")
 
-                for idx, current_query in enumerate(queries_to_process):
-                    logger.info(f"Processing API Call {idx + 1}/{len(queries_to_process)}: '{current_query[:80]}...'")
+                    # Thử tạo/tìm visual cho query hiện tại
+                    for attempt in range(max_attempts_per_query):
+                        visual_path, visual_type = self._find_or_generate_single_visual(
+                            query=current_query,
+                            visual_source=visual_source, # Dùng lựa chọn của người dùng (search/ai)
+                            project_media_dir=project_media_dir,
+                            base_filename=f"theme_{q_idx + 1}_attempt{attempt + 1}" # Tên file tạm
+                        )
 
-                    visual_path, visual_type = self._find_or_generate_single_visual(
-                        query=current_query,
-                        visual_source=visual_source,
-                        project_media_dir=project_media_dir,
-                        base_filename=f"theme_limited_{idx + 1}"
-                    )
-
-                    if visual_path:
-                        if visual_path not in collected_paths:
-                            unique_visuals_collected.append({
-                                "type": visual_type,
-                                "media_type": "theme_visual",
+                        if visual_path: # Nếu thành công
+                            theme_visuals_generated.append({
+                                "type": visual_type,         # 'image' hoặc 'video'
+                                "media_type": "theme_visual", # Đánh dấu đây là visual cho theme mode
                                 "path": visual_path,
-                                "duration": fixed_duration_per_visual, # Vẫn gán duration cố định
-                                "query_source": current_query
+                                "duration": fixed_duration_per_visual, # Gán sẵn duration cố định
+                                "query_source": current_query # Lưu lại query gốc (để debug)
                             })
-                            collected_paths.add(visual_path)
-                            logger.info(f"  Success. Collected unique visual #{len(unique_visuals_collected)}: {os.path.basename(visual_path)}")
-                        else:
-                            logger.debug(f"  Skipped duplicate visual: {os.path.basename(visual_path)}")
-                    else:
-                        logger.warning(f"  Attempt failed for query '{current_query[:80]}...'.")
+                            visual_count += 1
+                            logger.info(f"  Success (Attempt {attempt + 1}). Total collected: {visual_count}")
+                            break # Đã thành công với query này, chuyển sang query tiếp theo
+                        else: # Nếu thất bại
+                            logger.warning(f"  Attempt {attempt + 1} failed for query '{current_query}'.")
+                            if attempt < max_attempts_per_query - 1:
+                                logger.debug("    Waiting briefly before next attempt...")
+                                time.sleep(1) # Đợi một chút trước khi thử lại
 
-                # --- 6. Kiểm tra kết quả thu thập ---
-                num_unique_collected = len(unique_visuals_collected)
-                logger.info(f"Finished limited API calls. Collected {num_unique_collected} unique visuals.")
+                if visual_count == 0:
+                    logger.error("Failed to generate ANY theme visuals.")
+                    # Cân nhắc: Có nên tạo ảnh text dựa trên title ở đây làm fallback cuối cùng không?
+                    # try:
+                    #     fb_path = self._create_text_only_image(script.get('title', 'Theme Visual Error'), os.path.join(project_media_dir, "theme_fallback_text.png"))
+                    #     if fb_path: theme_visuals_generated.append({"type": "image", "media_type": "theme_visual", "path": fb_path, "duration": fixed_duration_per_visual, "query_source": "Fallback Text"})
+                    # except: pass
+                elif visual_count < estimated_visual_slots:
+                    logger.warning(f"Collected only {visual_count} theme visuals, less than estimated required {estimated_visual_slots}.")
 
-                final_visual_list_for_editor = [] # Danh sách cuối cùng gửi cho VideoEditor
-
-                if num_unique_collected == 0:
-                    logger.error("Failed to collect ANY unique theme visuals.")
-                    # Fallback: Tạo ảnh text từ tiêu đề chính? Hoặc dừng lại?
-                    # Hiện tại sẽ dẫn đến lỗi ở VideoEditor, cần xử lý tốt hơn
-                    # TODO: Implement fallback (e.g., single text image repeated)
-                    # Tạm thời trả về list rỗng (sẽ gây lỗi sau)
-                    pass # Để logic dưới xử lý
-                elif num_unique_collected >= estimated_visual_slots:
-                    # Đủ visual duy nhất, chỉ cần lấy đủ số lượng cần
-                    final_visual_list_for_editor = unique_visuals_collected[:estimated_visual_slots]
-                    logger.info(f"Sufficient unique visuals collected ({num_unique_collected}). Using first {estimated_visual_slots}.")
-                else:
-                    # Không đủ visual duy nhất, cần lặp lại
-                    logger.warning(f"Collected only {num_unique_collected} unique visuals, need {estimated_visual_slots}. Repeating collected visuals.")
-                    final_visual_list_for_editor = list(unique_visuals_collected) # Bắt đầu với các visual đã có
-
-                    # Lặp lại các visual đã có cho đến khi đủ số lượng
-                    num_needed_more = estimated_visual_slots - num_unique_collected
-                    # Sử dụng itertools.cycle để lặp lại danh sách một cách hiệu quả
-                    from itertools import cycle
-                    visual_cycle = cycle(unique_visuals_collected)
-
-                    for _ in range(num_needed_more):
-                        item_to_repeat = next(visual_cycle)
-                        # Quan trọng: Tạo một bản sao nông (shallow copy) để tránh các vấn đề tham chiếu
-                        # nếu có sửa đổi gì sau này (mặc dù ở đây chỉ đọc)
-                        final_visual_list_for_editor.append(item_to_repeat.copy())
-
-                    # Xáo trộn nhẹ danh sách cuối cùng để việc lặp lại ít lộ liễu hơn
-                    # random.shuffle(final_visual_list_for_editor) # Bỏ comment nếu muốn xáo trộn cuối
-                    logger.info(f"Filled visual list to {len(final_visual_list_for_editor)} items by repeating collected ones.")
-
-                # Thêm danh sách cuối cùng vào media_items
-                media_items.extend(final_visual_list_for_editor)
-                # --- KẾT THÚC LOGIC MỚI CHO CHẾ ĐỘ THEME ---
+                media_items.extend(theme_visuals_generated) # Thêm vào list tổng
 
             elif visual_timing_mode == 'sync_to_audio':
             # --- CHẾ ĐỘ SYNC TO AUDIO (LOGIC CŨ) ---
@@ -824,116 +774,72 @@ class ImageGenerator:
             return media_items
 
     def _create_imagen_prompt(self, scene_content, video_title, script_style):
-        """Uses GEmini Imagen to generate a descriptive Imagen prompt from scene content."""
+        """Uses OpenAI GPT to generate a descriptive Imagen prompt from scene content."""
         if not self.openai_api_key:
             logger.warning("OpenAI API key missing. Cannot generate Imagen prompts.")
-            # Fallback đơn giản
-            fallback_prefix = "Illustration" if script_style == 'senior_conversational' else "News photo"
-            return f"{fallback_prefix} for a segment about: {scene_content[:100]}"
+            # Simple fallback prompt
+            return f"Illustration for a news segment about: {scene_content[:100]}"
 
         # Get style description
         style_desc = cfg.style_configs.get(script_style, {}).get('tone', 'neutral')
 
-        # --- Xây dựng Prompt Điều kiện ---
-        gpt_prompt = "" # Khởi tạo prompt rỗng
+        gpt_prompt = f"""
+        You are an expert prompt engineer for text-to-image AI like Google Imagen 3.
+        Your task is to convert the following news video scene content into a detailed and effective prompt.
 
-        if script_style == "senior_conversational":
-            logger.debug(f"Creating Imagen prompt with specific 'senior_conversational' instructions.")
-            gpt_prompt = f"""
-            You are an expert prompt engineer for text-to-image AI like Google Imagen 3.
-            Your task is to convert the following scene content into a detailed, effective, and **appropriate** prompt for a video targeting **seniors (60+)**.
+        Consider these factors:
+        - The overall video title: "{video_title}"
+        - The desired video style/tone: "{style_desc}"
+        - The specific content of this scene: "{scene_content}"
 
-            Consider these factors:
-            - Overall video title: "{video_title}"
-            - **Target Audience:** Seniors (60+)
-            - **Desired Video Style/Tone:** Warm, conversational, motivational, relatable, positive, gentle ({style_desc}).
-            - Specific content of this scene: "{scene_content}"
+        IMPORTANT SAFETY GUIDELINES:
+        - NEVER generate prompts depicting children, minors, or family scenes with minors
+        - Replace any children in the scene with young adults (18+) or symbolic objects/animals
+        - Avoid depicting vulnerable populations or sensitive scenarios
+        - Avoid depicting realistic human faces in close detail
 
-            **IMPORTANT SAFETY GUIDELINES (Apply Strictly):**
-            - NEVER generate prompts depicting children, minors, or family scenes with minors. Replace with adults (18+) or symbolic objects.
-            - Avoid depicting vulnerable populations or overly sensitive scenarios (e.g., severe illness depiction).
-            - Avoid depicting realistic human faces in close detail. Focus on general appearance, emotion, and setting.
-            - Ensure generated images are positive, respectful, and avoid ageist stereotypes.
+        Instructions for the Imagen Prompt:
+        1. Be descriptive and specific about visual elements. Mention subjects, actions, setting, mood, and composition.
+        2. Incorporate the video's style/tone (e.g., if 'dramatic', use words like 'intense lighting', 'dynamic angle').
+        3. Aim for a prompt length suitable for Imagen (under 150 words).
+        4. USE ONLY PHOTOREALISTIC IMAGE TYPE
+        5. AVOID mentioning text unless the scene is explicitly about text/code.
+        6. If the original scene involves children, REWRITE it with adults or symbolic representations.
+        7. For concepts involving children's activities, represent them with symbolic objects instead (e.g., "a toy left on a colorful playground" rather than "a child playing").
 
-            **Instructions for the Imagen Prompt (Senior Conversational Style):**
-            1.  **Visual Style:** Aim for **photorealistic** but with **warm, soft lighting** and **calm, pleasing compositions**. Avoid harsh contrasts or overly busy scenes.
-            2.  **Subject Focus:** If depicting people, show **older adults (appearing 60+)** engaged in relatable activities (e.g., gentle exercise like walking/yoga, gardening, reading, talking with friends/family (adults only), enjoying nature, hobbies). Depict them with **positive expressions** (smiles, contentment, thoughtfulness). Show diversity in older adults respectfully.
-            3.  **Emotion:** Emphasize feelings of **warmth, comfort, connection, peace, gentle motivation, or contentment**.
-            4.  **Setting:** Prefer **cozy, comfortable, or serene settings** (e.g., comfortable homes, sunny gardens, parks, cafes, libraries).
-            5.  **Clarity & Simplicity:** Keep the visual concept clear and easy to understand. Avoid overly abstract or complex metaphors unless the scene content specifically calls for it.
-            6.  **Incorporate Tone:** Use descriptive words reflecting the warm, motivational, and conversational tone (e.g., "gentle sunlight," "cozy armchair," "warm smile," "peaceful garden," "supportive friend").
-            7.  **Length & Detail:** Be descriptive but concise (under 150 words). Mention key subjects, actions, setting, mood.
-            8.  **Safety First:** Strictly adhere to the safety guidelines above. Rewrite scene concepts if needed (e.g., instead of "grandchildren playing," use "photo albums on a table" or "knitting supplies").
-
-            Output ONLY the generated Imagen prompt, with no extra explanations or quotation marks.
-            """
-        else:
-            # --- Prompt gốc cho các style khác ---
-            logger.debug(f"Creating Imagen prompt with standard instructions for style '{script_style}'.")
-            gpt_prompt = f"""
-            You are an expert prompt engineer for text-to-image AI like Google Imagen 3.
-            Your task is to convert the following news video scene content into a detailed and effective prompt.
-
-            Consider these factors:
-            - The overall video title: "{video_title}"
-            - The desired video style/tone: "{style_desc}"
-            - The specific content of this scene: "{scene_content}"
-
-            IMPORTANT SAFETY GUIDELINES:
-            - NEVER generate prompts depicting children, minors, or family scenes with minors
-            - Replace any children in the scene with young adults (18+) or symbolic objects/animals
-            - Avoid depicting vulnerable populations or sensitive scenarios
-            - Avoid depicting realistic human faces in close detail
-
-            Instructions for the Imagen Prompt:
-            1. Be descriptive and specific about visual elements. Mention subjects, actions, setting, mood, and composition.
-            2. Incorporate the video's style/tone (e.g., if 'dramatic', use words like 'intense lighting', 'dynamic angle').
-            3. Aim for a prompt length suitable for Imagen (under 150 words).
-            4. USE ONLY PHOTOREALISTIC IMAGE TYPE
-            5. AVOID mentioning text unless the scene is explicitly about text/code.
-            6. If the original scene involves children, REWRITE it with adults or symbolic representations.
-            7. For concepts involving children's activities, represent them with symbolic objects instead (e.g., "a toy left on a colorful playground" rather than "a child playing").
-
-            Output ONLY the generated Imagen prompt, with no extra explanations or quotation marks.
-            """
+        Output ONLY the generated Imagen prompt, with no extra explanations or quotation marks.
+        """
 
         try:
             url = f"{self.openai_base_url}/chat/completions"
             payload = {
-                "model": "gpt-4o-mini", # Hoặc model khác
+                "model": "gpt-4o-mini", # Or gpt-3.5-turbo
                 "messages": [
-                    # System prompt có thể giống nhau hoặc tùy chỉnh nhẹ
-                    {"role": "system", "content": "You generate effective and safe Imagen prompts for video scenes based on context and style."},
-                    {"role": "user", "content": gpt_prompt} # Sử dụng prompt đã chọn
+                    {"role": "system", "content": "You generate Imagen prompts for news video scenes."},
+                    {"role": "user", "content": gpt_prompt}
                 ],
-                "temperature": 0.6,
+                "temperature": 0.6, # More creative for prompts
                 #"max_tokens": 150
             }
-            logger.debug(f"Generating Imagen prompt for style '{script_style}': '{scene_content[:80]}...'")
+            logger.debug(f"Generating DALL-E prompt for: '{scene_content[:80]}...'")
             response = requests.post(url, headers=self.openai_headers, json=payload, timeout=25)
             response.raise_for_status()
             data = response.json()
 
             if data.get('choices'):
-                imagen_prompt = data['choices'][0]['message']['content'].strip().replace('"', '')
-                logger.info(f"Generated Imagen prompt (Style: {script_style}): '{imagen_prompt[:100]}...'")
-                return imagen_prompt
+                dalle_prompt = data['choices'][0]['message']['content'].strip().replace('"', '')
+                logger.info(f"Generated Imagen prompt: '{dalle_prompt[:100]}...'")
+                return dalle_prompt
             else:
-                logger.error(f"OpenAI response for Imagen prompt generation (Style: {script_style}) is invalid.")
-                # Fallback dựa trên style
-                fallback_prefix = "Warm illustration" if script_style == 'senior_conversational' else "Simple illustration"
-                return f"{fallback_prefix}: {scene_content[:100]}"
+                logger.error("OpenAI response for Imagen prompt generation is invalid.")
+                return f"Simple illustration: {scene_content[:100]}" # Fallback
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"OpenAI API error generating Imagen prompt (Style: {script_style}): {e}")
-             # Fallback dựa trên style
-            fallback_prefix = "Image of" if script_style == 'senior_conversational' else "News photo"
-            return f"{fallback_prefix}: {scene_content[:100]}"
+            logger.error(f"OpenAI API error generating Imagen prompt: {e}")
+            return f"News photo: {scene_content[:100]}" # Fallback
         except Exception as e:
-            logger.error(f"Unexpected error generating Imagen prompt (Style: {script_style}): {e}", exc_info=True)
-             # Fallback dựa trên style
-            fallback_prefix = "Illustration" if script_style == 'senior_conversational' else "Illustration"
-            return f"{fallback_prefix}: {scene_content[:100]}"
+            logger.error(f"Unexpected error generating Imagen prompt: {e}", exc_info=True)
+            return f"Illustration: {scene_content[:100]}" # Fallback
 
     def _generate_image_with_imagen(self, prompt):
         """Generates an image using the Google Imagen API via Google AI Client."""
@@ -1247,7 +1153,7 @@ class ImageGenerator:
             processed_image = self._resize_image(image)
 
             # Save the processed image as JPEG with good quality
-            processed_image.save(output_path, format="JPEG", quality=90)
+            processed_image.save(output_path, "JPEG", quality=90)
             logger.debug(f"Image saved to: {output_path}")
             return output_path
 
@@ -1367,7 +1273,7 @@ class ImageGenerator:
             if img.mode != 'RGB':
                  img = img.convert('RGB') # Ensure RGB format
             processed_img = self._resize_image(img) # Resize/crop to fit video dimensions
-            processed_img.save(output_path, format="JPEG", quality=85)
+            processed_img.save(output_path, "JPEG", quality=85) # Save as JPEG
             return output_path
         except Exception as e:
             logger.error(f"Error processing local fallback image {selected_image_path}: {e}", exc_info=True)
@@ -2116,7 +2022,7 @@ def test_imagen_generation():
                         processed_image = generator._resize_image(img)
                         
                         # Save the processed image
-                        processed_image.save(output_path, format="JPEG", quality=90)
+                        processed_image.save(output_path, "JPEG", quality=90)
                         print(f"✅ Successfully saved image to: {output_path}")
                         success_count += 1
                     except Exception as proc_err:

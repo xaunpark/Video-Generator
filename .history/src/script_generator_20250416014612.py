@@ -1270,43 +1270,31 @@ class ScriptGenerator:
     def _generate_video_layout(self, source_data, style_config, language):
         """
         Giai đoạn 1 (Advanced Mode): Tạo layout/outline cho video.
-        Sử dụng cấu hình layout_override linh hoạt để xử lý các style đặc biệt
-        mà không ảnh hưởng đến các style thông thường.
-
-        Args:
-            source_data (dict): Chứa {'type': 'article'/'keyword'/'text', 'data': ..., 'context': ...}.
-            style_config (dict): Cấu hình style hiện tại (bao gồm cả layout_override nếu có).
-            language (str): Ngôn ngữ ('en', 'vi').
-
-        Returns:
-            dict: Dictionary chứa layout {'title': ..., 'layout': [...]} hoặc None nếu lỗi.
+        Cập nhật để sử dụng cấu hình layout_override linh hoạt.
         """
         logger.info("Stage 1 (Advanced): Generating video layout/outline...")
 
-        # --- 1. Kiểm tra và Lấy Cấu hình Layout Override ---
+        # --- Kiểm tra cấu hình override layout ---
         layout_config = style_config.get("layout_override", {})
         use_override_layout = layout_config.get("enabled", False)
         target_audience = style_config.get("target_audience") # Lấy target audience nếu có
 
-        # --- 2. Xác định Tham số Layout Động ---
         if use_override_layout:
             logger.info(f"Using specific layout override instructions for style '{style_config.get('tone', 'N/A')}'.")
-            # Lấy các tham số từ cấu hình override, cung cấp defaults an toàn
-            ch_min, ch_max = layout_config.get("chapter_count_range", (3, 5)) # VD: Default cho override
-            wt_min, wt_max = layout_config.get("chapter_word_target_range", (400, 700)) # VD: Default cao cho override
-            ttw_min, ttw_max = layout_config.get("target_total_word_range", (2500, 4500)) # VD: Default cao cho override
-            # Lấy và format structure_prompt (nếu có)
-            raw_structure_instruction = layout_config.get("structure_prompt", "")
-            structure_instruction = raw_structure_instruction.format(chapter_count_min=ch_min, chapter_count_max=ch_max) if raw_structure_instruction else ""
+            # Lấy các tham số từ cấu hình override
+            ch_min, ch_max = layout_config.get("chapter_count_range", (3, 7)) # Default nếu thiếu
+            wt_min, wt_max = layout_config.get("chapter_word_target_range", (150, 300)) # Default nếu thiếu
+            ttw_min, ttw_max = layout_config.get("target_total_word_range", (1000, 2500)) # Default nếu thiếu
+            structure_instruction = layout_config.get("structure_prompt", "").format(chapter_count_min=ch_min, chapter_count_max=ch_max)
         else:
             logger.info("Using default layout instructions.")
-            # Giá trị mặc định cho các style thông thường
+            # Giá trị mặc định cho style thông thường
             ch_min, ch_max = (3, 7)
-            wt_min, wt_max = (150, 300) # Word target chuẩn
-            ttw_min, ttw_max = (0, 0) # Không cần kiểm tra tổng word count cho default
-            structure_instruction = "" # Không có hướng dẫn cấu trúc đặc biệt
+            wt_min, wt_max = (150, 300) # Word target thấp hơn
+            # Không cần target total word hoặc structure prompt cụ thể cho default
+        # ---------------------------------------------
 
-        # --- 3. Xây dựng Prompt ---
+        # --- Xây dựng phần đầu của Prompt ---
         prompt_step1_layout = f"""
         You are an expert video script outliner and story structure planner.
         Your task is to analyze the provided source material and propose a compelling video structure (layout).
@@ -1317,14 +1305,14 @@ class ScriptGenerator:
         - Tone: {style_config['tone']}
         - Goal: {style_config.get('goal', 'To inform and engage')}
         """
-        if target_audience: # Thêm target audience nếu có
+        if target_audience: # Thêm target audience nếu có trong config
             prompt_step1_layout += f"- Target Audience: {target_audience}\n"
 
         prompt_step1_layout += f"""
 
         Source Material:
         """
-        # --- 3a. Thêm Source Material (Không đổi so với trước) ---
+        # --- Phần thêm Source Material ---
         input_type = source_data.get('type', 'unknown')
         content_data = source_data.get('data', '')
         context_hint = source_data.get('context', None)
@@ -1333,7 +1321,7 @@ class ScriptGenerator:
         if input_type == 'article':
             prompt_step1_layout += f"- Type: News Article\n"
             prompt_step1_layout += f"- Title: {content_data.get('title', '')}\n"
-            prompt_step1_layout += f"- Content to Analyze:\n{safe_truncate(content_data.get('content', ''), 8000)}\n" # Giữ giới hạn cũ
+            prompt_step1_layout += f"- Content to Analyze:\n{safe_truncate(content_data.get('content', ''), 8000)}\n"
             prompt_step1_layout += "\nTask: Based on the article, define a main video title and logical chapters."
         elif input_type == 'keyword':
             prompt_step1_layout += f"- Type: Keyword/Topic\n"
@@ -1341,34 +1329,33 @@ class ScriptGenerator:
             prompt_step1_layout += f"\nTask: Develop a video outline {lang_instruction} about '{content_data}'. Define a main title and logical chapters."
         elif input_type == 'text':
             prompt_step1_layout += f"- Type: Input Text {f'({context_hint})' if context_hint else ''}\n"
-            prompt_step1_layout += f"- Text Content to Structure:\n{safe_truncate(content_data, 10000)}\n" # Giữ giới hạn cũ
+            prompt_step1_layout += f"- Text Content to Structure:\n{safe_truncate(content_data, 10000)}\n"
             prompt_step1_layout += f"\nTask: Structure the provided text {lang_instruction} into a video outline. Define a main title and logical chapters."
         else:
             logger.error("Invalid source data type for layout generation.")
             return None
-        # --- Kết thúc phần Source Material ---
 
-        # --- 3b. Thêm Chapter Requirements động ---
+        # --- Thêm phần Chapter Requirements động ---
         prompt_step1_layout += "\n\n**Chapter Requirements:**\n"
 
         if use_override_layout:
-            # Sử dụng các tham số từ layout_override config
+            # Sử dụng các tham số từ layout_override
             if target_audience:
-                prompt_step1_layout += f"- **Target Audience:** Ensure chapter titles and summaries are appropriate for **{target_audience}**.\n"
+                prompt_step1_layout += f"- **Target Audience:** Remember the audience is {target_audience}. Tailor titles and summaries accordingly.\n"
             if structure_instruction:
-                prompt_step1_layout += f"- **Structure Guidance:** {structure_instruction}\n" # Hướng dẫn cấu trúc từ config
-            prompt_step1_layout += f"- **Chapter Count:** Create between **{ch_min} and {ch_max}** distinct chapters that fulfill the requested structure.\n"
-            prompt_step1_layout += "- **Chapter Titles:** Create concise, engaging, and appropriate `chapter_title` (max 5-7 words) for each chapter.\n"
-            prompt_step1_layout += "- **Chapter Summaries:** For each chapter, write a brief `summary` (1-2 sentences) outlining its key content or purpose.\n"
-            prompt_step1_layout += f"- **Word Count & Detail Level:** The goal is a substantial total script length (target: {ttw_min}-{ttw_max} words approx). Set an appropriate `word_count_target` (integer) for **each chapter** (typically between **{wt_min} and {wt_max} words per chapter**, adjust based on the chapter's role and the total count). This target indicates the **required depth and detail** for the next writing stage. Ensure the sum aligns reasonably with the total target range.\n"
+                prompt_step1_layout += f"- **Structure Guidance:** {structure_instruction}\n" # Thêm hướng dẫn cấu trúc
+            prompt_step1_layout += f"- **Chapter Count:** Create between **{ch_min} and {ch_max}** distinct chapters reflecting the required structure.\n"
+            prompt_step1_layout += "- **Chapter Titles:** Create concise and engaging `chapter_title` (max 5-7 words) for each chapter.\n"
+            prompt_step1_layout += "- **Chapter Summaries:** For each chapter, write a brief `summary` (1-2 sentences) outlining the key points.\n"
+            prompt_step1_layout += f"- **Word Count & Detail Level:** The goal is a substantial total script length (aiming for {ttw_min}-{ttw_max} words overall). You MUST set an appropriate `word_count_target` (integer) for **each chapter** (generally between **{wt_min} and {wt_max} words per chapter**, adjusting based on the chapter's role and the number of chapters). This target dictates the necessary **depth and detail** for the next writing stage. Ensure the sum aligns roughly with the total target range.\n"
         else:
-            # Yêu cầu mặc định cho các style thông thường
-            prompt_step1_layout += f"- Identify **{ch_min} to {ch_max}** distinct, logical sections or themes.\n"
+            # Yêu cầu mặc định (như trước)
+            prompt_step1_layout += f"- Identify {ch_min} to {ch_max} distinct, logical sections or themes.\n"
             prompt_step1_layout += f"- For each section, create a concise and engaging `chapter_title` (max 5-7 words).\n"
             prompt_step1_layout += f"- For each section, write a brief `summary` (1-2 sentences) outlining the key points.\n"
-            prompt_step1_layout += f"- For each section, estimate an appropriate `word_count_target` (integer, typically between {wt_min}-{wt_max} words, adjust for intro/conclusion). Ensure the value is an integer.\n"
+            prompt_step1_layout += f"- For each section, estimate an appropriate `word_count_target` (integer, typically between 150-300 words, adjusted for intro/conclusion). Ensure the value is an integer.\n"
 
-        # --- 3c. Phần Output Format (Không đổi về cấu trúc, nhưng ví dụ word count động) ---
+        # --- Phần Output Format ---
         prompt_step1_layout += f"""
 
         Output Format:
@@ -1380,89 +1367,71 @@ class ScriptGenerator:
             "chapter_number": 1,
             "chapter_title": "Concise Title for Chapter 1",
             "summary": "Brief summary of what Chapter 1 will cover.",
-            "word_count_target": {wt_min} // Example: Adjust based on actual chapter role and instructions!
+            "word_count_target": {wt_min if use_override_layout else 80} // Example: Adjust based on instructions!
             }},
             {{
             "chapter_number": 2,
             "chapter_title": "Engaging Title for Chapter 2",
             "summary": "Brief summary focusing on Chapter 2's content.",
-            "word_count_target": {int((wt_min + wt_max) / 2)} // Example: Adjust based on actual chapter role and instructions!
+            "word_count_target": {int((wt_min + wt_max) / 2) if use_override_layout else 200} // Example: Adjust based on instructions!
             }}
-            // ... continue for all {ch_min} to {ch_max} chapters
+            // ... continue for all chapters ({ch_min} to {ch_max})
         ]
         }}
 
-        **REMEMBER:** JSON ONLY. No extra text. Ensure `word_count_target` is an integer reflecting the required detail level (higher for styles with layout override).
+        **REMEMBER:** JSON ONLY. No extra text. Ensure `word_count_target` is an integer reflecting the required detail level.
         """
-        # --- Kết thúc xây dựng Prompt ---
+        # --- Kết thúc phần Output Format ---
 
-        # --- 4. Gọi API (Không đổi) ---
+        # Gọi API để lấy layout
         response_json_str = self._call_llm_api(
             user_prompt=prompt_step1_layout,
-            request_timeout=120, # Giữ timeout đủ dài
-            require_json=True
+            # System prompt is handled internally by _call_llm_api for JSON mode
+            request_timeout=120,
+            require_json=True # We absolutely need JSON here
         )
         if not response_json_str:
             logger.error("Stage 1 (Advanced) Failed: No response from API for layout generation.")
             return None
 
-        # --- 5. Parse và Validate Kết quả (Cập nhật default word count) ---
+        # Parse và Validate kết quả
         try:
             layout_data = json.loads(response_json_str)
 
-            # Validate cấu trúc cơ bản (không đổi)
-            if not isinstance(layout_data, dict) or "title" not in layout_data or not isinstance(layout_data["title"], str) or not layout_data["title"]:
-                 logger.error("Stage 1 Failed: Missing or invalid 'title' in layout response.")
-                 return None
+            # --- Validation ---
+            if not isinstance(layout_data, dict):
+                logger.error("Stage 1 Failed: API response is not a dictionary.")
+                return None
+            if "title" not in layout_data or not isinstance(layout_data["title"], str) or not layout_data["title"]:
+                logger.error("Stage 1 Failed: Missing or invalid 'title' in layout response.")
+                return None
             if "layout" not in layout_data or not isinstance(layout_data["layout"], list) or not layout_data["layout"]:
-                 logger.error("Stage 1 Failed: Missing or invalid 'layout' list in response.")
-                 return None
+                logger.error("Stage 1 Failed: Missing or invalid 'layout' list in response.")
+                return None
 
-            # Validate từng chapter
+            # Validate each chapter in the layout
             expected_chapter_num = 1
-            total_target_words = 0
-            num_chapters_generated = len(layout_data["layout"])
-
-            # Cảnh báo nếu số chapter nằm ngoài khoảng mong đợi (lấy từ config hoặc default)
-            if not (ch_min <= num_chapters_generated <= ch_max):
-                logger.warning(f"Stage 1 Warning: Generated {num_chapters_generated} chapters, outside the expected range of {ch_min}-{ch_max} for this style.")
-
             for i, chapter in enumerate(layout_data["layout"]):
                 if not isinstance(chapter, dict):
                     logger.error(f"Stage 1 Failed: Item at index {i} in 'layout' is not a dictionary.")
                     return None
-                # Validate chapter number sequence
                 if not chapter.get("chapter_number") == expected_chapter_num:
                     logger.error(f"Stage 1 Failed: Chapter number mismatch. Expected {expected_chapter_num}, got {chapter.get('chapter_number')}.")
                     return None
-                # Validate chapter title
                 if not isinstance(chapter.get("chapter_title"), str) or not chapter.get("chapter_title"):
                     logger.error(f"Stage 1 Failed: Missing or invalid 'chapter_title' for chapter {expected_chapter_num}.")
                     return None
-                # Validate summary (optional string)
-                if not isinstance(chapter.get("summary"), str):
-                    logger.warning(f"Stage 1 Note: Missing or non-string 'summary' for chapter {expected_chapter_num}. Setting to empty string.")
-                    chapter["summary"] = chapter.get("summary", "")
-                # Validate word_count_target (positive integer)
-                word_target = chapter.get("word_count_target")
-                if not isinstance(word_target, int) or word_target <= 0:
-                     # Gán default word count dựa trên việc có dùng override hay không
-                     default_target = int((wt_min + wt_max) / 2) if use_override_layout else 150 # Default trung bình cho override, 150 cho normal
-                     logger.warning(f"Stage 1 Warning: Missing or invalid 'word_count_target' for chapter {expected_chapter_num}. Assigning default {default_target}.")
-                     chapter["word_count_target"] = default_target
-                     word_target = default_target
+                if not isinstance(chapter.get("summary"), str): # Summary có thể rỗng nhưng phải là string
+                    logger.warning(f"Stage 1 Note: Missing or non-string 'summary' for chapter {expected_chapter_num}. Proceeding.")
+                    chapter["summary"] = chapter.get("summary", "") # Đảm bảo có key summary
+                if not isinstance(chapter.get("word_count_target"), int) or chapter.get("word_count_target", 0) <= 0:
+                    logger.warning(f"Stage 1 Warning: Missing or invalid 'word_count_target' for chapter {expected_chapter_num}. Assigning default 150.")
+                    chapter["word_count_target"] = 150 # Gán giá trị mặc định nếu thiếu hoặc không hợp lệ
 
-                total_target_words += word_target
                 expected_chapter_num += 1
 
-            logger.info(f"Stage 1 (Advanced) Success: Generated layout with title '{layout_data['title']}' and {num_chapters_generated} chapters.")
-            logger.info(f"  Total Target Word Count across chapters: {total_target_words}")
-
-            # Cảnh báo nếu tổng word count nằm ngoài khoảng mong đợi (chỉ khi dùng override)
-            if use_override_layout and not (ttw_min <= total_target_words <= ttw_max):
-                logger.warning(f"  Note: Total target word count ({total_target_words}) is outside the configured range ({ttw_min}-{ttw_max}) for this style.")
-
-            return layout_data # Trả về layout đã validate
+            logger.info(f"Stage 1 (Advanced) Success: Generated layout with title '{layout_data['title']}' and {len(layout_data['layout'])} chapters (including word count targets).")
+            return layout_data
 
         except json.JSONDecodeError as e:
             logger.error(f"Stage 1 (Advanced) Failed: Could not decode JSON response for layout: {e}")
@@ -1476,46 +1445,27 @@ class ScriptGenerator:
     def _generate_chapter_content(self, original_source_data, full_layout_data, current_chapter_outline, style_config, language):
         """
         Giai đoạn 2 (Advanced Mode): Tạo nội dung tường thuật chi tiết cho một chapter cụ thể.
-        Sử dụng style_config để điều chỉnh prompt về tone, audience, detail level, và transitions.
 
         Args:
             original_source_data (dict): Dữ liệu gốc ban đầu {'type': ..., 'data': ...}.
             full_layout_data (dict): Toàn bộ layout từ Stage 1 {'title': ..., 'layout': [...]}.
-            current_chapter_outline (dict): Outline của chapter hiện tại {'chapter_number': ..., 'chapter_title': ..., 'summary': ..., 'word_count_target': ...}.
-            style_config (dict): Cấu hình style hiện tại.
+            current_chapter_outline (dict): Outline của chapter hiện tại {'chapter_number': ..., 'chapter_title': ..., 'summary': ...}.
+            style_config (dict): Cấu hình style.
             language (str): Ngôn ngữ.
 
         Returns:
             list: Danh sách các câu tường thuật (strings) cho chapter này, hoặc None nếu lỗi.
         """
-        # --- 1. Trích xuất thông tin cần thiết ---
         chapter_num = current_chapter_outline['chapter_number']
         chapter_title = current_chapter_outline['chapter_title']
-        chapter_summary = current_chapter_outline.get('summary', '')
-        word_count_target = current_chapter_outline.get('word_count_target', 150) # Lấy target từ outline
-        target_audience = style_config.get("target_audience") # Lấy target audience từ style config
+        chapter_summary = current_chapter_outline.get('summary', '') # Lấy summary, mặc định là rỗng nếu thiếu
+        word_count_target = current_chapter_outline.get('word_count_target', 150)
 
         logger.info(f"  Stage 2: Generating content for Chapter {chapter_num}: '{chapter_title}' (Target: ~{word_count_target} words)...")
-        if target_audience:
-            logger.info(f"    Target Audience: {target_audience}")
 
-        # --- 2. Xác định thông tin Chapter tiếp theo (để gợi ý chuyển tiếp) ---
-        next_chapter_title = None
-        layout_list = full_layout_data.get('layout', [])
-        if chapter_num < len(layout_list):
-            next_chapter_outline = layout_list[chapter_num] # Index là chapter_num vì list 0-based, chapter_num 1-based
-            next_chapter_title = next_chapter_outline.get('chapter_title')
-
-        # --- 3. Xây dựng Prompt ---
+        # --- Xây dựng Prompt ---
         prompt_stage2_chapter = f"""
-        You are a detailed and engaging scriptwriter specializing in the style: '{style_config['tone']}'.
-        Your task is to write the narrative script content *ONLY* for a specific chapter of a video, based on the provided context and overall structure.
-        """
-        # --- 3a. Thêm thông tin Target Audience (nếu có) ---
-        if target_audience:
-            prompt_stage2_chapter += f"\n**IMPORTANT: Tailor your language, examples, and explanations specifically for the target audience: {target_audience}.**\n"
-
-        prompt_stage2_chapter += f"""
+        You are a detailed and engaging scriptwriter. Your task is to write the narrative script content *ONLY* for a specific chapter of a video, based on the provided context and overall structure.
 
         **Overall Video Context:**
         - Main Video Title: "{full_layout_data['title']}"
@@ -1528,11 +1478,10 @@ class ScriptGenerator:
         **Current Chapter Focus:**
         - You are writing ONLY for: **Chapter {chapter_num}: "{chapter_title}"**
         - Chapter Summary/Goal: "{chapter_summary}"
-        - **Target Word Count Guideline for this Chapter: Approximately {word_count_target} words.** This target dictates the necessary **depth and detail**.
+        - Target Word Count Guideline for this Chapter: ~{word_count_target} words
 
         **Source Material (Use this for information):**
         """
-        # --- 3b. Thêm Source Material (Không đổi) ---
         input_type = original_source_data.get('type', 'unknown')
         content_data = original_source_data.get('data', '')
         context_hint = original_source_data.get('context', None)
@@ -1541,77 +1490,66 @@ class ScriptGenerator:
         if input_type == 'article':
             prompt_stage2_chapter += f"- Type: News Article\n"
             prompt_stage2_chapter += f"- Source Article Title: {content_data.get('title', '')}\n"
-            prompt_stage2_chapter += f"- Source Article Content:\n{safe_truncate(content_data.get('content', ''), 12000)}\n" # Giữ nguyên limit này
+            # Cung cấp nhiều nội dung gốc hơn cho việc viết chi tiết
+            prompt_stage2_chapter += f"- Source Article Content:\n{safe_truncate(content_data.get('content', ''), 12000)}\n"
         elif input_type == 'keyword':
             prompt_stage2_chapter += f"- Type: Keyword/Topic\n"
             prompt_stage2_chapter += f"- Main Topic: \"{content_data}\"\n"
         elif input_type == 'text':
             prompt_stage2_chapter += f"- Type: Input Text {f'({context_hint})' if context_hint else ''}\n"
-            prompt_stage2_chapter += f"- Source Text Content:\n{safe_truncate(content_data, 15000)}\n" # Giữ nguyên limit này
-        # --- Kết thúc Source Material ---
+            prompt_stage2_chapter += f"- Source Text Content:\n{safe_truncate(content_data, 15000)}\n" # Cung cấp nhiều text hơn
 
         prompt_stage2_chapter += f"""
 
         **Your Task & Instructions:**
         """
-        # --- 3c. Thêm hướng dẫn Hook cho Chapter 1 (Không đổi) ---
+
+        # *** NEW: Thêm hướng dẫn đặc biệt cho Chapter 1 (Hook) ***
         if chapter_num == 1:
-             prompt_stage2_chapter += """
+            prompt_stage2_chapter += """
         **CRITICAL - HOOK GENERATION (Chapter 1 ONLY):**
-        - **Immediate Impact:** Start *instantly* with the MOST surprising, intriguing, emotionally resonant, or visually striking piece of information... [Giữ nguyên]
-        - **Goal:** Grab the viewer's attention... [Giữ nguyên]
-        - **Conciseness:** While aiming for the target word count (~{word_count_target} words), ensure the *opening sentences* are particularly punchy... [Giữ nguyên]
-        - **Connect to Topic:** Ensure the hook directly relates... [Giữ nguyên]
+        - **Immediate Impact:** Start *instantly* with the MOST surprising, intriguing, emotionally resonant, or visually striking piece of information from the Source Material related to this chapter's topic ('{chapter_title}'). NO slow introductions.
+        - **Goal:** Grab the viewer's attention within the first 3-5 seconds. Use a powerful statement, a provocative question directly addressing the viewer, a startling statistic, or a mini-cliffhanger.
+        - **Conciseness:** While aiming for the target word count (~{word_count_target} words), ensure the *opening sentences* are particularly punchy and attention-grabbing. Prioritize impact over length for the very beginning.
+        - **Connect to Topic:** Ensure the hook directly relates to the overall video title and the specific focus of Chapter 1.
         """
 
-        # --- 3d. Hướng dẫn Chung (Đã cập nhật) ---
+        # *** Hướng dẫn chung (áp dụng cho tất cả chapters, bao gồm cả Chapter 1 sau phần hook) ***
         prompt_stage2_chapter += f"""
-        **General Instructions (Apply to all sentences written for Chapter {chapter_num}):**
-        1.  Write detailed, engaging narrative sentences {lang_instruction} that thoroughly explore the key points outlined in the Chapter Summary/Goal. Aim to reach the **Target Word Count Guideline (~{word_count_target} words)** by providing **sufficient depth, detail, examples, and explanation**.
-        2.  Expand significantly on the summary using information *strictly* from the provided Source Material. Do NOT invent facts.
-        3.  Consistently maintain the specified video style ('{style_config['tone']}') and follow the general style instructions: {'; '.join(style_config['instructions'])}
-        4.  Ensure sentences flow logically within the chapter.
-        5.  **Smooth Transitions:**
-            - If this is Chapter > 1, ensure the *first sentence* provides a natural, conversational continuation from the previous chapter's topic (implied from the layout summary). Avoid abrupt starts.
-            - If this is **NOT** the final chapter"""
-        if next_chapter_title:
-             prompt_stage2_chapter += f" (the next chapter is about '{next_chapter_title}')"
-        prompt_stage2_chapter += f""", ensure the **final sentence(s)** naturally and subtly lead into the topic of the next chapter. **DO NOT explicitly state "Next, we'll talk about..."**. Instead, end with a thought or statement that logically bridges to the next subject."""
-        prompt_stage2_chapter += f"""
-        6.  Write ONLY natural-sounding sentences suitable for professional voice-over. **CRITICAL: ABSOLUTELY NO visual descriptions (e.g., "As you can see...", "This image shows..."), camera directions, scene markers (like #SCENE#), bullet points, or mentioning the chapter title itself within the narrative.** Write as one continuous conversational flow.
-        7.  Focus on delivering value and insight according to the target word count. Avoid filler content.
-        """
-        # --- Kết thúc Instructions ---
+        **General Instructions (Apply to all sentences written):**
+        1.  Write detailed, engaging narrative sentences {lang_instruction} that thoroughly cover the key points from the Chapter Summary/Goal, aiming for a total length around the **Target Word Count Guideline (~{word_count_target} words)**. This guideline indicates the desired level of detail.
+        2.  Expand on the summary using information *strictly* from the provided Source Material. Do NOT invent facts.
+        3.  Maintain the specified video {style_config['tone']} and follow general style instructions: {'; '.join(style_config['instructions'])}
+        4.  Ensure sentences flow logically. If Chapter > 1, consider the previous chapter's ending (implied from the layout) for a smooth transition.
+        5.  Write ONLY natural-sounding sentences for voice-over. **CRITICAL: NO visual descriptions, camera directions, scene markers, or the chapter title itself.**
+        6.  Provide sufficient detail according to the target word count.
 
-        # --- 3e. Output Format (Không đổi) ---
-        prompt_stage2_chapter += f"""
         **Output Format:**
         Return ONLY a valid JSON object containing a list of the generated narrative sentences for this chapter.
         {{
         "chapter_content": [
-            "First sentence for Chapter {chapter_num} (Hook if Chapter 1, otherwise smooth transition).",
-            "Second detailed sentence...",
+            "First sentence (Hook if Chapter 1, otherwise logical continuation).",
+            "Second sentence...",
             "...",
-            "Final sentence for Chapter {chapter_num} (potentially bridging to next chapter)."
+            "Final sentence for Chapter {chapter_num}."
         ]
         }}
 
-        **REMEMBER:** JSON ONLY. Focus *solely* on writing the content for Chapter {chapter_num}. Adhere strictly to the target word count guideline ({word_count_target} words) to achieve the required level of detail and depth. Ensure transitions are natural and conversational.
+        **REMEMBER:** JSON ONLY. Focus *solely* on Chapter {chapter_num}. Adhere to the target word count as a guideline for detail level.
         """
-        # --- Kết thúc Output Format ---
 
-        # --- 4. Gọi API (Không đổi) ---
-        timeout = 150 + int(word_count_target / 1.5) # Timeout động, tăng nhẹ
+        # --- Gọi API ---
+        timeout = 150 + int(word_count_target / 2)
         response_json_str = self._call_llm_api(
             user_prompt=prompt_stage2_chapter,
             request_timeout=timeout,
-            require_json=True
+            require_json=True # Need JSON { "chapter_content": [...] }
         )
         if not response_json_str:
             logger.error(f"  Stage 2 Failed: No response from API for Chapter {chapter_num} content.")
             return None
 
-        # --- 5. Parse và Validate Kết quả (Không đổi) ---
+        # --- Parse và Validate ---
         try:
             chapter_content_data = json.loads(response_json_str)
             if not isinstance(chapter_content_data, dict) or \
@@ -1620,20 +1558,16 @@ class ScriptGenerator:
                 logger.error(f"  Stage 2 Failed: Invalid JSON structure for Chapter {chapter_num}. Response: {chapter_content_data}")
                 return None
 
+            # Kiểm tra các phần tử là string và không rỗng
             generated_sentences = [s.strip() for s in chapter_content_data["chapter_content"] if isinstance(s, str) and s.strip()]
 
             if not generated_sentences:
                 logger.warning(f"  Stage 2 Warning: No valid sentences generated for Chapter {chapter_num}.")
-                return [] # Trả về list rỗng
+                # Trả về list rỗng thay vì None để không làm dừng hoàn toàn nếu các chapter khác OK
+                return []
 
-            # Log thêm word count thực tế (ước lượng)
-            actual_words = sum(len(s.split()) for s in generated_sentences)
-            logger.info(f"  Stage 2 Success: Generated {len(generated_sentences)} sentences (~{actual_words} words) for Chapter {chapter_num} (Target: ~{word_count_target}).")
-            # Cảnh báo nếu quá chênh lệch
-            if word_count_target > 0 and abs(actual_words - word_count_target) / word_count_target > 0.4: # Chênh lệch > 40%
-                 logger.warning(f"    Word count deviation significant (Actual: {actual_words}, Target: {word_count_target}). May impact pacing.")
-
-            return generated_sentences # Trả về danh sách câu
+            logger.info(f"  Stage 2 Success: Generated {len(generated_sentences)} sentences for Chapter {chapter_num}.")
+            return generated_sentences
 
         except json.JSONDecodeError as e:
             logger.error(f"  Stage 2 Failed: Could not decode JSON for Chapter {chapter_num}: {e}")

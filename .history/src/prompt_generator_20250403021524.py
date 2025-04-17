@@ -52,29 +52,7 @@ style_configs = {
         "instructions": ["Use vivid, intense fragments.", "Begin with shocking phrase.", "Keep tension high with short snippets.", "Use contrasts.", "End with powerful fragment."],
         "title_hint": "A dramatic and impactful title",
         "scene_range": (40, 80),
-    },
-    "senior_conversational": {
-    "tone": "warm, conversational, and motivational, targeted at seniors (60+)",
-    "instructions": [
-        "Speak directly to the viewer like a caring friend.",
-        "Use simple, clear language, avoid jargon or overly complex sentences.",
-        "Provide practical, actionable advice with relatable examples for seniors.",
-        "Maintain a positive, reassuring, and uplifting mood.",
-        "Ensure smooth, natural transitions between ideas and chapters.",
-        "Write as a continuous narrative, avoiding bullet points or explicit section titles in the content."
-    ],
-    "title_hint": "A helpful, friendly, and encouraging title for seniors",
-    "scene_range": (150, 350),
-    "target_audience": "60+",
-    # --- THÊM CẤU HÌNH LAYOUT ĐẶC BIỆT ---
-    "layout_override": {
-        "enabled": True, # Bật chế độ override layout prompt
-        "target_total_word_range": (1500, 2500), # Mục tiêu tổng từ (để LLM tham khảo)
-        "chapter_count_range": (3, 4),         # Số chapter mong muốn
-        "chapter_word_target_range": (400, 700), # Mục tiêu từ/chapter
-        "structure_prompt": "Structure the video logically into 3 main conceptual parts: 1) An engaging Introduction/Hook, 2) The main discussion points providing value and practical advice, 3) A concluding summary and call to action/uplifting message. Divide these 3 conceptual parts into {chapter_count_min} to {chapter_count_max} distinct chapters in the final layout." # Prompt mô tả cấu trúc
     }
-    },
 }
 
 # ----------------------------

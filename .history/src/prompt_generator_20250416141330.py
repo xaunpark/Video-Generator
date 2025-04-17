@@ -70,7 +70,7 @@ style_configs = {
     "layout_override": {
         "enabled": True, # Bật chế độ override layout prompt
         "target_total_word_range": (1500, 2500), # Mục tiêu tổng từ (để LLM tham khảo)
-        "chapter_count_range": (3, 4),         # Số chapter mong muốn
+        "chapter_count_range": (3, 5),         # Số chapter mong muốn
         "chapter_word_target_range": (400, 700), # Mục tiêu từ/chapter
         "structure_prompt": "Structure the video logically into 3 main conceptual parts: 1) An engaging Introduction/Hook, 2) The main discussion points providing value and practical advice, 3) A concluding summary and call to action/uplifting message. Divide these 3 conceptual parts into {chapter_count_min} to {chapter_count_max} distinct chapters in the final layout." # Prompt mô tả cấu trúc
     }

@@ -836,104 +836,64 @@ class ImageGenerator:
 
         # --- Xây dựng Prompt Điều kiện ---
         gpt_prompt = "" # Khởi tạo prompt rỗng
+        
+        gpt_prompt = f"""
+        You are an expert prompt engineer for text-to-image AI like Google Imagen 3.
+        Your task is to convert the following news video scene content into a detailed and effective prompt.
 
-        if script_style == "senior_conversational":
-            logger.debug(f"Creating Imagen prompt with specific 'senior_conversational' instructions.")
-            gpt_prompt = f"""
-            You are an expert prompt engineer for text-to-image AI like Google Imagen 3.
-            Your task is to convert the following scene content into a detailed, effective, and **appropriate** prompt for a video targeting **seniors (60+)**.
+        Consider these factors:
+        - The overall video title: "{video_title}"
+        - The desired video style/tone: "{style_desc}"
+        - The specific content of this scene: "{scene_content}"
 
-            Consider these factors:
-            - Overall video title: "{video_title}"
-            - **Target Audience:** Seniors (60+)
-            - **Desired Video Style/Tone:** Warm, conversational, motivational, relatable, positive, gentle ({style_desc}).
-            - Specific content of this scene: "{scene_content}"
+        IMPORTANT SAFETY GUIDELINES:
+        - NEVER generate prompts depicting children, minors, or family scenes with minors
+        - Replace any children in the scene with young adults (18+) or symbolic objects/animals
+        - Avoid depicting vulnerable populations or sensitive scenarios
+        - Avoid depicting realistic human faces in close detail
 
-            **IMPORTANT SAFETY GUIDELINES (Apply Strictly):**
-            - NEVER generate prompts depicting children, minors, or family scenes with minors. Replace with adults (18+) or symbolic objects.
-            - Avoid depicting vulnerable populations or overly sensitive scenarios (e.g., severe illness depiction).
-            - Avoid depicting realistic human faces in close detail. Focus on general appearance, emotion, and setting.
-            - Ensure generated images are positive, respectful, and avoid ageist stereotypes.
+        Instructions for the Imagen Prompt:
+        1. Be descriptive and specific about visual elements. Mention subjects, actions, setting, mood, and composition.
+        2. Incorporate the video's style/tone (e.g., if 'dramatic', use words like 'intense lighting', 'dynamic angle').
+        3. Aim for a prompt length suitable for Imagen (under 150 words).
+        4. USE ONLY PHOTOREALISTIC IMAGE TYPE
+        5. AVOID mentioning text unless the scene is explicitly about text/code.
+        6. If the original scene involves children, REWRITE it with adults or symbolic representations.
+        7. For concepts involving children's activities, represent them with symbolic objects instead (e.g., "a toy left on a colorful playground" rather than "a child playing").
 
-            **Instructions for the Imagen Prompt (Senior Conversational Style):**
-            1.  **Visual Style:** Aim for **photorealistic** but with **warm, soft lighting** and **calm, pleasing compositions**. Avoid harsh contrasts or overly busy scenes.
-            2.  **Subject Focus:** If depicting people, show **older adults (appearing 60+)** engaged in relatable activities (e.g., gentle exercise like walking/yoga, gardening, reading, talking with friends/family (adults only), enjoying nature, hobbies). Depict them with **positive expressions** (smiles, contentment, thoughtfulness). Show diversity in older adults respectfully.
-            3.  **Emotion:** Emphasize feelings of **warmth, comfort, connection, peace, gentle motivation, or contentment**.
-            4.  **Setting:** Prefer **cozy, comfortable, or serene settings** (e.g., comfortable homes, sunny gardens, parks, cafes, libraries).
-            5.  **Clarity & Simplicity:** Keep the visual concept clear and easy to understand. Avoid overly abstract or complex metaphors unless the scene content specifically calls for it.
-            6.  **Incorporate Tone:** Use descriptive words reflecting the warm, motivational, and conversational tone (e.g., "gentle sunlight," "cozy armchair," "warm smile," "peaceful garden," "supportive friend").
-            7.  **Length & Detail:** Be descriptive but concise (under 150 words). Mention key subjects, actions, setting, mood.
-            8.  **Safety First:** Strictly adhere to the safety guidelines above. Rewrite scene concepts if needed (e.g., instead of "grandchildren playing," use "photo albums on a table" or "knitting supplies").
-
-            Output ONLY the generated Imagen prompt, with no extra explanations or quotation marks.
-            """
-        else:
-            # --- Prompt gốc cho các style khác ---
-            logger.debug(f"Creating Imagen prompt with standard instructions for style '{script_style}'.")
-            gpt_prompt = f"""
-            You are an expert prompt engineer for text-to-image AI like Google Imagen 3.
-            Your task is to convert the following news video scene content into a detailed and effective prompt.
-
-            Consider these factors:
-            - The overall video title: "{video_title}"
-            - The desired video style/tone: "{style_desc}"
-            - The specific content of this scene: "{scene_content}"
-
-            IMPORTANT SAFETY GUIDELINES:
-            - NEVER generate prompts depicting children, minors, or family scenes with minors
-            - Replace any children in the scene with young adults (18+) or symbolic objects/animals
-            - Avoid depicting vulnerable populations or sensitive scenarios
-            - Avoid depicting realistic human faces in close detail
-
-            Instructions for the Imagen Prompt:
-            1. Be descriptive and specific about visual elements. Mention subjects, actions, setting, mood, and composition.
-            2. Incorporate the video's style/tone (e.g., if 'dramatic', use words like 'intense lighting', 'dynamic angle').
-            3. Aim for a prompt length suitable for Imagen (under 150 words).
-            4. USE ONLY PHOTOREALISTIC IMAGE TYPE
-            5. AVOID mentioning text unless the scene is explicitly about text/code.
-            6. If the original scene involves children, REWRITE it with adults or symbolic representations.
-            7. For concepts involving children's activities, represent them with symbolic objects instead (e.g., "a toy left on a colorful playground" rather than "a child playing").
-
-            Output ONLY the generated Imagen prompt, with no extra explanations or quotation marks.
-            """
+        Output ONLY the generated Imagen prompt, with no extra explanations or quotation marks.
+        """
 
         try:
             url = f"{self.openai_base_url}/chat/completions"
             payload = {
-                "model": "gpt-4o-mini", # Hoặc model khác
+                "model": "gpt-4o-mini", # Or gpt-3.5-turbo
                 "messages": [
-                    # System prompt có thể giống nhau hoặc tùy chỉnh nhẹ
-                    {"role": "system", "content": "You generate effective and safe Imagen prompts for video scenes based on context and style."},
-                    {"role": "user", "content": gpt_prompt} # Sử dụng prompt đã chọn
+                    {"role": "system", "content": "You generate Imagen prompts for news video scenes."},
+                    {"role": "user", "content": gpt_prompt}
                 ],
-                "temperature": 0.6,
+                "temperature": 0.6, # More creative for prompts
                 #"max_tokens": 150
             }
-            logger.debug(f"Generating Imagen prompt for style '{script_style}': '{scene_content[:80]}...'")
+            logger.debug(f"Generating DALL-E prompt for: '{scene_content[:80]}...'")
             response = requests.post(url, headers=self.openai_headers, json=payload, timeout=25)
             response.raise_for_status()
             data = response.json()
 
             if data.get('choices'):
-                imagen_prompt = data['choices'][0]['message']['content'].strip().replace('"', '')
-                logger.info(f"Generated Imagen prompt (Style: {script_style}): '{imagen_prompt[:100]}...'")
-                return imagen_prompt
+                dalle_prompt = data['choices'][0]['message']['content'].strip().replace('"', '')
+                logger.info(f"Generated Imagen prompt: '{dalle_prompt[:100]}...'")
+                return dalle_prompt
             else:
-                logger.error(f"OpenAI response for Imagen prompt generation (Style: {script_style}) is invalid.")
-                # Fallback dựa trên style
-                fallback_prefix = "Warm illustration" if script_style == 'senior_conversational' else "Simple illustration"
-                return f"{fallback_prefix}: {scene_content[:100]}"
+                logger.error("OpenAI response for Imagen prompt generation is invalid.")
+                return f"Simple illustration: {scene_content[:100]}" # Fallback
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"OpenAI API error generating Imagen prompt (Style: {script_style}): {e}")
-             # Fallback dựa trên style
-            fallback_prefix = "Image of" if script_style == 'senior_conversational' else "News photo"
-            return f"{fallback_prefix}: {scene_content[:100]}"
+            logger.error(f"OpenAI API error generating Imagen prompt: {e}")
+            return f"News photo: {scene_content[:100]}" # Fallback
         except Exception as e:
-            logger.error(f"Unexpected error generating Imagen prompt (Style: {script_style}): {e}", exc_info=True)
-             # Fallback dựa trên style
-            fallback_prefix = "Illustration" if script_style == 'senior_conversational' else "Illustration"
-            return f"{fallback_prefix}: {scene_content[:100]}"
+            logger.error(f"Unexpected error generating Imagen prompt: {e}", exc_info=True)
+            return f"Illustration: {scene_content[:100]}" # Fallback
 
     def _generate_image_with_imagen(self, prompt):
         """Generates an image using the Google Imagen API via Google AI Client."""

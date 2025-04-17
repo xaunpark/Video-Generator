@@ -319,10 +319,6 @@ def main():
             print("Please install it: pip install youtube-transcript-api")
             choice = "" # Ask again
 
-    # --- Get Style ---
-    print("\n--- Step 2: Select Video Style ---")
-    selected_style = prompt_for_style()
-    
     # --- Get Video Mode ---
     print("\n--- Step 1.5: Select Video Mode ---")
     print("1. Basic Video (Standard news style) - Default")
@@ -390,6 +386,10 @@ def main():
         lang_pref_input = input(f"Enter preferred transcript languages (comma-separated, e.g., en,vi), leave blank for default ({','.join(preferred_langs_yt)}): ").strip().lower()
         if lang_pref_input:
             preferred_langs_yt = [lang.strip() for lang in lang_pref_input.split(',') if lang.strip()]
+
+    # --- Get Style ---
+    print("\n--- Step 2: Select Video Style ---")
+    selected_style = prompt_for_style()
     
     # --- KIỂM TRA VÀ THÔNG BÁO NẾU CHỌN STYLE SENIOR ---
     if selected_style == "senior_conversational":
@@ -405,21 +405,13 @@ def main():
     visual_source_choice = prompt_for_visual_source()
 
     # --- Get Visual Presentation Mode  ---
-    final_timing_mode_user_choice = prompt_for_visual_timing_mode() # Lấy lựa chọn gốc của người dùng
+    final_timing_mode = prompt_for_visual_timing_mode()
 
-    # --- THÊM LOGIC GHI ĐÈ Ở ĐÂY ---
-    final_timing_mode = final_timing_mode_user_choice # Gán giá trị ban đầu
-
-    if selected_style == "senior_conversational":
-        if final_timing_mode_user_choice != 'overall_theme_fixed_duration':
-            logger.warning(f"Style '{selected_style}' selected. Overriding visual timing mode to 'overall_theme_fixed_duration' for better results with long-form content.")
-            print("INFO: 'Overall theme visuals' mode automatically selected for the 'Senior Conversational' style.")
-            final_timing_mode = 'overall_theme_fixed_duration' # Buộc sử dụng theme mode
-        else:
-            logger.info(f"Style '{selected_style}' selected. Using 'overall_theme_fixed_duration' timing mode.")
-            # final_timing_mode đã đúng, không cần làm gì thêm
-    # --- KẾT THÚC LOGIC GHI ĐÈ ---
-    # Biến final_timing_mode bây giờ chứa giá trị cuối cùng (có thể đã bị ghi đè)
+    # ===> Quan trọng: Nếu chọn style 'senior_conversational', nên gợi ý/buộc chọn theme mode
+    if selected_style == "senior_conversational" and final_timing_mode != 'overall_theme_fixed_duration':
+        logger.warning("Style 'Senior Conversational' typically works best with 'Overall theme visuals'. Syncing visuals to long audio segments might be less effective.")
+        print("WARNING: 'Senior Conversational' style selected, but 'Sync visuals to audio' mode chosen. Consider using 'Overall theme visuals' (Option 2 in Step 3.5) for better results with this style.")
+    # ----------------------------------------------------------------------
 
     logger.info("--- User Input Gathering Complete ---")
     logger.info(f"Selected LLM: {selected_llm}")

@@ -319,10 +319,6 @@ def main():
             print("Please install it: pip install youtube-transcript-api")
             choice = "" # Ask again
 
-    # --- Get Style ---
-    print("\n--- Step 2: Select Video Style ---")
-    selected_style = prompt_for_style()
-    
     # --- Get Video Mode ---
     print("\n--- Step 1.5: Select Video Mode ---")
     print("1. Basic Video (Standard news style) - Default")
@@ -390,6 +386,10 @@ def main():
         lang_pref_input = input(f"Enter preferred transcript languages (comma-separated, e.g., en,vi), leave blank for default ({','.join(preferred_langs_yt)}): ").strip().lower()
         if lang_pref_input:
             preferred_langs_yt = [lang.strip() for lang in lang_pref_input.split(',') if lang.strip()]
+
+    # --- Get Style ---
+    print("\n--- Step 2: Select Video Style ---")
+    selected_style = prompt_for_style()
     
     # --- KIỂM TRA VÀ THÔNG BÁO NẾU CHỌN STYLE SENIOR ---
     if selected_style == "senior_conversational":

@@ -92,7 +92,7 @@ VIDEO_SETTINGS = {
     # Cài đặt hiệu ứng cho ảnh tĩnh
     "enable_ken_burns": False,
     "debug_disable_effects": False,
-    "image_animation": "random",     # để random rồi sau đó trong video editor chọn ngẫu nhiên các hiệu ứng 
+    "image_animation": "zoom",      # Các tùy chọn: "none", "zoom"
     "animation_intensity": 0.05,     # Từ 0.01 (rất nhẹ) đến 0.1 (rõ ràng hơn)
     "animation_cycle_seconds": 5,    # Thời gian để hoàn thành một chu kỳ hiệu ứng (giây)
     # --- THÊM CẤU HÌNH CHO SLOW MOTION ---
