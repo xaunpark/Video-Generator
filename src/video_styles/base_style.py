@@ -196,19 +196,19 @@ class BaseVideoStyle(ABC):
     
     # --- Phương thức liên quan đến Visuals ---
 
-    def get_visual_source_preference(self) -> str:
-        """
-        Trả về lựa chọn visual source mặc định/ưu tiên ('search', 'ai', 'video_only').
-        Mặc định là 'search'.
-        """
-        return "search"
-
     def should_override_visual_source(self) -> bool:
         """
         Trả về True nếu style này bắt buộc một visual source cụ thể.
         Mặc định là False.
         """
         return False
+
+    def get_visual_source_preference(self) -> str:
+        """
+        Trả về lựa chọn visual source mặc định/ưu tiên ('search', 'ai', 'video_only').
+        Mặc định là 'search'.
+        """
+        return "search"
 
     def generate_ai_image_prompt(self, scene_content: str, video_title: str) -> str:
         """

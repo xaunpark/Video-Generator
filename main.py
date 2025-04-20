@@ -460,6 +460,27 @@ def main():
 
     visual_source_final = visual_source_choice_user
 
+    # Kiểm tra xem Strategy có yêu cầu override Visual Source không
+    try:
+        if selected_style_strategy.should_override_visual_source():
+            preferred_visual_source = selected_style_strategy.get_visual_source_preference()
+
+            if visual_source_choice_user != preferred_visual_source:
+                logger.warning(f"Style '{selected_style_name}' forces visual source to '{preferred_visual_source}'. Overriding user choice '{visual_source_choice_user}'.")
+                print(f"\nINFO: Visual source automatically set to '{preferred_visual_source}' for the '{selected_style_name}' style.")
+            else:
+                logger.info(f"Style '{selected_style_name}' preference '{preferred_visual_source}' matches user choice.")
+            visual_source_final = preferred_visual_source # Áp dụng override
+        else:
+            logger.info(f"Style '{selected_style_name}' does not override visual source. Using user choice: '{visual_source_choice_user}'.")
+
+    except AttributeError as e:
+        logger.error(f"Error checking visual source override: Strategy object (type: {type(selected_style_strategy).__name__}) might be missing required methods ({e}). Using user choice.")
+        visual_source_final = visual_source_choice_user # Fallback an toàn
+    except Exception as e:
+        logger.error(f"Unexpected error applying visual source override: {e}", exc_info=True)
+        visual_source_final = visual_source_choice_user # Fallback an toàn
+
     # --- Get Visual Presentation Mode  ---
     final_timing_mode_user_choice = prompt_for_visual_timing_mode() # Lấy lựa chọn gốc của người dùng
 
@@ -688,9 +709,9 @@ def main():
     images = image_generator.generate_images_for_script(
         script=script,
         audio_files_info=audio_files,
-        visual_source=visual_source_final, # DÙNG LỰA CHỌN CUỐI CÙNG
-        visual_timing_mode=final_timing_mode, # DÙNG TIMING MODE CUỐI CÙNG
-        style_strategy=selected_style_strategy # TẠM THỜI TRUYỀN VÀO
+        visual_source=visual_source_final,
+        visual_timing_mode=final_timing_mode,
+        style_strategy=selected_style_strategy
     )
 
     if not images:

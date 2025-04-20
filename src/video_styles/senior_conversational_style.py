@@ -1,6 +1,8 @@
 # src/video_styles/senior_conversational_style.py
 
-import json # Cần json để format layout trong prompt
+import json
+from typing import List, Optional, Union
+
 from .base_style import BaseVideoStyle
 from config.settings import MAX_ARTICLE_LENGTH
 from src.utils import safe_truncate # Import hàm tiện ích nếu cần
@@ -63,9 +65,29 @@ class SeniorConversationalStyle(BaseVideoStyle):
             # Thêm các tham số khác nếu cần
         }
 
+    # --- EP BUỘC TIMING MODE LÀ FIXED ---
     def should_override_timing_mode(self) -> bool:
         """Senior Conversational nên dùng timing mode cố định."""
         return True
+
+    def get_preferred_timing_mode(self) -> str:
+        """Timing mode ưu tiên cho Senior Conversational."""
+        return "overall_theme_fixed_duration"
+    # --- KẾT THÚC ÉP BUỘC TIMING MODE ---
+
+    # --- ÉP BUỘC VISUAL SOURCE LÀ VIDEO_ONLY ---
+    def should_override_visual_source(self) -> bool:
+        """
+        Style này bắt buộc sử dụng nguồn visual cụ thể (chỉ video).
+        """
+        return True
+
+    def get_visual_source_preference(self) -> str:
+        """
+        Trả về nguồn visual bắt buộc cho style này.
+        """
+        return "video_only"
+    # --- KẾT THÚC ÉP BUỘC VISUAL SOURCE ---
 
     def hook_instructions(self) -> str:
         """
@@ -128,10 +150,6 @@ class SeniorConversationalStyle(BaseVideoStyle):
 
         return instructions.strip()
 
-    def get_preferred_timing_mode(self) -> str:
-        """Timing mode ưu tiên cho Senior Conversational."""
-        return "overall_theme_fixed_duration"
-
     def generate_ai_image_prompt(self, scene_content: str, video_title: str) -> str:
         """
         Tạo prompt *cụ thể và an toàn* cho Imagen cho style Senior Conversational.
@@ -189,6 +207,35 @@ class SeniorConversationalStyle(BaseVideoStyle):
 
         return gpt_prompt.strip()
 
+    def get_video_search_query_override(self) -> Union[str, List[str], None]:
+        """
+        Cung cấp truy vấn tìm kiếm video cố định cho style này.
+        Trả về một chuỗi, một danh sách chuỗi, hoặc None.
+        """
+        logger.info("SeniorConversationalStyle: Providing fixed 'natural/calm' video search queries.")
+        # --- LỰA CHỌN 1: Trả về một danh sách các query ---
+        # Ưu điểm: Tăng khả năng tìm thấy video đa dạng hơn một chút.
+        # ImageGenerator sẽ cần chọn ngẫu nhiên từ list này.
+        return [
+            "peaceful nature landscape",
+            "calm serene outdoors",
+            "gentle flowing water relaxing",
+            "quiet garden pathway",
+            "warm sunlight park bench",
+            "slow motion nature close up",
+            "tranquil forest scene",
+            "relaxing countryside view"
+        ]
+
+        # --- LỰA CHỌN 2: Trả về một chuỗi query duy nhất ---
+        # Ưu điểm: Đơn giản hơn cho ImageGenerator xử lý.
+        # Nhược điểm: Kết quả tìm kiếm có thể ít đa dạng hơn.
+        # return "peaceful nature calm landscape serene relaxing"
+
+        # --- LỰA CHỌN 3: Trả về None (Không dùng cho yêu cầu này) ---
+        # return None # Nếu không muốn override query
+    # --- KẾT THÚC THÊM PHƯƠNG THỨC MỚI ---
+    
     # Các phương thức khác như get_voice_settings, get_video_editing_settings
     # có thể được ghi đè ở đây nếu Senior Conversational cần cấu hình đặc biệt.
     # Ví dụ:

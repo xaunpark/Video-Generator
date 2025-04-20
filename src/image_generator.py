@@ -509,15 +509,36 @@ class ImageGenerator:
                     # Nếu fallback, chỉ nên gọi API 1 vài lần
                     num_api_calls_to_make = min(num_api_calls_to_make, 3)
 
+                    # --- THÊM LOGIC KIỂM TRA VÀ OVERRIDE SEARCH QUERY Ở ĐÂY ---
+                    final_theme_queries = theme_queries # Mặc định dùng query đã tạo
+                    if visual_source == "video_only" and style_strategy:
+                        try:
+                            query_override = style_strategy.get_video_search_query_override()
+                            if query_override:
+                                if isinstance(query_override, list) and query_override:
+                                        final_theme_queries = query_override # Thay thế hoàn toàn bằng list từ strategy
+                                        logger.info(f"Theme Mode: Overriding theme queries with fixed list from strategy ({len(final_theme_queries)} queries).")
+                                elif isinstance(query_override, str) and query_override.strip():
+                                        final_theme_queries = [query_override.strip()] # Dùng string cố định làm query duy nhất
+                                        logger.info(f"Theme Mode: Overriding theme queries with fixed string from strategy: '{final_theme_queries[0]}'")
+                                # Nếu override không hợp lệ thì vẫn dùng theme_queries gốc
+                        except AttributeError:
+                            logger.debug("Theme Mode: Strategy does not support query override.")
+                        except Exception as e:
+                            logger.error(f"Theme Mode: Error getting query override: {e}. Using generated queries.")
+                    # --- KẾT THÚC LOGIC OVERRIDE ---
+
                 # --- 4. Mở rộng danh sách query để thực hiện API calls ---
                 queries_to_process = []
-                if theme_queries:
-                    # Lặp lại các query gốc để đạt đủ num_api_calls_to_make
-                    repeat_factor = math.ceil(num_api_calls_to_make / len(theme_queries)) if len(theme_queries) > 0 else 1
-                    queries_to_process = (theme_queries * repeat_factor)[:num_api_calls_to_make]
+                if final_theme_queries:
+                    # Lặp lại các query (cố định hoặc gốc) để đạt đủ num_api_calls_to_make
+                    query_source_list = final_theme_queries # Danh sách nguồn để lặp lại
+                    # Nếu chỉ có 1 query cố định, số lần lặp là num_api_calls_to_make
+                    repeat_factor = math.ceil(num_api_calls_to_make / len(query_source_list)) if len(query_source_list) > 0 else 1
+                    queries_to_process = (query_source_list * repeat_factor)[:num_api_calls_to_make]
                     random.shuffle(queries_to_process) # Xáo trộn
 
-                logger.info(f"Prepared {len(queries_to_process)} queries for limited API calls.")
+                logger.info(f"Prepared {len(queries_to_process)} queries for limited API calls (using {'overridden' if final_theme_queries != theme_queries else 'generated/fallback'} theme queries).")
 
                 # --- 5. Thực hiện API calls giới hạn và thu thập visual duy nhất ---
                 unique_visuals_collected = [] # Lưu các visual item duy nhất
@@ -616,26 +637,76 @@ class ImageGenerator:
                 # --- KẾT THÚC LOGIC MỚI CHO CHẾ ĐỘ THEME ---
 
             elif visual_timing_mode == 'sync_to_audio':
-            # --- CHẾ ĐỘ SYNC TO AUDIO (LOGIC CŨ) ---
+            # --- CHẾ ĐỘ SYNC TO AUDIO ---
                 logger.info("Generating visuals synced to audio segments (per scene/shot)...")
+                scenes_in_script = script.get('scenes', [])
                 total_scenes = len(script.get('scenes', []))
+
+                if total_scenes == 0:
+                    logger.warning("No scenes found in script for sync_to_audio mode.")
+                    return
+                else:
+                    # --- XÁC ĐỊNH DANH SÁCH QUERY CHO TẤT CẢ SCENES (ĐẶT RA NGOÀI VÒNG LẶP) ---
+                    queries_for_scenes = [""] * total_scenes # Khởi tạo list rỗng với đúng kích thước
+                    query_source_type = "openai_generated" # Mặc định
+
+                    fixed_query_override = None
+                    if visual_source == "video_only" and style_strategy: # Chỉ override nếu là video_only và có strategy
+                        try:
+                            query_override_value = style_strategy.get_video_search_query_override()
+                            if query_override_value:
+                                if isinstance(query_override_value, list) and query_override_value:
+                                    fixed_query_override = query_override_value # Lưu lại list
+                                    query_source_type = "strategy_list_override"
+                                    logger.info(f"Sync Mode: Using overridden video query list ({len(fixed_query_override)} queries) from strategy.")
+                                elif isinstance(query_override_value, str) and query_override_value.strip():
+                                    fixed_query_override = [query_override_value.strip()] # Chuyển string thành list 1 phần tử
+                                    query_source_type = "strategy_string_override"
+                                    logger.info(f"Sync Mode: Using overridden fixed video query string from strategy: '{fixed_query_override[0]}'")
+                                else:
+                                    logger.warning("Sync Mode: Strategy query override is invalid. Falling back to OpenAI query generation.")
+                                    query_source_type = "openai_generated" # Reset về default
+                        except AttributeError:
+                            logger.debug("Sync Mode: Strategy does not support query override. Will generate queries.")
+                            query_source_type = "openai_generated" # Reset về default
+                        except Exception as e:
+                            logger.error(f"Sync Mode: Error getting query override: {e}. Will generate queries.", exc_info=True)
+                            query_source_type = "openai_generated" # Reset về default
+
+                # Tạo danh sách query cuối cùng
+                if query_source_type.startswith("strategy"):
+                    from itertools import cycle
+                    query_cycler = cycle(fixed_query_override) # Tạo bộ lặp vòng
+                    queries_for_scenes = [next(query_cycler) for _ in range(total_scenes)]
+                    logger.info(f"Applied overridden queries cyclically to all {total_scenes} scenes.")
+                else: # Tạo query bằng OpenAI cho từng scene
+                     logger.info(f"Generating individual OpenAI queries for {total_scenes} scenes...")
+                     for i, scene in enumerate(scenes_in_script):
+                          scene_content = scene.get('content', '').strip()
+                          if scene_content:
+                               queries_for_scenes[i] = self._create_search_query_with_openai(scene_content, script['title'])
+                          else:
+                               queries_for_scenes[i] = "abstract background" # Fallback cho scene rỗng
+                     logger.info("Finished generating OpenAI queries.")
+                # --- KẾT THÚC XÁC ĐỊNH DANH SÁCH QUERY ---
+
                 for i, scene in enumerate(script.get('scenes', [])):
                     scene_number = scene.get('number', 'unknown')
                     scene_content = scene.get('content', '').strip()
-                    search_query_used = "N/A"
+
+                    # Lấy query đã chuẩn bị cho scene này
+                    search_query = queries_for_scenes[i]
+                    search_query_used = search_query # Lưu lại để log và thêm vào media_item
+
                     media_path_for_scene = None
                     media_type_for_scene = "unknown"
                     target_duration_for_finder = default_clip_target_duration # Dùng duration mặc định
 
-                    logger.info(f"--- Processing Scene (Shot) {scene_number}/{total_scenes} ---")
+                    logger.info(f"--- Processing Scene (Shot) {scene_number}/{total_scenes} (Query: '{search_query}') ---")
 
-                    if not scene_content:
-                        logger.warning(f"Scene {scene_number}: Empty content. Skipping media generation.")
+                    if not scene_content and not search_query: # Bỏ qua nếu cả content và query đều rỗng
+                        logger.warning(f"Scene {scene_number}: Empty content and query. Skipping media generation.")
                         continue
-
-                    # Tạo search query (giữ nguyên)
-                    search_query = self._create_search_query_with_openai(scene_content, script['title'])
-                    search_query_used = search_query
 
                     # --- Tên file cơ sở (Đổi tên để rõ ràng hơn) ---
                     scene_base_filename = f"scene_{scene_number}"
@@ -650,6 +721,7 @@ class ImageGenerator:
                     # ==============================================================
 
                     use_image_fallback_chain = False # Biến điều khiển chuỗi fallback ảnh
+                    
                     # --- OPTION 1: Primary Source is SEARCH ---
                     if visual_source == "search":
                         logger.debug(f"Scene {scene_number}: Using SEARCH as primary source.")
@@ -832,7 +904,7 @@ class ImageGenerator:
 
 
                     # --- OPTION 3: Primary Source is VIDEO ONLY ---
-                    elif visual_source == "video_only": # <-- THÊM NHÁNH NÀY
+                    elif visual_source == "video_only":
                         logger.debug(f"Scene {scene_number}: Using VIDEO ONLY as source.")
                         media_path_for_scene = None
                         media_type_for_scene = "unknown" # Bắt đầu là unknown
@@ -882,7 +954,7 @@ class ImageGenerator:
                         if not media_path_for_scene:
                             logger.info(f"Scene {scene_number}: Attempting Local Video Fallback...")
                             try:
-                                local_fallback_path = self._use_local_fallback_video(search_query) # Hàm mới
+                                local_fallback_path = self._use_local_fallback_video(search_query)
                                 if local_fallback_path:
                                     # QUAN TRỌNG: Local fallback chỉ trả về đường dẫn gốc.
                                     # Cần copy hoặc xử lý nó sau này. Tạm thời chỉ gán đường dẫn.
