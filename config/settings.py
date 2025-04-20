@@ -101,7 +101,7 @@ VIDEO_SETTINGS = {
     # Ví dụ: 0.8 nghĩa là video phải dài ít nhất 80% audio duration
     "slow_motion_min_ratio": 0.8,
     # ------------------------------------
-    "enable_subtitles": True,  # Bật/tắt phụ đề
+    "enable_subtitles": False,  # Bật/tắt phụ đề
     "subtitle_font_size": 24,    # Kích thước font chữ phụ đề
     "subtitle_whisper_model": "base",    # Mô hình whisper: tiny, base, small, medium, large
     "subtitle_language": "auto",           # Ngôn ngữ phụ đề (auto để tự động phát hiện)
@@ -178,3 +178,15 @@ VOICE_SETTINGS = {
 
 # Đường dẫn đến ffprobe (tương tự ffmpeg)
 FFPROBE_EXECUTABLE_PATH = "ffprobe" # Mặc định tìm trong PATH
+
+# Tỷ lệ đề xuất ảnh/video dự phòng (nên >1.0)
+RECOMMENDED_MEDIA_RATIO = 1.1
+
+# Giới hạn chiều dài bài viết (token limit friendly) - Giới hạn độ dài nội dung bài báo để tiết kiệm token
+MAX_ARTICLE_LENGTH = 10000
+
+# Logger format
+LOGGER_FORMAT = "%(asctime)s | %(levelname)s | %(message)s"
+
+# Threshold detect Vietnamese
+VI_CHAR_RATIO_THRESHOLD = 0.3

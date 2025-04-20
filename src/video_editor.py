@@ -19,6 +19,8 @@ import whisper
 import itertools
 from itertools import groupby
 
+from src.video_styles.base_style import BaseVideoStyle
+
 from src.logger_config import setup_logger
 logger = setup_logger(__name__)
 
@@ -104,131 +106,6 @@ class VideoEditor:
         except Exception as e:
             logger.warning(f"Unexpected error getting duration via ffprobe for {os.path.basename(media_path)}: {e}")
             return None
-
-    def concatenate_videos_with_ffmpeg(self, video_files, output_path, add_transitions=False):
-        """Sử dụng FFmpeg concat demuxer hoặc filter để ghép nối video, có thể thêm hiệu ứng chuyển cảnh."""
-        valid_video_files = [f for f in video_files if f and os.path.exists(f) and os.path.getsize(f) > 1000]
-        if not valid_video_files:
-            logger.error("No valid video files provided for concatenation.")
-            return None
-        num_files = len(valid_video_files)
-        logger.info(f"Concatenating {num_files} video files using FFmpeg -> {os.path.basename(output_path)}")
-
-        # --- Lựa chọn phương pháp ghép nối ---
-        # Concat demuxer (nhanh, copy codec) hoạt động tốt nhất khi các file có cùng codec, độ phân giải, fps.
-        # Filter complex (xfade) linh hoạt hơn, cho phép transition, nhưng yêu cầu re-encode.
-
-        use_complex_filter = add_transitions and self.enable_transitions and num_files > 1
-
-        if use_complex_filter:
-            logger.info("Using FFmpeg complex filter (xfade) for concatenation with transitions.")
-            # --- Xây dựng lệnh FFmpeg với filter xfade ---
-            input_args = []
-            filter_complex_parts = []
-            last_video_stream = ""
-
-            for i, video_file in enumerate(valid_video_files):
-                input_args.extend(["-i", video_file])
-                # Giả sử mỗi video có 1 stream video (v:0) và có thể có 1 stream audio (a:0)
-                # Xử lý luồng video
-                filter_complex_parts.append(f"[{i}:v]scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=pix_fmts=yuv420p[v{i}];")
-
-                if i > 0: # Áp dụng xfade từ clip thứ 2 trở đi
-                    offset = sum(self._get_video_duration_ffprobe(f) or 0 for f in valid_video_files[:i]) - self.transition_duration
-                    offset = max(0, offset) # Đảm bảo offset không âm
-                    # Ví dụ dùng fade, có thể đổi thành loại transition khác được xfade hỗ trợ
-                    transition_type = random.choice(VIDEO_SETTINGS.get("transition_types", ["fade"])) # Chọn ngẫu nhiên nếu có nhiều loại
-                    filter_complex_parts.append(f"[{last_video_stream}][v{i}]xfade=transition={transition_type}:duration={self.transition_duration}:offset={offset:.4f}[cv{i}];")
-                    last_video_stream = f"cv{i}"
-                else:
-                    last_video_stream = f"v{i}" # Stream đầu tiên
-
-            filter_complex_str = "".join(filter_complex_parts)
-
-            # Lệnh FFmpeg cuối cùng
-            cmd = [
-                self.ffmpeg_path, "-y",
-                *input_args, # Thêm tất cả các input "-i file"
-                "-filter_complex", filter_complex_str.rstrip(';'), # Chuỗi filter
-                "-map", f"[{last_video_stream}]", # Map video output cuối cùng
-                "-c:v", "libx264", "-preset", "medium", "-crf", "22", # Re-encode video
-                "-pix_fmt", "yuv420p", "-r", str(self.fps),
-                "-an", # Tạm thời không xử lý audio ở đây, sẽ thêm sau
-                output_path
-            ]
-
-        else: # Dùng concat demuxer (nhanh hơn, không transition)
-            logger.info("Using FFmpeg concat demuxer for concatenation (no transitions).")
-            list_file_path = None
-            try:
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
-                    list_file_path = f.name
-                    for video_file in valid_video_files:
-                        abs_path = os.path.abspath(video_file).replace('\\', '/')
-                        f.write(f"file '{abs_path}'\n")
-
-                cmd = [
-                    self.ffmpeg_path, "-y",
-                    "-f", "concat", "-safe", "0", "-i", list_file_path,
-                    "-c", "copy", # Copy codec nếu có thể
-                    output_path
-                ]
-            except Exception as list_err:
-                 logger.error(f"Error creating concat list file: {list_err}")
-                 if list_file_path and os.path.exists(list_file_path): os.remove(list_file_path)
-                 return None
-            finally:
-                 # Đảm bảo file list được xóa ngay cả khi FFmpeg lỗi sau đó
-                 # Việc xóa ở finally của hàm concatenate đảm bảo nó được xóa
-                 pass # Sẽ xóa ở finally của hàm gọi
-
-
-        # --- Thực thi lệnh FFmpeg ---
-        try:
-            logger.debug(f"Running FFmpeg command: {' '.join(cmd)}")
-            process = subprocess.run(cmd, capture_output=True, text=True, check=False, encoding='utf-8')
-
-            if process.returncode != 0:
-                logger.error(f"FFmpeg concatenation failed! Return code: {process.returncode}")
-                logger.error(f"FFmpeg stderr: {process.stderr.strip()}")
-                # Nếu dùng demuxer và lỗi, thử lại với re-encoding (chỉ khi không phải filter)
-                if not use_complex_filter:
-                    logger.info("Concat demuxer failed (maybe different codecs). Retrying with re-encoding...")
-                    cmd_reencode = [
-                        self.ffmpeg_path, "-y",
-                        "-f", "concat", "-safe", "0", "-i", list_file_path,
-                        "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p",
-                        "-c:a", "aac", "-b:a", "192k", # Cần encode cả audio nếu có
-                        "-r", str(self.fps),
-                        output_path
-                    ]
-                    process = subprocess.run(cmd_reencode, capture_output=True, text=True, check=False, encoding='utf-8')
-                    if process.returncode != 0:
-                        logger.error(f"FFmpeg concatenation re-encoding also failed! Stderr: {process.stderr.strip()}")
-                        return None # Thất bại hoàn toàn
-                else: # Lỗi với complex filter
-                     return None
-
-            # Kiểm tra file output
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-                logger.info(f"FFmpeg concatenation successful: {os.path.basename(output_path)}")
-                return output_path
-            else:
-                logger.error("Concatenated file is missing or invalid after FFmpeg.")
-                return None
-
-        except Exception as e:
-            logger.error(f"Error during FFmpeg concatenation process: {e}", exc_info=True)
-            return None
-        finally:
-            # Dọn dẹp file list tạm nếu dùng demuxer
-            if not use_complex_filter and list_file_path and os.path.exists(list_file_path):
-                try:
-                    os.remove(list_file_path)
-                    logger.debug(f"Removed temporary concat list file: {list_file_path}")
-                except OSError as e:
-                    logger.warning(f"Could not remove concat list file {list_file_path}: {e}")
-
 
     def generate_subtitles_with_whisper(self, audio_path, output_srt_path, model="base", language="en"):
         """Sử dụng Whisper (ưu tiên faster-whisper) để tạo SRT."""
@@ -339,13 +216,14 @@ class VideoEditor:
             logger.error(f"Error creating black clip: {e}")
             return None
 
-    def _create_temp_visual_clip(self, media_item, target_duration, output_path):
+    def _create_temp_visual_clip(self, media_item, target_duration, output_path,
+                             animation_type="random", animation_intensity=0.03):
         """Tạo clip video TẠM THỜI (không audio) từ ảnh/video với thời lượng mục tiêu."""
         media_path = media_item['path']
         media_type = media_item.get('type', 'image')
         scene_num = media_item.get('number', 'theme')
 
-        logger.debug(f"Creating temp visual clip (Incremental Effect) for Scene/Item '{scene_num}' ({media_type}, Target: {target_duration:.2f}s) -> {os.path.basename(output_path)}")
+        logger.debug(f"Creating temp visual clip (Anim: {animation_type}, Intens: {animation_intensity}) for Item '{scene_num}' ({media_type}, Target: {target_duration:.2f}s) -> {os.path.basename(output_path)}")
 
         try:
             if not os.path.exists(media_path):
@@ -357,22 +235,25 @@ class VideoEditor:
             cmd = []
             if media_type == 'image':
                 vf_filter_parts = []
-                animation_type_setting = VIDEO_SETTINGS.get("image_animation", "none")
+                # animation_type_setting = VIDEO_SETTINGS.get("image_animation", "none")
                 # Intensity sẽ dùng để điều chỉnh tốc độ thay đổi
-                intensity = VIDEO_SETTINGS.get("animation_intensity", 0.03)
+                # intensity = VIDEO_SETTINGS.get("animation_intensity", 0.03)
                 # Tính tổng số frame DỰA TRÊN target_duration và fps của project
+
+                # Sử dụng giá trị từ tham số:
+                final_animation_type_to_apply = animation_type
+                intensity_to_apply = animation_intensity
+
                 total_frames = max(1, int(round(target_duration * self.fps)))
 
-                # Xác định kiểu animation cuối cùng (sau khi xử lý "random")
-                final_animation_type = animation_type_setting
-                if animation_type_setting == "random":
+                # Xử lý 'random'
+                if final_animation_type_to_apply == "random":
                     choices = ["zoom_in", "zoom_out"]
-                    if target_duration > 1.5:
-                        choices.extend(["pan_left", "pan_right"])
-                    final_animation_type = random.choice(choices)
-                    logger.debug(f"  Randomly selected animation: {final_animation_type}")
+                    if target_duration > 1.5: choices.extend(["pan_left", "pan_right"])
+                    final_animation_type_to_apply = random.choice(choices)
+                    logger.debug(f"  Randomly selected animation: {final_animation_type_to_apply}")
 
-                apply_animation = final_animation_type != "none" and target_duration > 0.5
+                apply_animation = final_animation_type_to_apply != "none" and target_duration > 0.5
 
                 # --- LUÔN SCALE LỚN TRƯỚC ---
                 # Scale đủ lớn để pan không bị lộ viền đen
@@ -383,7 +264,7 @@ class VideoEditor:
                 # -----------------------------
 
                 if apply_animation:
-                    logger.debug(f"  Applying {final_animation_type} effect.")
+                    logger.debug(f"  Applying {final_animation_type_to_apply} effect.")
                     # --- Zoom/Pan Expressions (Logic tăng/giảm dần) ---
                     zoompan_filter = ""
                     zoompan_duration_frames = total_frames # Filter chạy đủ số frame
@@ -394,7 +275,7 @@ class VideoEditor:
                     # Cần giá trị rất nhỏ cho mỗi frame
                     base_speed = 0.0015 # Giá trị cơ bản (tương tự lệnh test của bạn)
                     # Điều chỉnh tốc độ dựa trên intensity (ví dụ: intensity 0.03 ~ tốc độ gốc)
-                    adjusted_speed = base_speed * (intensity / 0.03)
+                    adjusted_speed = base_speed * (intensity_to_apply / 0.03) # Tăng tốc độ nếu intensity lớn hơn 0.03
                     # Điều chỉnh tốc độ dựa trên thời lượng (clip dài hơn -> chậm hơn để không quá nhanh)
                     # Dùng căn bậc hai để giảm ảnh hưởng của duration
                     duration_factor = math.sqrt(max(1, target_duration) / 5.0) # Chuẩn hóa quanh 5s
@@ -402,20 +283,20 @@ class VideoEditor:
 
                     logger.debug(f"  Calculated increment per frame: {final_increment:.6f}")
 
-                    if final_animation_type == "zoom_in":
+                    if final_animation_type_to_apply == "zoom_in":
                         zoom_expr = f"'min(1.5, zoom+{final_increment})'" # Giới hạn max zoom
                         x_expr = "'iw/2-(iw/zoom/2)'"
                         y_expr = "'ih/2-(ih/zoom/2)'"
                         zoompan_filter = f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:d={zoompan_duration_frames}:s={zoompan_output_size}:fps={zoompan_output_fps}"
 
-                    elif final_animation_type == "zoom_out":
+                    elif final_animation_type_to_apply == "zoom_out":
                         start_zoom_out = 1.5 # Bắt đầu zoom out từ 1.5x
                         zoom_expr = f"'if(lte(zoom,1.0),{start_zoom_out},max(1.001,zoom-{final_increment}))'" # Giới hạn min zoom
                         x_expr = "'iw/2-(iw/zoom/2)'"
                         y_expr = "'ih/2-(ih/zoom/2)'"
                         zoompan_filter = f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:d={zoompan_duration_frames}:s={zoompan_output_size}:fps={zoompan_output_fps}"
 
-                    elif final_animation_type in ["pan_left", "pan_right"]:
+                    elif final_animation_type_to_apply in ["pan_left", "pan_right"]:
                          # Giữ zoom cố định hơi lớn hơn 1
                         fixed_zoom_pan = f"'1.1'" # Ví dụ zoom cố định 1.1x khi pan
                         # Tốc độ pan ngang (pixels/frame) - cần lớn hơn zoom
@@ -425,7 +306,7 @@ class VideoEditor:
                         x_start = f"(iw*{fixed_zoom_pan}-{self.width})/2"
                         y_start = f"(ih*{fixed_zoom_pan}-{self.height})/2"
 
-                        if final_animation_type == "pan_left": # Di chuyển x sang trái (x giảm dần)
+                        if final_animation_type_to_apply == "pan_left": # Di chuyển x sang trái (x giảm dần)
                              # Bắt đầu ở giữa, di chuyển về 0
                              x_expr = f"'max(0, x - {pan_increment})'"
                         else: # pan_right - Di chuyển x sang phải (x tăng dần)
@@ -444,7 +325,7 @@ class VideoEditor:
                     # --- Kết thúc Zoom/Pan Expressions ---
                 else:
                     # Ảnh tĩnh: Chỉ pad sau scale
-                    logger.debug(f"  Using static image (Setting: {animation_type_setting}, Duration: {target_duration:.2f}s)")
+                    logger.debug(f"  Using static image (Final Type: {final_animation_type_to_apply}, Duration: {target_duration:.2f}s)")
                     vf_filter_parts.append(f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2")
 
                 # --- Luôn thêm setsar và format cuối cùng ---
@@ -517,9 +398,19 @@ class VideoEditor:
 
 
     # === HÀM CREATE_VIDEO CHÍNH (ĐÃ TỔNG HỢP) ===
-    def create_video(self, script, media_items, audio_files_info, output_path, background_music_path=None, visual_timing_mode="sync_to_audio"):
+    def create_video(self, script, media_items, audio_files_info, output_path,
+                 background_music_path=None, visual_timing_mode="sync_to_audio",
+                 style_strategy: BaseVideoStyle = None):
         project_id = script.get('project_id', f"temp_{time.strftime('%Y%m%d_%H%M%S')}")
         logger.info(f"=== Starting Video Creation for Project: {project_id} (Timing: {visual_timing_mode}) ===")
+
+        # --- Lấy style tone để log (tùy chọn) ---
+        style_tone = "Unknown"
+        if style_strategy:
+            try: style_tone = style_strategy.get_style_config().get('tone', 'Unknown')
+            except: pass
+        # --------------------------------------
+
         temp_project_dir = os.path.join(self.temp_video_dir, project_id)
         os.makedirs(temp_project_dir, exist_ok=True)
         final_output_video_path = output_path # Lưu đường dẫn cuối cùng mong muốn
@@ -530,10 +421,63 @@ class VideoEditor:
             if not script or not media_items or not audio_files_info:
                 raise ValueError("Missing required input: script, media_items, or audio_files_info.")
             language = script.get('language', 'en')
-            script_mode = script.get("script_mode", "basic") # Dùng cho chapter card
-            is_advanced_mode = (script_mode == "advanced") # Chế độ nâng cao cho chapter cards
-            logger.info(f"Script Mode: {script_mode}")
+            script_mode = script.get("script_mode", "basic")
+            is_advanced_mode = (script_mode == "advanced")
 
+            # --- LẤY OVERRIDES TỪ STRATEGY ---
+            editing_overrides = {}
+            if style_strategy:
+                try:
+                    editing_overrides = style_strategy.get_video_editing_settings()
+                    if editing_overrides:
+                        logger.info(f"Applying video editing overrides from strategy: {editing_overrides}")
+                except AttributeError:
+                    logger.warning("Style strategy does not have get_video_editing_settings method.")
+                except Exception as e:
+                    logger.error(f"Error getting video editing settings from strategy: {e}")
+            # ---------------------------------
+
+            # --- Lấy giá trị cuối cùng (Override hoặc Default) ---
+            # Ví dụ cho transition duration:
+            final_transition_duration = editing_overrides.get(
+                'transition_duration', # Key trong dict override
+                VIDEO_SETTINGS.get("transition_duration", 0.5) # Default từ VIDEO_SETTINGS
+            )
+            final_enable_transitions = final_transition_duration > 0 and VIDEO_SETTINGS.get("enable_transitions", True)
+
+            # Ví dụ cho animation intensity:
+            final_animation_intensity = editing_overrides.get(
+                'animation_intensity',
+                VIDEO_SETTINGS.get("animation_intensity", 0.03)
+            )
+
+            # Ví dụ cho loại transition (nếu strategy cung cấp list hoặc string):
+            default_transition_types = VIDEO_SETTINGS.get("transition_types", ["fade"])
+            final_transition_types = editing_overrides.get('transition_types', default_transition_types)
+            # Đảm bảo final_transition_types luôn là list
+            if isinstance(final_transition_types, str):
+                final_transition_types = [final_transition_types]
+            elif not isinstance(final_transition_types, list):
+                final_transition_types = default_transition_types
+
+            # Lấy các setting khác tương tự...
+            final_image_animation_type = editing_overrides.get(
+                'image_animation',
+                VIDEO_SETTINGS.get("image_animation", "random")
+            )
+            final_music_volume = editing_overrides.get(
+                'music_volume',
+                VIDEO_SETTINGS.get("music_volume", 0.1)
+            )
+            final_enable_subtitles = editing_overrides.get(
+                'enable_subtitles', # Strategy có thể tắt phụ đề cho style cụ thể
+                VIDEO_SETTINGS.get("enable_subtitles", True)
+            )
+            # Lấy các cài đặt subtitle khác nếu cần override (font, size, model...)
+
+            logger.debug(f"Final Editing Settings Applied: Transitions={final_enable_transitions}, TransDuration={final_transition_duration}, AnimIntensity={final_animation_intensity}, AnimType={final_image_animation_type}, MusicVol={final_music_volume}, Subtitles={final_enable_subtitles}")
+            # --- Kết thúc lấy cài đặt cuối cùng ---
+            
             # *** Khởi tạo ImageGenerator nếu là advanced mode ***
             image_gen = None
             if is_advanced_mode:
@@ -691,7 +635,14 @@ class VideoEditor:
                             for idx, item_timed in enumerate(timed_visual_items):
                                 scene_clip_path = os.path.join(temp_project_dir, f"unit{unit_number}_vis{item_timed.get('number', idx)}_temp.mp4")
                                 temp_files_to_clean.append(scene_clip_path) # Dọn dẹp clip nhỏ này
-                                created_clip = self._create_temp_visual_clip(item_timed, item_timed['calculated_duration'], scene_clip_path)
+                                created_clip = self._create_temp_visual_clip(
+                                    item_timed,
+                                    item_timed['calculated_duration'],
+                                    scene_clip_path,
+                                    # Truyền các giá trị đã quyết định
+                                    animation_type=final_image_animation_type,
+                                    animation_intensity=final_animation_intensity
+                                )
                                 if created_clip: unit_scene_clips.append(created_clip)
 
                             # 3. Ghép nối các clip visual của unit
@@ -765,7 +716,13 @@ class VideoEditor:
                             clip_temp_path = os.path.join(temp_project_dir, f"theme_vis_{idx+1}_final.mp4")
                             temp_files_to_clean.append(clip_temp_path) # Thêm vào dọn dẹp
                             # Tạo clip với duration cố định
-                            created_clip = self._create_temp_visual_clip(visual_item, fixed_duration, clip_temp_path)
+                            created_clip = self._create_temp_visual_clip(
+                                visual_item,
+                                fixed_duration, # Duration cố định cho theme mode
+                                clip_temp_path,
+                                animation_type=final_image_animation_type,
+                                animation_intensity=final_animation_intensity
+                            )
                             if created_clip:
                                 temp_visual_segments.append(created_clip)
                             else:
@@ -790,12 +747,14 @@ class VideoEditor:
                     main_visual_track_path = os.path.join(temp_project_dir, f"main_visual_track_{project_id}.mp4")
                     # Quyết định có thêm transition khi ghép main visual track hay không
                     # Chỉ thêm nếu là theme mode VÀ được bật trong settings
-                    add_main_vis_transitions = (visual_timing_mode == 'overall_theme_fixed_duration' and self.enable_transitions)
+                    add_main_vis_transitions = (visual_timing_mode == 'overall_theme_fixed_duration' and final_enable_transitions)
                     logger.info(f"Concatenating main visual track ({len(temp_visual_segments)} segments, Transitions: {add_main_vis_transitions})...")
                     main_visual_track_path = self.concatenate_videos_with_ffmpeg(
                         temp_visual_segments,
                         main_visual_track_path,
-                        add_transitions=add_main_vis_transitions # Truyền cờ transition
+                        add_transitions=add_main_vis_transitions,
+                        transition_duration=final_transition_duration, # Truyền duration cuối cùng
+                        transition_types=final_transition_types # Truyền loại transition cuối cùng
                     )
                     if not main_visual_track_path:
                         logger.error("Failed to concatenate main visual track.")
@@ -1411,7 +1370,7 @@ class VideoEditor:
 
         return timed_items # Trả về danh sách item với duration đã tính
 
-    def concatenate_videos_with_ffmpeg(self, video_files, output_path, add_transitions=False):
+    def concatenate_videos_with_ffmpeg(self, video_files, output_path, add_transitions=False, transition_duration=0.5, transition_types=None):
         """Sử dụng FFmpeg để ghép nối các file video trực tiếp."""
         # Kiểm tra đầu vào
         if not video_files:
@@ -1426,6 +1385,11 @@ class VideoEditor:
         
         logger.info(f"Ghép nối {len(valid_video_files)} file video với FFmpeg")
         
+        if transition_types is None:
+            transition_types = ["fade"] # Default nếu không được cung cấp
+
+        use_complex_filter = add_transitions and transition_duration > 0 and len(valid_video_files) > 1
+
         # In thông tin chi tiết từng file để debug
         for idx, file_path in enumerate(valid_video_files):
             try:

@@ -14,6 +14,8 @@ from io import BytesIO
 import subprocess
 from moviepy import VideoFileClip
 
+from src.video_styles.base_style import BaseVideoStyle
+
 from src.logger_config import setup_logger
 logger = setup_logger(__name__)
 
@@ -225,7 +227,7 @@ class ImageGenerator:
     
 
     # --- Tìm/Tạo 1 Visual (KHÔNG có text fallback) PHỤC VỤ overall_theme_fixed_duration ---
-    def _find_or_generate_single_visual(self, query, visual_source, project_media_dir, base_filename):
+    def _find_or_generate_single_visual(self, query, visual_source, project_media_dir, base_filename, style_strategy: BaseVideoStyle = None):
         """
         Thực hiện một lượt tìm kiếm (online -> local) hoặc tạo AI cho một query.
         Không bao gồm fallback tạo ảnh text.
@@ -285,12 +287,18 @@ class ImageGenerator:
             # --- Luồng Tạo AI ---
             if not self.gemini_client:
                 logger.warning(f"  Cannot generate AI image for '{query}': Gemini client not available.")
+            elif not style_strategy: # THÊM KIỂM TRA
+                logger.warning(f"  Cannot generate AI image for '{query}': Style Strategy not provided.")                
             else:
                 try:
                     logger.debug(f"  Trying AI generation for '{query}'...")
                     # Tạo prompt AI từ query (có thể cần hàm helper riêng nếu muốn phức tạp hơn)
                     # Tạm thời coi query là content để tạo prompt đơn giản
-                    imagen_prompt = self._create_imagen_prompt(query, query, "informative")
+                    imagen_prompt = self._create_imagen_prompt(
+                        scene_content=query, # Dùng query làm content cho theme
+                        video_title=query,   # Dùng query làm title cho theme
+                        style_strategy=style_strategy # TRUYỀN STRATEGY
+                    )
                     if imagen_prompt:
                         img_bytes = self._generate_image_with_imagen(imagen_prompt)
                         if img_bytes:
@@ -371,7 +379,7 @@ class ImageGenerator:
         # Trả về kết quả (có thể là None, None nếu thất bại)
         return visual_path, visual_type
 
-    def generate_images_for_script(self, script, audio_files_info=None, visual_source="search", visual_timing_mode="sync_to_audio"):
+    def generate_images_for_script(self, script, audio_files_info=None, visual_source="search", visual_timing_mode="sync_to_audio", style_strategy: BaseVideoStyle = None):
             """Tạo ảnh hoặc video cho tất cả các scenes (shots) trong script.
             Không còn dựa vào audio_files_info để xác định target duration cho từng shot ở bước này.
 
@@ -401,6 +409,14 @@ class ImageGenerator:
             logger.info(f"Bắt đầu tạo media cho script: '{script['title']}' (Project: {project_id}) trong thư mục: {project_media_dir}")
             logger.info(f"Visual Source Method: '{visual_source}', Visual Timing Mode: '{visual_timing_mode}'")
 
+            # Lấy tên style từ strategy để log nếu cần
+            style_tone = "Unknown"
+            if style_strategy:
+                try:
+                    style_tone = style_strategy.get_style_config().get('tone', 'Unknown')
+                except Exception: pass
+            logger.info(f"Style Tone: '{style_tone}', Visual Source: '{visual_source}', Timing Mode: '{visual_timing_mode}'")
+            
             # --- 1. Xử lý intro card ---
             try:
                 intro_image_path = self._create_title_card(script['title'], script.get('source', ''), project_media_dir)
@@ -515,7 +531,8 @@ class ImageGenerator:
                         query=current_query,
                         visual_source=visual_source,
                         project_media_dir=project_media_dir,
-                        base_filename=f"theme_limited_{idx + 1}"
+                        base_filename=f"theme_limited_{idx + 1}",
+                        style_strategy=style_strategy # TRUYỀN VÀO ĐÂY
                     )
 
                     if visual_path:
@@ -699,7 +716,11 @@ class ImageGenerator:
                                 if self.gemini_client: # and VIDEO_SETTINGS.get("enable_ai_image_fallback", True):
                                     logger.info(f"Scene {scene_number}: Trying AI Image Generation Fallback (Imagen)...")
                                     try:
-                                        imagen_prompt = self._create_imagen_prompt(scene_content, script['title'], script.get('style', 'informative'))
+                                        imagen_prompt = self._create_imagen_prompt(
+                                            scene_content=scene_content,
+                                            video_title=script['title'],
+                                            style_strategy=style_strategy # TRUYỀN STRATEGY
+                                        )
                                         if imagen_prompt:
                                             generated_image_bytes = self._generate_image_with_imagen(prompt=imagen_prompt)
                                             if generated_image_bytes:
@@ -738,10 +759,16 @@ class ImageGenerator:
                         if not self.gemini_client:
                             logger.error(f"Scene {scene_number}: Cannot use AI primary source - Gemini client not initialized.")
                             # ---> NHẢY XUỐNG PHẦN FALLBACK NGAY LẬP TỨC
+                        elif not style_strategy: # THÊM KIỂM TRA NÀY
+                            logger.error(f"Scene {scene_number}: Cannot generate AI image - Style Strategy not provided.")                            
                         else:
                             try:
                                 # 1. Tạo Imagen prompt
-                                imagen_prompt = self._create_imagen_prompt(scene_content, script['title'], script.get('style', 'informative'))
+                                imagen_prompt = self._create_imagen_prompt(
+                                    scene_content=scene_content,
+                                    video_title=script['title'],
+                                    style_strategy=style_strategy # TRUYỀN STRATEGY
+                                )
                                 search_query_used = f"Imagen Prompt: {imagen_prompt[:100]}..." if imagen_prompt else "N/A"
 
                                 if imagen_prompt:
@@ -1002,117 +1029,69 @@ class ImageGenerator:
 
             return media_items
 
-    def _create_imagen_prompt(self, scene_content, video_title, script_style):
+    def _create_imagen_prompt(self, scene_content, video_title, style_strategy: BaseVideoStyle):
         """Uses GEmini Imagen to generate a descriptive Imagen prompt from scene content."""
-        if not self.openai_api_key:
-            logger.warning("OpenAI API key missing. Cannot generate Imagen prompts.")
-            # Fallback đơn giản
-            fallback_prefix = "Illustration" if script_style == 'senior_conversational' else "News photo"
-            return f"{fallback_prefix} for a segment about: {scene_content[:100]}"
 
-        # Get style description
-        style_desc = cfg.style_configs.get(script_style, {}).get('tone', 'neutral')
+        # --- KIỂM TRA ---
+        if not style_strategy:
+            logger.error("Cannot create Imagen prompt: Style Strategy is missing.")
+            # Trả về fallback đơn giản nhất
+            return f"Simple image representing: {scene_content[:80]}"
+        # --------------------
 
-        # --- Xây dựng Prompt Điều kiện ---
-        gpt_prompt = "" # Khởi tạo prompt rỗng
+        if not self.openai_api_key: # API Key để *gọi LLM tạo prompt Imagen*
+            logger.warning("OpenAI API key missing for Imagen prompt generation assist. Using basic fallback.")
+            # Fallback đơn giản nếu không có key gọi LLM
+            return f"Image depicting: {scene_content[:100]}"
 
-        if script_style == "senior_conversational":
-            logger.debug(f"Creating Imagen prompt with specific 'senior_conversational' instructions.")
-            gpt_prompt = f"""
-            You are an expert prompt engineer for text-to-image AI like Google Imagen 3.
-            Your task is to convert the following scene content into a detailed, effective, and **appropriate** prompt for a video targeting **seniors (60+)**.
-
-            Consider these factors:
-            - Overall video title: "{video_title}"
-            - **Target Audience:** Seniors (60+)
-            - **Desired Video Style/Tone:** Warm, conversational, motivational, relatable, positive, gentle ({style_desc}).
-            - Specific content of this scene: "{scene_content}"
-
-            **IMPORTANT SAFETY GUIDELINES (Apply Strictly):**
-            - NEVER generate prompts depicting children, minors, or family scenes with minors. Replace with adults (18+) or symbolic objects.
-            - Avoid depicting vulnerable populations or overly sensitive scenarios (e.g., severe illness depiction).
-            - Avoid depicting realistic human faces in close detail. Focus on general appearance, emotion, and setting.
-            - Ensure generated images are positive, respectful, and avoid ageist stereotypes.
-
-            **Instructions for the Imagen Prompt (Senior Conversational Style):**
-            1.  **Visual Style:** Aim for **photorealistic** but with **warm, soft lighting** and **calm, pleasing compositions**. Avoid harsh contrasts or overly busy scenes.
-            2.  **Subject Focus:** If depicting people, show **older adults (appearing 60+)** engaged in relatable activities (e.g., gentle exercise like walking/yoga, gardening, reading, talking with friends/family (adults only), enjoying nature, hobbies). Depict them with **positive expressions** (smiles, contentment, thoughtfulness). Show diversity in older adults respectfully.
-            3.  **Emotion:** Emphasize feelings of **warmth, comfort, connection, peace, gentle motivation, or contentment**.
-            4.  **Setting:** Prefer **cozy, comfortable, or serene settings** (e.g., comfortable homes, sunny gardens, parks, cafes, libraries).
-            5.  **Clarity & Simplicity:** Keep the visual concept clear and easy to understand. Avoid overly abstract or complex metaphors unless the scene content specifically calls for it.
-            6.  **Incorporate Tone:** Use descriptive words reflecting the warm, motivational, and conversational tone (e.g., "gentle sunlight," "cozy armchair," "warm smile," "peaceful garden," "supportive friend").
-            7.  **Length & Detail:** Be descriptive but concise (under 150 words). Mention key subjects, actions, setting, mood.
-            8.  **Safety First:** Strictly adhere to the safety guidelines above. Rewrite scene concepts if needed (e.g., instead of "grandchildren playing," use "photo albums on a table" or "knitting supplies").
-
-            Output ONLY the generated Imagen prompt, with no extra explanations or quotation marks.
-            """
-        else:
-            # --- Prompt gốc cho các style khác ---
-            logger.debug(f"Creating Imagen prompt with standard instructions for style '{script_style}'.")
-            gpt_prompt = f"""
-            You are an expert prompt engineer for text-to-image AI like Google Imagen 3.
-            Your task is to convert the following news video scene content into a detailed and effective prompt.
-
-            Consider these factors:
-            - The overall video title: "{video_title}"
-            - The desired video style/tone: "{style_desc}"
-            - The specific content of this scene: "{scene_content}"
-
-            IMPORTANT SAFETY GUIDELINES:
-            - NEVER generate prompts depicting children, minors, or family scenes with minors
-            - Replace any children in the scene with young adults (18+) or symbolic objects/animals
-            - Avoid depicting vulnerable populations or sensitive scenarios
-            - Avoid depicting realistic human faces in close detail
-
-            Instructions for the Imagen Prompt:
-            1. Be descriptive and specific about visual elements. Mention subjects, actions, setting, mood, and composition.
-            2. Incorporate the video's style/tone (e.g., if 'dramatic', use words like 'intense lighting', 'dynamic angle').
-            3. Aim for a prompt length suitable for Imagen (under 150 words).
-            4. USE ONLY PHOTOREALISTIC IMAGE TYPE
-            5. AVOID mentioning text unless the scene is explicitly about text/code.
-            6. If the original scene involves children, REWRITE it with adults or symbolic representations.
-            7. For concepts involving children's activities, represent them with symbolic objects instead (e.g., "a toy left on a colorful playground" rather than "a child playing").
-
-            Output ONLY the generated Imagen prompt, with no extra explanations or quotation marks.
-            """
-
+        # --- LẤY PROMPT HƯỚNG DẪN TỪ STRATEGY ---
         try:
+            # Gọi phương thức của strategy để lấy hướng dẫn tạo prompt Imagen
+            gpt_prompt_instructions = style_strategy.generate_ai_image_prompt(scene_content, video_title)
+            logger.debug(f"Received AI image prompt instructions from strategy.")
+        except Exception as strat_err:
+            logger.error(f"Error getting AI image prompt instructions from strategy: {strat_err}. Using basic fallback.")
+            return f"Image depicting: {scene_content[:100]}"
+        # ---------------------------------------
+
+        # --- Gọi LLM để tạo prompt Imagen cuối cùng ---
+        try:
+            # Sử dụng gpt_prompt_instructions lấy từ strategy làm user content
             url = f"{self.openai_base_url}/chat/completions"
             payload = {
-                "model": "gpt-4o-mini", # Hoặc model khác
+                "model": "gpt-4o-mini", # Hoặc model bạn muốn dùng cho việc này
                 "messages": [
-                    # System prompt có thể giống nhau hoặc tùy chỉnh nhẹ
-                    {"role": "system", "content": "You generate effective and safe Imagen prompts for video scenes based on context and style."},
-                    {"role": "user", "content": gpt_prompt} # Sử dụng prompt đã chọn
+                    {"role": "system", "content": "You are an AI assistant that generates text prompts for image generation models like Imagen, based on provided instructions."},
+                    {"role": "user", "content": gpt_prompt_instructions} # DÙNG HƯỚNG DẪN TỪ STRATEGY
                 ],
-                "temperature": 0.6,
-                #"max_tokens": 150
+                "temperature": 0.6, # Có thể điều chỉnh
+                #"max_tokens": 150 # Giới hạn độ dài prompt Imagen cuối cùng
             }
-            logger.debug(f"Generating Imagen prompt for style '{script_style}': '{scene_content[:80]}...'")
-            response = requests.post(url, headers=self.openai_headers, json=payload, timeout=25)
+            logger.debug(f"Generating final Imagen prompt via LLM: '{scene_content[:80]}...'")
+            response = requests.post(url, headers=self.openai_headers, json=payload, timeout=30) # Tăng nhẹ timeout
             response.raise_for_status()
             data = response.json()
 
             if data.get('choices'):
-                imagen_prompt = data['choices'][0]['message']['content'].strip().replace('"', '')
-                logger.info(f"Generated Imagen prompt (Style: {script_style}): '{imagen_prompt[:100]}...'")
-                return imagen_prompt
+                # Trích xuất prompt Imagen cuối cùng do LLM tạo ra
+                final_imagen_prompt = data['choices'][0]['message']['content'].strip().replace('"', '')
+                # Kiểm tra prompt hợp lệ (không rỗng)
+                if not final_imagen_prompt:
+                    logger.error("LLM returned an empty Imagen prompt.")
+                    return f"Image depicting: {scene_content[:100]}" # Fallback
+
+                logger.info(f"Generated final Imagen prompt via LLM: '{final_imagen_prompt[:100]}...'")
+                return final_imagen_prompt # Trả về prompt cuối cùng cho Imagen
             else:
-                logger.error(f"OpenAI response for Imagen prompt generation (Style: {script_style}) is invalid.")
-                # Fallback dựa trên style
-                fallback_prefix = "Warm illustration" if script_style == 'senior_conversational' else "Simple illustration"
-                return f"{fallback_prefix}: {scene_content[:100]}"
+                logger.error(f"LLM response for final Imagen prompt generation is invalid.")
+                return f"Image depicting: {scene_content[:100]}" # Fallback
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"OpenAI API error generating Imagen prompt (Style: {script_style}): {e}")
-             # Fallback dựa trên style
-            fallback_prefix = "Image of" if script_style == 'senior_conversational' else "News photo"
-            return f"{fallback_prefix}: {scene_content[:100]}"
+            logger.error(f"LLM API error generating final Imagen prompt: {e}")
+            return f"Image depicting: {scene_content[:100]}" # Fallback
         except Exception as e:
-            logger.error(f"Unexpected error generating Imagen prompt (Style: {script_style}): {e}", exc_info=True)
-             # Fallback dựa trên style
-            fallback_prefix = "Illustration" if script_style == 'senior_conversational' else "Illustration"
-            return f"{fallback_prefix}: {scene_content[:100]}"
+            logger.error(f"Unexpected error generating final Imagen prompt: {e}", exc_info=True)
+            return f"Image depicting: {scene_content[:100]}" # Fallback
 
     def _generate_image_with_imagen(self, prompt):
         """Generates an image using the Google Imagen API via Google AI Client."""

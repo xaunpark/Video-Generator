@@ -20,6 +20,19 @@ from src.video_editor import VideoEditor
 from config.settings import VIDEO_SETTINGS
 from src.youtube_uploader import YouTubeUploader
 
+# --- THÊM CÁC IMPORT STRATEGY NÀY ---
+from src.video_styles.base_style import BaseVideoStyle # Có thể cần nếu dùng type hint
+from src.video_styles.informative_style import InformativeStyle
+#from src.video_styles.conversational_style import ConversationalStyle
+#from src.video_styles.dramatic_style import DramaticStyle
+#from src.video_styles.controversial_style import ControversialStyle
+#from src.video_styles.emotional_style import EmotionalStyle
+#from src.video_styles.funny_style import FunnyStyle
+#from src.video_styles.motivational_style import MotivationalStyle
+from src.video_styles.senior_conversational_style import SeniorConversationalStyle
+# Thêm import cho tất cả các style bạn đã tạo file .py
+# ------------------------------------
+
 from config.credentials import (
     OPENAI_API_KEY,
     YOUTUBE_CLIENT_SECRETS_FILE_PATH,
@@ -48,6 +61,19 @@ logger = logging.getLogger(__name__)
 # Force always using controversial style (Keep this if needed, but user choice will override if False)
 FORCE_CONTROVERSIAL_STYLE = False
 
+# --- THAY THẾ KHỐI style_map CŨ (NẾU CÓ) BẰNG DICTIONARY NÀY ---
+AVAILABLE_STYLES = {
+    "informative": InformativeStyle(),
+    #"conversational": ConversationalStyle(),
+    #"dramatic": DramaticStyle(),
+    #"controversial": ControversialStyle(),
+    #"emotional": EmotionalStyle(),
+    #"funny": FunnyStyle(),
+    #"motivational": MotivationalStyle(),
+    "senior_conversational": SeniorConversationalStyle(),
+}
+# -------------------------------------------------------------
+
 # --- Add youtube-transcript-api import ---
 try:
     from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
@@ -56,40 +82,59 @@ except ImportError:
     logger.warning("youtube-transcript-api not installed. YouTube transcript feature disabled.")
 # -----------------------------------------
 
-# --- Helper function to prompt for Style ---
-def prompt_for_style():
-    """Prompts the user to select a video style and returns the chosen style key."""
+# --- Helper function to prompt for Style (NEW VERSION USING STRATEGIES) ---
+def prompt_for_style_strategy() -> BaseVideoStyle: # Thêm type hint trả về
+    """Prompts the user to select a video style and returns the chosen strategy object."""
     print("\nSelect a style for the video:")
-    print("1. Informative - Professional, neutral tone")
-    print("2. Conversational - Friendly, approachable tone")
-    print("3. Dramatic - Emphasizes impact, strong emotions")
-    print("4. Controversial - Highlights opposing views, provokes debate")
-    print("5. Emotional - Focuses on feelings and empathy")
-    print("6. Funny - Humorous or lighthearted approach")
-    print("7. Motivational - Inspiring and encouraging")
-    print("8. Senior Conversational - Warm, friendly, detailed for seniors (60+)")
+    style_keys = list(AVAILABLE_STYLES.keys()) # Lấy danh sách key ['informative', ...]
 
-    style_choice = ""
-    valid_choices = ["1", "2", "3", "4", "5", "6", "7", "8"]
-    while style_choice not in valid_choices:
-        prompt_text = f"Enter style choice ({','.join(valid_choices)}, default is 1): "
-        style_choice = input(prompt_text).strip()
-        if not style_choice:
-            style_choice = "1"  # Default to Informative
+    # Hiển thị menu lựa chọn
+    for i, key in enumerate(style_keys):
+        strategy_instance = AVAILABLE_STYLES[key]
+        try:
+            # Lấy mô tả từ strategy (nếu có) hoặc tạo mô tả mặc định
+            desc = strategy_instance.get_description()
+        except AttributeError: # Nếu hàm get_description chưa có trong base/instance
+            desc = key.replace('_', ' ').capitalize() # Tạo mô tả mặc định
+        print(f"{i+1}. {desc}")
 
-    style_map = {
-        "1": "informative", "2": "conversational", "3": "dramatic",
-        "4": "controversial", "5": "emotional", "6": "funny", "7": "motivational",
-        "8": "senior_conversational"
-    }
-    chosen_style = style_map.get(style_choice, "informative")
+    # Xác định lựa chọn mặc định (ví dụ: Informative là đầu tiên)
+    default_choice_index = 0 # Index của style mặc định trong list
+    default_style_key = style_keys[default_choice_index]
+    default_desc = AVAILABLE_STYLES[default_style_key].get_description()
 
-    # Apply FORCE_CONTROVERSIAL_STYLE if set
-    if FORCE_CONTROVERSIAL_STYLE:
+    choice_idx = -1
+    # Vòng lặp lấy input hợp lệ
+    while choice_idx < 0 or choice_idx >= len(style_keys):
+        try:
+            prompt_text = f"Enter style choice (1-{len(style_keys)}, default is {default_choice_index + 1} '{default_desc}'): "
+            choice_str = input(prompt_text).strip()
+            if not choice_str:
+                choice_idx = default_choice_index # Chọn mặc định nếu không nhập
+            else:
+                chosen_num = int(choice_str)
+                if 1 <= chosen_num <= len(style_keys):
+                    choice_idx = chosen_num - 1
+                else:
+                    print("Invalid choice number.")
+                    choice_idx = -1 # Đặt lại để lặp
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+            choice_idx = -1 # Đặt lại để lặp
+
+    selected_key = style_keys[choice_idx]
+    selected_strategy = AVAILABLE_STYLES[selected_key]
+
+    logger.info(f"Selected Style Strategy: {selected_key}")
+
+    # --- Áp dụng FORCE_CONTROVERSIAL_STYLE nếu cần ---
+    # (Logic này vẫn có thể giữ lại nếu bạn muốn ép buộc style)
+    if FORCE_CONTROVERSIAL_STYLE and "controversial" in AVAILABLE_STYLES:
         logger.warning("FORCE_CONTROVERSIAL_STYLE is enabled. Overriding user choice.")
-        return "controversial"
+        return AVAILABLE_STYLES["controversial"] # Trả về strategy Controversial
     else:
-        return chosen_style
+        return selected_strategy # Trả về đối tượng strategy đã chọn
+# --- END of prompt_for_style_strategy ---
 
 # --- Helper function to prompt for Visual Source ---
 def prompt_for_visual_source():
@@ -328,9 +373,11 @@ def main():
             print("Please install it: pip install youtube-transcript-api")
             choice = "" # Ask again
 
-    # --- Get Style ---
+    # --- Get Style Strategy ---
     print("\n--- Step 2: Select Video Style ---")
-    selected_style = prompt_for_style()
+    selected_style_strategy = prompt_for_style_strategy()
+    # Lấy tên style nếu cần cho logging hoặc mục đích khác
+    selected_style_name = next((key for key, strategy in AVAILABLE_STYLES.items() if strategy == selected_style_strategy), "unknown")
 
     # --- Get Video Mode ---
     print("\n--- Step 1.5: Select Video Mode ---")
@@ -346,28 +393,26 @@ def main():
             video_mode_choice = "1" # Default to Basic
 
     # --- THÊM LOGIC GHI ĐÈ Ở ĐÂY ---
-    if selected_style == "senior_conversational":
+    # --- LOGIC HIỆN TẠI CỦA BẠN CHO SENIOR (GIỮ LẠI HOẶC DI CHUYỂN VÀO STRATEGY) ---
+    # Bạn có thể giữ logic này HOẶC tốt hơn là di chuyển nó vào lớp SeniorConversationalStyle
+    # bằng cách implement should_override_video_mode và get_preferred_video_mode.
+    # TẠM THỜI GIỮ LẠI ĐỂ ĐẢM BẢO CHẠY ĐÚNG NHƯ TRƯỚC:
+    if selected_style_name == "senior_conversational":
         if video_mode_choice == "1": # Nếu người dùng chọn Basic
-            logger.warning(f"Style '{selected_style}' selected, but user chose Basic mode. Overriding to Advanced mode for optimal results.")
-            print(f"\nINFO: Style '{selected_style}' requires Advanced (Chapters) mode. Automatically selecting Advanced mode.")
-        else: # Nếu người dùng đã chọn Advanced hoặc không nhập gì (dùng default)
-            logger.info(f"Style '{selected_style}' selected. Using Advanced (Chapters) mode.")
-            print(f"\nINFO: Using Advanced (Chapters) mode for '{selected_style}' style.")
+            logger.warning(f"Style '{selected_style_name}' selected, but user chose Basic mode. Overriding to Advanced mode for optimal results.")
+            print(f"\nINFO: Style '{selected_style_name}' requires Advanced (Chapters) mode. Automatically selecting Advanced mode.")
         video_mode = "advanced" # Buộc sử dụng Advanced mode
-    # --- KẾT THÚC LOGIC GHI ĐÈ ---
-    else: # Nếu không phải style senior, xử lý lựa chọn của người dùng như cũ
-        if video_mode_choice == "2":
-            video_mode = "advanced"
-            # --- Add Guidance ---
-            logger.info("Selected Advanced (Chapters) mode.")
-            print("INFO: Advanced mode works best with 'Keyword/Topic' input or longer 'Article URL'/'YouTube Transcript' inputs.")
-            # Optional: Add warning if incompatible source was chosen earlier (e.g., RSS)
-            if choice == "1":
-                logger.warning("Advanced (Chapters) mode might not be ideal for short news items typically found in RSS feeds.")
-        else:
-            video_mode = "basic"
-            logger.info("Selected Basic (Standard) mode.")
-        # --- End Get Video Mode ---
+    else: # Các style khác
+        video_mode = "advanced" if video_mode_choice == "2" else "basic"
+
+    if video_mode == "advanced":
+        logger.info("Selected Advanced (Chapters) mode.")
+        print("INFO: Advanced mode works best with 'Keyword/Topic' input or longer 'Article URL'/'YouTube Transcript' inputs.")
+        if choice == "1":
+            logger.warning("Advanced (Chapters) mode might not be ideal for short news items typically found in RSS feeds.")
+    else:
+        logger.info("Selected Basic (Standard) mode.")
+    # --- Kết thúc xử lý Video Mode ---
 
     # --- Get specific details based on choice ---
     article_url = None
@@ -401,7 +446,7 @@ def main():
             preferred_langs_yt = [lang.strip() for lang in lang_pref_input.split(',') if lang.strip()]
     
     # --- KIỂM TRA VÀ THÔNG BÁO NẾU CHỌN STYLE SENIOR ---
-    if selected_style == "senior_conversational":
+    if selected_style_name == "senior_conversational":
         logger.info("Selected 'Senior Conversational' style. Expecting advanced mode and potentially longer generation times.")
         # Có thể thêm gợi ý/cảnh báo cho người dùng ở đây
         print("INFO: 'Senior Conversational' style aims for longer, detailed content and works best in 'Advanced (Chapters)' mode.")
@@ -411,7 +456,9 @@ def main():
 
     # --- Get Visual Source ---
     print("\n--- Step 3: Select Visual Source ---")
-    visual_source_choice = prompt_for_visual_source()
+    visual_source_choice_user = prompt_for_visual_source()
+
+    visual_source_final = visual_source_choice_user
 
     # --- Get Visual Presentation Mode  ---
     final_timing_mode_user_choice = prompt_for_visual_timing_mode() # Lấy lựa chọn gốc của người dùng
@@ -419,16 +466,15 @@ def main():
     # --- THÊM LOGIC GHI ĐÈ Ở ĐÂY ---
     final_timing_mode = final_timing_mode_user_choice # Gán giá trị ban đầu
 
-    if selected_style == "senior_conversational":
-        if final_timing_mode_user_choice != 'overall_theme_fixed_duration':
-            logger.warning(f"Style '{selected_style}' selected. Overriding visual timing mode to 'overall_theme_fixed_duration' for better results with long-form content.")
-            print("INFO: 'Overall theme visuals' mode automatically selected for the 'Senior Conversational' style.")
-            final_timing_mode = 'overall_theme_fixed_duration' # Buộc sử dụng theme mode
-        else:
-            logger.info(f"Style '{selected_style}' selected. Using 'overall_theme_fixed_duration' timing mode.")
-            # final_timing_mode đã đúng, không cần làm gì thêm
-    # --- KẾT THÚC LOGIC GHI ĐÈ ---
-    # Biến final_timing_mode bây giờ chứa giá trị cuối cùng (có thể đã bị ghi đè)
+    # --- KIỂM TRA OVERRIDE TIMING MODE TỪ STRATEGY ---
+    final_timing_mode = final_timing_mode_user_choice # Mặc định
+    if selected_style_strategy.should_override_timing_mode():
+        preferred_timing_mode = selected_style_strategy.get_preferred_timing_mode()
+        if final_timing_mode_user_choice != preferred_timing_mode:
+            logger.warning(f"Style '{selected_style_name}' forces visual timing mode to '{preferred_timing_mode}'. Overriding user choice.")
+            print(f"INFO: Visual timing mode automatically set to '{preferred_timing_mode}' for this style.")
+        final_timing_mode = preferred_timing_mode
+    # --- KẾT THÚC OVERRIDE TIMING MODE ---
 
     logger.info("--- User Input Gathering Complete ---")
     logger.info(f"Selected LLM: {selected_llm}")
@@ -438,8 +484,8 @@ def main():
     if article_url: logger.info(f"Article URL: {article_url}")
     if keyword: logger.info(f"Keyword: {keyword}, Language: {language}")
     if youtube_url: logger.info(f"YouTube URL: {youtube_url}, Pref Langs: {preferred_langs_yt}")
-    logger.info(f"Selected Style: {selected_style}")
-    logger.info(f"Visual Source: {visual_source_choice}")
+    logger.info(f"Selected Style: {selected_style_name}")
+    logger.info(f"Visual Source: {visual_source_final}")
     logger.info(f"Visual Presentation Mode: {final_timing_mode}")
     print("-" * 50)
 
@@ -480,7 +526,12 @@ def main():
 
         language = selected_article.get('language', 'en') # Detect language from selected article
         logger.info(f"Article language: {language}. Generating script...")
-        script = script_generator.generate_script(selected_article, style=selected_style, language=language, video_mode=video_mode)
+        script = script_generator.generate_script(
+            article=selected_article,
+            style_strategy=selected_style_strategy,
+            language=language,
+            video_mode=video_mode
+        )
 
         # Save fetched articles (optional)
         try:
@@ -499,10 +550,10 @@ def main():
         language = selected_article.get('language', 'en')
         logger.info(f"Article language: {language}. Generating script...")
         script = script_generator.generate_script(
-            selected_article,
-            style=selected_style,
+            article=selected_article, # Sửa tên tham số
+            style_strategy=selected_style_strategy, # TRUYỀN STRATEGY OBJECT
             language=language,
-            video_mode=video_mode # Existing parameters
+            video_mode=video_mode
         )
 
         # Save article info (optional)
@@ -519,10 +570,10 @@ def main():
         logger.info(f"Processing Choice 3: Generating script from keyword '{keyword}'...")
         # Language was already set during input gathering
         script = script_generator.generate_script_from_keyword(
-            keyword,
-            selected_style,
-            language,
-            video_mode=video_mode # Existing parameters
+            keyword=keyword,
+            style_strategy=selected_style_strategy, # TRUYỀN STRATEGY OBJECT
+            language=language,
+            video_mode=video_mode
         )
 
 
@@ -553,11 +604,11 @@ def main():
 
         logger.info(f"Generating script from transcript (Output Lang: {language})...")
         script = script_generator.generate_script_from_text(
-             input_text=transcript_text,
-             style=selected_style,
-             language=language,
-             context_hint=f"YouTube transcript ({youtube_url})",
-             video_mode=video_mode # Existing parameters
+            input_text=transcript_text,
+            style_strategy=selected_style_strategy, # TRUYỀN STRATEGY OBJECT
+            language=language,
+            context_hint=f"YouTube transcript ({youtube_url})",
+            video_mode=video_mode
         )
 
     # --- Validation and Script Saving ---
@@ -579,8 +630,8 @@ def main():
     print("\n" + "="*50)
     print(f"Script Generated: {script.get('title', 'N/A')}")
     print(f"Input Source Type: {choice}")
-    print(f"Chosen Style: {selected_style}")
-    print(f"Chosen Visual Source: {visual_source_choice}")
+    print(f"Chosen Style: {selected_style_name}")
+    print(f"Chosen Visual Source: {visual_source_final}")
     print(f"Output Language: {language}")
     print(f"Number of Shots (Scenes): {len(script.get('scenes', []))}")
     print(f"Number of Speech Units: {len(script.get('speech_units', []))}")
@@ -592,6 +643,37 @@ def main():
     voice_generator = VoiceGenerator()
     # Optionally set voice/model based on language/style here if needed
     # voice_generator.set_voice(...)
+
+    # Lấy cài đặt giọng nói ưu tiên từ strategy đã chọn
+    try:
+        voice_settings_override = selected_style_strategy.get_voice_settings()
+        if voice_settings_override: # Chỉ áp dụng nếu strategy trả về dict không rỗng
+            logger.info(f"Applying voice setting overrides from style '{selected_style_name}': {voice_settings_override}")
+
+            # Áp dụng các override cụ thể
+            new_voice = voice_settings_override.get('voice')
+            if new_voice:
+                voice_generator.set_voice(new_voice) # Gọi hàm set_voice
+
+            new_model = voice_settings_override.get('model')
+            if new_model:
+                voice_generator.set_model(new_model) # Gọi hàm set_model
+
+            # Thêm các cài đặt khác nếu VoiceGenerator hỗ trợ và strategy cung cấp
+            # Ví dụ:
+            # if 'stability' in voice_settings_override:
+            #     voice_generator.set_stability(voice_settings_override['stability'])
+            # if 'similarity_boost' in voice_settings_override:
+            #     voice_generator.set_similarity_boost(voice_settings_override['similarity_boost'])
+        else:
+            logger.info(f"Style '{selected_style_name}' uses default voice settings.")
+    except AttributeError:
+        logger.warning(f"Selected style strategy object does not have get_voice_settings method. Using default voice.")
+    except Exception as e:
+        logger.error(f"Error applying voice settings from strategy: {e}", exc_info=True)
+        logger.warning("Proceeding with default voice settings due to error.")
+    # --- KẾT THÚC KHỐI CODE THÊM ---
+    
     audio_files = voice_generator.generate_audio_for_script(script)
     if not audio_files:
         logger.error("Audio generation failed. Cannot proceed.")
@@ -601,14 +683,15 @@ def main():
     # --- Image/Video Generation ---
     logger.info("Generating visuals...")
     image_generator = ImageGenerator()
-    logger.info(f"Requesting images (Source: {visual_source_choice}, Presentation: {final_timing_mode})...")
+    logger.info(f"Requesting images (Source: {visual_source_final}, Presentation: {final_timing_mode})...")
 
     images = image_generator.generate_images_for_script(
         script=script,
         audio_files_info=audio_files,
-        visual_source=visual_source_choice,
-        visual_timing_mode=final_timing_mode # Truyền mode timing
-    )    
+        visual_source=visual_source_final, # DÙNG LỰA CHỌN CUỐI CÙNG
+        visual_timing_mode=final_timing_mode, # DÙNG TIMING MODE CUỐI CÙNG
+        style_strategy=selected_style_strategy # TẠM THỜI TRUYỀN VÀO
+    )
 
     if not images:
         logger.error("Visual generation failed.")
@@ -648,8 +731,10 @@ def main():
     project_info = {
         "title": script['title'],
         "timestamp": timestamp,
-        "style": selected_style,
-        "visual_source": visual_source_choice,
+        "style": selected_style_name,
+        "visual_source": visual_source_final,
+        "visual_timing_mode": final_timing_mode,
+        "video_mode": video_mode,
         "article": article_info,
         "script": {
             "path": script_path,
@@ -673,6 +758,15 @@ def main():
         logger.info("Starting final video editing process...")
         video_editor = VideoEditor()
 
+        # --- THAY ĐỔI Ở ĐÂY: Lấy video settings từ strategy ---
+        video_edit_overrides = selected_style_strategy.get_video_editing_settings()
+        if video_edit_overrides:
+            logger.info(f"Applying video editing overrides from style '{selected_style_name}': {video_edit_overrides}")
+            # Truyền các override này vào hàm create_video nếu VideoEditor hỗ trợ
+            # hoặc cập nhật các thuộc tính của video_editor nếu có
+            # Ví dụ: video_editor.transition_type = video_edit_overrides.get('transition_type', video_editor.transition_type)
+        # --- KẾT THÚC THAY ĐỔI ---
+        
         # Find background music
         background_music = None
         music_dir = os.path.join(ASSETS_DIR, "music")
@@ -698,11 +792,14 @@ def main():
         logger.info(f"Creating video (Presentation Mode: {final_timing_mode})...")
         final_video_path = video_editor.create_video(
             script=script,
-            media_items=images, # Danh sách visual items (scene-specific hoặc theme-based)
+            media_items=images,
             audio_files_info=audio_files,
             output_path=output_path_final,
             background_music_path=background_music,
-            visual_timing_mode=final_timing_mode # Truyền mode timing
+            visual_timing_mode=final_timing_mode, # DÙNG TIMING MODE CUỐI CÙNG
+            # Thêm các override vào đây nếu cần:
+            # transition_override=video_edit_overrides.get('transition_type'),
+            # animation_intensity_override=video_edit_overrides.get('animation_intensity')
         )
 
         # --- Final Output ---
@@ -710,7 +807,7 @@ def main():
         if final_video_path and os.path.exists(final_video_path):
             print(f"Video successfully created!")
             print(f"Title: {script['title']}")
-            print(f"Style: {selected_style}")
+            print(f"Style: {selected_style_name}")
             if FORCE_CONTROVERSIAL_STYLE and choice in ["1", "2"]: # Chỉ áp dụng khi FORCE bật
                 print("(FORCED CONTROVERSIAL MODE ENABLED)")
             print(f"Output: {final_video_path}")
@@ -757,7 +854,7 @@ def main():
                         yt_description = f"Video generated based on: {article_info.get('source', 'N/A')}\n"
                         if article_info.get('url'):
                             yt_description += f"Source URL: {article_info.get('url')}\n"
-                        yt_description += f"Style: {selected_style}\nMode: {video_mode}"
+                        yt_description += f"Style: {selected_style_name}\nMode: {video_mode}"
                         # Thêm phần tóm tắt ngắn nếu có (ví dụ từ script hoặc article)
                         # yt_summary = script.get('summary', article_info.get('summary', ''))
                         # if yt_summary: yt_description += f"\n\nSummary:\n{yt_summary[:500]}" # Giới hạn độ dài summary
@@ -765,7 +862,7 @@ def main():
                         # Lấy tags và các cài đặt khác từ settings
                         yt_tags = YOUTUBE_SETTINGS.get("tags", [])
                         # Thêm style và keyword (nếu có) vào tags
-                        if selected_style: yt_tags.append(selected_style)
+                        if selected_style_name: yt_tags.append(selected_style_name)
                         if keyword: yt_tags.extend(keyword.split()) # Thêm từng từ của keyword
                         yt_tags = list(set(yt_tags)) # Loại bỏ trùng lặp
 

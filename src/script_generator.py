@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from src.logger_config import setup_logger
 logger = setup_logger(__name__)
 
+from src.video_styles.base_style import BaseVideoStyle
+
 from src import project_config as cfg
 from src.utils import detect_language, safe_truncate, generate_project_id
 
@@ -292,181 +294,7 @@ class ScriptGenerator:
         # If JSON wasn't required, or if native JSON mode was used, return content directly
         return content    
 
-    # --- Bước 1 - Tạo Script với Câu Hoàn Chỉnh ---
-    def _generate_initial_script_sentences(self, style_config, article=None, keyword=None, transcript_text=None, language="en", context_hint=None):
-        """Tạo script ban đầu với các scene là các câu hoàn chỉnh, bám sát context."""
-        logger.info("Step 1: Generating initial script with full sentences...")
-
-        prompt_step1 = "Create a script based on the provided context.\n"
-        prompt_step1 += f"Style Requirements: Tone should be {style_config['tone']}. Follow these instructions:\n"
-        for instr in style_config['instructions']:
-            prompt_step1 += f"- {instr}\n"
-
-        input_type = "Unknown"
-        if article:
-            input_type = "Article"
-            prompt_step1 += f"\nCONTEXT TYPE: News Article\n"
-            prompt_step1 += f"ARTICLE TITLE: {article.get('title', '')}\n"
-            prompt_step1 += f"ARTICLE CONTENT:\n{safe_truncate(article.get('content', ''))}\n"
-            # --- PROMPT ĐÃ ĐƯỢC TỐI ƯU CHO ARTICLE ---
-            prompt_step1 += """
-            Rewrite the provided news article into an engaging, emotionally compelling, and potentially viral video narration script (voice-over/subtitle).
-
-            CRITICAL REQUIREMENTS:
-
-            1. Write ONLY narrative sentences suitable for voice-over or subtitles. Do NOT include visual direction phrases (like "scene opens," "camera zooms," "hình ảnh," "cảnh quay," etc.).
-
-            2. Clearly structure the script into 3 distinct parts:
-            - **Hook (Opening)**: Start immediately with the MOST intriguing, surprising, or shocking detail from the article to instantly captivate viewers. Consider using a provocative question or a cliffhanger to trigger curiosity.
-            - **Story (Middle)**: Clearly narrate the key events, dramatic developments, or interesting facts from the article, organized logically and vividly to build suspense and maintain engagement.
-            - **Conclusion (Ending)**: End with a powerful, memorable statement or an open-ended question that encourages viewers to reflect, comment, or share the video.
-
-            3. Use vivid, emotional language:
-            - Incorporate emotionally-charged words (e.g., shocking, unbelievable, devastating, astonishing, heartbreaking, incredible) to amplify viewer reactions.
-            - Use conversational, natural-sounding narration to deeply engage the audience.
-
-            4. Highly visual-friendly narration:
-            - Although you must NOT explicitly describe visuals (e.g., avoid "zoom in," "show," "image of"), choose wording that naturally evokes clear and dramatic mental imagery, facilitating the search for stock visuals later.
-
-            5. Encourage viewer interaction:
-            - End the script with a brief, provocative question inviting viewer opinions or encouraging sharing.
-
-            6. Strict accuracy:
-            - Only use facts and information directly from the provided article. Do NOT invent or speculate beyond provided content.
-
-            OUTPUT FORMAT:
-            Return ONLY a valid JSON object:
-            {
-            "title": "Emotionally engaging and click-worthy title",
-            "initial_scenes": [
-                "Captivating opening sentence or two (hook).",
-                "Engaging narrative sentence clearly describing dramatic developments.",
-                "...",
-                "Powerful concluding sentence ending with a reflective question or strong emotional statement."
-            ]
-            }
-            """
-        elif keyword:
-            input_type = "Keyword"
-            lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
-            prompt_step1 += f"\nCONTEXT TYPE: Keyword/Topic\n"
-            prompt_step1 += f"TOPIC: \"{keyword}\"\n"
-
-            prompt_step1 += f"""
-        Instructions:
-        Generate an engaging, informative, and potentially viral video narration script {lang_instruction} about the topic '{keyword}'.
-
-        CRITICAL REQUIREMENTS:
-
-        1. Clear and structured storytelling:
-        - **Hook (opening)**: Start with an intriguing question, surprising fact, or provocative statement related directly to the topic to immediately capture viewers' attention.
-        - **Body (main content)**: Clearly explain or narrate key ideas, interesting facts, or insightful details about '{keyword}'. Structure the narrative logically, each scene clearly leading to the next.
-        - **Conclusion (ending)**: End with a powerful statement, summary, or thought-provoking question that invites viewer interaction or encourages sharing.
-
-        2. Vivid and visual-friendly language:
-        - Use emotionally engaging and vivid descriptions to help the audience easily visualize each idea or concept.
-        - While maintaining visual imagery, do NOT explicitly describe visual actions (e.g., avoid phrases like "scene shows", "camera zooms", "image of", "cảnh quay", etc.). Keep sentences purely narrative, suitable for voice-over or subtitle.
-
-        3. Engaging, conversational tone:
-        - Maintain a natural, conversational style that captivates and holds viewers' interest throughout the video.
-
-        OUTPUT FORMAT:
-        Return ONLY a valid JSON object:
-        {{
-        "title": "Engaging, attention-grabbing title related directly to '{keyword}'",
-        "initial_scenes": [
-            "Intriguing opening sentence or two (hook).",
-            "Next logically connected narrative sentence(s) clearly describing key points.",
-            "...",
-            "Strong concluding sentence or question encouraging viewer reflection or interaction."
-        ]
-        }}
-            """
-
-        elif transcript_text:
-            input_type = "YouTube Transcript"
-            lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
-            prompt_step1 += f"\nCONTEXT TYPE: YouTube Video Transcript {f'({context_hint})' if context_hint else ''}\n"
-            prompt_step1 += f"TRANSCRIPT CONTENT:\n{safe_truncate(transcript_text, 12000)}\n"
-
-            prompt_step1 += f"""
-        Instructions:
-        Convert the provided YouTube transcript into a concise, highly engaging, and structured video narration script {lang_instruction} suitable for creating a shorter, viral summary video.
-
-        CRITICAL REQUIREMENTS:
-
-        1. Thorough but concise restructuring:
-        - Remove ALL unnecessary filler words or phrases (e.g., "um", "you know", "actually", repeated sentences, etc.).
-        - Clearly summarize the main ideas and key highlights from the transcript. 
-        - Significantly condense the content into concise, easy-to-follow narrative sentences without losing important meaning.
-
-        2. Clear storytelling structure:
-        - **Hook (Opening)**: Start with the most intriguing, impactful, or surprising point from the transcript to immediately grab attention.
-        - **Main points (Middle)**: Logically narrate the key points, highlights, or insights extracted from the transcript, structured clearly and sequentially for ease of understanding.
-        - **Conclusion (Ending)**: Provide a compelling summary, impactful statement, or thought-provoking question encouraging viewers to reflect, interact, or share.
-
-        3. Natural and conversational narration:
-        - Rewrite sentences to ensure clarity, smoothness, and ease of narration.
-        - Maintain a conversational, engaging tone appropriate for voice-over or subtitles.
-
-        4. Visual-friendly language:
-        - Choose wording that naturally evokes clear mental images, facilitating easy selection of relevant visuals later.
-        - However, strictly avoid explicit visual direction phrases like "scene opens", "camera zooms", "hình ảnh", "cảnh quay", etc.
-
-        5. Accuracy and faithfulness:
-        - Do NOT add any external information. ONLY use content found directly in the provided transcript. Avoid deviating significantly from original topics or ideas.
-
-        OUTPUT FORMAT:
-        Return ONLY a valid JSON object:
-        {{
-        "title": "Engaging, click-worthy title summarizing video's main point",
-        "initial_scenes": [
-            "Intriguing opening sentence or two (hook).",
-            "Next concise, logically narrated sentence(s) clearly summarizing key ideas.",
-            "...",
-            "Compelling conclusion or question designed to engage viewers and invite interaction."
-        ]
-        }}
-        """
-        else:
-            logger.error("Step 1 Failed: No valid input provided.")
-            return None
-
-        logger.info(f"Generating initial script based on: {input_type}")
-
-        # --- Gọi API cho Bước 1 ---
-        response_json_str = self._call_llm_api(
-            user_prompt=prompt_step1,
-            request_timeout=45,
-            require_json=True
-        )        
-        if not response_json_str:
-            logger.error("Step 1 Failed: No response from API for initial script generation.")
-            return None
-
-        # --- Parse và Validate kết quả Bước 1 ---
-        try:
-            data_step1 = json.loads(response_json_str)
-            if not isinstance(data_step1, dict) or \
-               "title" not in data_step1 or not isinstance(data_step1["title"], str) or \
-               "initial_scenes" not in data_step1 or not isinstance(data_step1["initial_scenes"], list):
-                logger.error(f"Step 1 Failed: Invalid JSON structure received: {data_step1}")
-                return None
-            if not data_step1["initial_scenes"]:
-                logger.error("Step 1 Failed: 'initial_scenes' list is empty.")
-                return None
-
-            logger.info(f"Step 1 Success: Generated {len(data_step1['initial_scenes'])} initial sentence-based scenes.")
-            return data_step1
-        except json.JSONDecodeError as e:
-            logger.error(f"Step 1 Failed: Could not decode JSON response: {e}")
-            logger.debug(f"Received content: {response_json_str}")
-            return None
-        except Exception as e:
-            logger.error(f"Step 1 Failed: Unexpected error parsing result: {e}", exc_info=True)
-            return None
-
-    # --- Bước 2 - Chia Câu thành Shots ---
+    # --- Chia Câu thành Shots ---
     def _breakdown_sentence_into_shots(self, sentence_text, target_style_tone):
         """Yêu cầu OpenAI chia một câu/đoạn văn thành các shots ngắn."""
         logger.debug(f"Step 2: Breaking down sentence: '{sentence_text[:100]}...'")
@@ -550,724 +378,731 @@ class ScriptGenerator:
             return None
 
     # --- HÀM CHÍNH: generate_script (Sử dụng 2 bước: "Tạo Script với câu hoàn chỉnh" sau đó "Chia câu thành Shots") ---
-    def generate_script(self, article, style="informative", language=None, video_mode="basic"):
+    def generate_script(self, article, style_strategy: BaseVideoStyle, language=None, video_mode="basic"):
         """
-        Tạo kịch bản sử dụng quy trình 2 bước: câu -> shots.
+        Tạo kịch bản cho article sử dụng strategy, ưu tiên xử lý Basic Mode (2 bước) trước.
         """
         project_id = generate_project_id(article.get('title', ''))
-        logger.info(f"Generating script for article '{article.get('title', '')[:50]}...' (Style: {style})")
+        style_config = style_strategy.get_style_config()
+        style_tone = style_config.get('tone', 'Unknown')
+        logger.info(f"Generating script for article '{article.get('title', '')[:50]}...' (Style Tone: {style_tone})")
 
-        # Lấy cấu hình style
-        if style not in cfg.style_configs:
-            logger.warning(f"Unknown style '{style}', defaulting to 'informative'.")
-            style = "informative"
-        style_config = cfg.style_configs[style]
         language = language or detect_language(article.get('content', ''))
 
+        # Xác định chế độ thực thi cuối cùng
+        final_mode = video_mode # Mặc định theo user
+        if style_strategy.should_override_layout() and video_mode == "basic":
+             logger.info(f"Strategy for '{style_tone}' forces Advanced Layout mode. Overriding 'basic' mode.")
+             final_mode = "advanced"
+        elif not style_strategy.should_override_layout() and video_mode == "advanced":
+             logger.warning(f"Advanced mode requested, but Strategy for '{style_tone}' does not support layout override. Falling back to Basic mode.")
+             final_mode = "basic"
+
+        logger.info(f"Executing script generation in '{final_mode.upper()}' mode for Article.")
         script_result = None
-        enhanced_script = None
 
-        if video_mode == "basic":
-            logger.info("Generating script in Basic mode...")
-            # --- Bước 1: Tạo script với câu hoàn chỉnh ---
-            initial_script_data = self._generate_initial_script_sentences(
-                style_config=style_config,
-                article=article, # Sử dụng article ở đây
-                language=language
-            )
-            if not initial_script_data: return None
+        # --- XỬ LÝ BASIC MODE (2 BƯỚC) ---
+        if final_mode == "basic":
+            logger.info("Generating script in Basic mode (2-Step: Sentences -> Shots) for Article...")
 
-            final_title = initial_script_data.get("title", "Untitled")
-            initial_sentences = initial_script_data.get("initial_scenes", [])
+            # === BƯỚC 1: TẠO SCRIPT CÂU BAN ĐẦU ===
+            logger.info("Step 1 (Basic/Article): Generating initial sentences...")
+            source_data = {'type': 'article', 'data': article}
+            prompt_step1 = style_strategy.generate_script_prompt(source_data, language, 'basic')
 
-            # --- Bước 2: Xử lý sentences ---
+            if "Error:" in prompt_step1:
+                 logger.error(f"Failed to generate Step 1 prompt: {prompt_step1}")
+                 return None
+
+            response_json_str_s1 = self._call_llm_api(prompt_step1, require_json=True, request_timeout=180)
+            initial_script_data = None
+            if response_json_str_s1:
+                 try:
+                     initial_script_data = json.loads(response_json_str_s1)
+                     if not isinstance(initial_script_data, dict) or \
+                        "title" not in initial_script_data or \
+                        "initial_scenes" not in initial_script_data or \
+                        not isinstance(initial_script_data.get("initial_scenes"), list) or \
+                        not initial_script_data.get("initial_scenes"):
+                         logger.error(f"Invalid JSON structure from LLM (Step 1 - Basic): Expected 'title' and 'initial_scenes'. Got: {initial_script_data}")
+                         initial_script_data = None
+                     elif not all(isinstance(s, str) for s in initial_script_data.get("initial_scenes", [])):
+                          logger.error("Not all items in 'initial_scenes' are strings (Step 1 - Basic).")
+                          initial_script_data = None
+                 except json.JSONDecodeError as e:
+                      logger.error(f"Failed to decode LLM JSON response (Step 1 - Basic): {e}")
+                      logger.debug(f"Received: {response_json_str_s1}")
+                      initial_script_data = None
+
+            if not initial_script_data:
+                logger.error("Script generation failed (Basic/Article): Could not get valid initial sentences.")
+                return None
+
+            final_title = initial_script_data["title"]
+            initial_sentences = initial_script_data["initial_scenes"]
+            logger.info(f"Step 1 (Basic/Article) Success: Generated {len(initial_sentences)} initial sentences.")
+
+            # === BƯỚC 2: CHIA CÂU THÀNH SHOTS ===
             final_scenes = []
             final_speech_units = []
             global_shot_number = 1
             speech_unit_number = 1
-
-            logger.info("Step 2 (Basic/Article): Processing sentences...") # Sửa log
-            start_time_step2 = time.time() # Log thời gian bắt đầu
+            logger.info("Step 2 (Basic/Article): Processing sentences into shots...")
+            start_time_step2 = time.time()
 
             for sentence_idx, sentence in enumerate(initial_sentences):
-                original_sentence = sentence.strip()
-                if not original_sentence: continue
+                 original_sentence = sentence.strip()
+                 if not original_sentence: continue
 
-                enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
-                shots_for_sentence_content = []
+                 enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
+                 shots_for_sentence_content = []
 
-                if enable_breakdown:
-                    logger.debug(f"  (Breakdown {sentence_idx+1}/{len(initial_sentences)}) Processing: '{original_sentence[:50]}...'")
-                    shots_for_sentence_content = self._breakdown_sentence_into_shots(original_sentence, style_config['tone'])
-                    if shots_for_sentence_content is None:
-                        logger.warning(f"  (Breakdown {sentence_idx+1}) API call failed. Using full sentence.")
-                        shots_for_sentence_content = [original_sentence]
-                    elif not shots_for_sentence_content:
-                         logger.warning(f"  (Breakdown {sentence_idx+1}) Returned empty list. Using full sentence.")
-                         shots_for_sentence_content = [original_sentence]
-                else:
-                    logger.debug(f"  (No Breakdown {sentence_idx+1}) Using full sentence as single shot.")
-                    shots_for_sentence_content = [original_sentence]
+                 if enable_breakdown:
+                     logger.debug(f"  (Breakdown {sentence_idx+1}/{len(initial_sentences)}) Processing: '{original_sentence[:50]}...'")
+                     shots_for_sentence_content = self._breakdown_sentence_into_shots(original_sentence, style_tone)
+                     if not shots_for_sentence_content:
+                          logger.warning(f"  (Breakdown {sentence_idx+1}) Failed or empty. Using full sentence.")
+                          shots_for_sentence_content = [original_sentence]
+                 else:
+                      logger.debug(f"  (No Breakdown {sentence_idx+1}) Using full sentence as single shot.")
+                      shots_for_sentence_content = [original_sentence]
 
-                # (Giữ nguyên logic xử lý shots_for_sentence_content và tạo final_scenes, final_speech_units)
-                shot_numbers_for_this_unit = []
-                valid_shots_found = False
-                if shots_for_sentence_content:
-                    for shot_content in shots_for_sentence_content:
-                        shot_content_stripped = shot_content.strip()
-                        if not shot_content_stripped: continue
-                        final_scenes.append({
-                            "number": global_shot_number,
-                            "content": shot_content_stripped
-                            # Không có chapter info ở basic mode
-                        })
-                        shot_numbers_for_this_unit.append(global_shot_number)
-                        global_shot_number += 1
-                        valid_shots_found = True
-                if valid_shots_found:
-                    final_speech_units.append({
-                        "unit_number": speech_unit_number,
-                        "text": original_sentence,
-                        "scene_numbers": shot_numbers_for_this_unit
-                        # Không có chapter info
-                    })
-                    speech_unit_number += 1
-                elif original_sentence:
-                    logger.warning(f"  Sentence {sentence_idx+1}: No valid shots generated. Skipping speech unit.")
+                 shot_numbers_for_this_unit = []
+                 valid_shots_found = False
+                 if shots_for_sentence_content:
+                      for shot_content in shots_for_sentence_content:
+                           shot_content_stripped = shot_content.strip()
+                           if not shot_content_stripped: continue
+                           final_scenes.append({
+                               "number": global_shot_number,
+                               "content": shot_content_stripped
+                           })
+                           shot_numbers_for_this_unit.append(global_shot_number)
+                           global_shot_number += 1
+                           valid_shots_found = True
+
+                 if valid_shots_found:
+                      final_speech_units.append({
+                           "unit_number": speech_unit_number,
+                           "text": original_sentence,
+                           "scene_numbers": shot_numbers_for_this_unit
+                      })
+                      speech_unit_number += 1
+                 elif original_sentence:
+                      logger.warning(f"  Sentence {sentence_idx+1}: No valid shots generated. Skipping speech unit for: '{original_sentence[:50]}...'")
 
             end_time_step2 = time.time()
-            logger.info(f"Step 2 (Basic/Article) finished processing sentences in {end_time_step2 - start_time_step2:.2f} seconds.") # Log thời gian kết thúc
+            logger.info(f"Step 2 (Basic/Article) finished processing sentences in {end_time_step2 - start_time_step2:.2f} seconds.")
 
             if not final_scenes or not final_speech_units:
-                logger.error("Script generation failed (Basic/Article): No valid scenes or speech units created.")
+                logger.error("Script generation failed (Basic/Article): No valid scenes or units created after breakdown.")
                 return None
 
             logger.info(f"Script generation complete (Basic/Article): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
 
-            # === BƯỚC PHÂN TÍCH VIDEO PREFERENCE (THÊM VÀO) ===
+            # === BƯỚC PHÂN TÍCH VIDEO PREFERENCE ===
             logger.info("Analyzing scenes for video clip suitability...")
-            # Gọi hàm phân tích cho danh sách scenes cuối cùng
             analysis_results = self._analyze_shots_for_video_batch(final_scenes)
-
             if analysis_results:
-                logger.info(f"Updating {len(final_scenes)} scenes with video preference analysis results...")
                 updated_scene_count = 0
                 for scene in final_scenes:
                     scene_num = scene.get('number')
                     if scene_num is not None:
-                        # Lấy kết quả phân tích (True/False) cho scene này, mặc định là False nếu không tìm thấy
                         prefer_video_flag = analysis_results.get(scene_num, False)
-                        # Thêm hoặc cập nhật key 'prefer_video' vào dictionary của scene
                         scene['prefer_video'] = prefer_video_flag
-                        if prefer_video_flag:
-                            updated_scene_count += 1
-                    else:
-                        # Xử lý trường hợp scene không có 'number' (dù không nên xảy ra)
-                        scene['prefer_video'] = False
+                        if prefer_video_flag: updated_scene_count += 1
                 logger.info(f"Marked {updated_scene_count} scenes as preferring video.")
             else:
-                # Log nếu phân tích bị tắt, lỗi hoặc không trả về kết quả hợp lệ
-                logger.warning("Video analysis skipped or failed. Proceeding without 'prefer_video' flags in scenes.")
-                # Đảm bảo key 'prefer_video' tồn tại và là False nếu không có phân tích
-                for scene in final_scenes:
-                    scene['prefer_video'] = False
-            # === KẾT THÚC BƯỚC PHÂN TÍCH VIDEO PREFERENCE ===
+                 logger.warning("Video analysis skipped/failed. Defaulting 'prefer_video' to false.")
+                 for scene in final_scenes: scene['prefer_video'] = False
 
-            # --- Tạo đối tượng script cuối cùng ---
+            # --- Tạo đối tượng script cuối cùng (Basic mode cho Article) ---
             script_result = {
                 "project_id": project_id,
                 "title": final_title,
-                "scenes": final_scenes,
+                "scenes": final_scenes, # Đã có prefer_video
                 "speech_units": final_speech_units,
                 "source": article.get('source', 'Unknown'),
                 "url": article.get('url', ''),
-                "image_url": article.get('image_url'), # <-- THÊM DÒNG NÀY
-                "style": style,
+                "image_url": article.get('image_url'),
+                "style": style_tone,
                 "language": language,
                 "script_mode": "basic",
                 "is_ai_generated": False,
                 "creation_timestamp": datetime.datetime.now().isoformat()
             }
 
-            # --- THÊM KHỐI DEBUG LOG ---
-            logger.debug("---------------------------------------------")
-            logger.debug(f"Preparing to return from generate_script (Basic)...")
-            # (Copy khối debug log giống như trong generate_script_from_keyword)
-            if isinstance(script_result, dict): logger.debug(f"Returning type: dict"); # ... (thêm log chi tiết)
-            elif script_result is None: logger.debug("Returning type: None")
-            else: logger.debug(f"Returning UNEXPECTED type: {type(script_result)}")
-            logger.debug("---------------------------------------------")
-            # --- KẾT THÚC DEBUG LOG ---
-
-            return script_result
-        
-        elif video_mode == "advanced":
-            logger.info("Generating script in Advanced (Chapters) mode...")
+        # --- XỬ LÝ ADVANCED MODE ---
+        elif final_mode == "advanced":
+            logger.info("Generating script in Advanced (Chapters) mode for Article...")
 
             # === BƯỚC 1: TẠO LAYOUT ===
+            logger.info("Stage 1 (Advanced/Article): Generating video layout/outline...")
             layout_data = self._generate_video_layout(
-                source_data={'type': 'article', 'data': article}, # Truyền article vào data
-                style_config=style_config,
+                source_data={'type': 'article', 'data': article},
+                style_strategy=style_strategy,
                 language=language
             )
-
             if not layout_data:
-                logger.error("Failed to generate video layout. Cannot proceed with advanced script.")
-                return None # Dừng lại nếu không có layout
+                logger.error("Failed to generate video layout for article. Cannot proceed.")
+                return None
 
-            # === Placeholder cho BƯỚC 2 & 3 ===
-            logger.info("Layout generation successful. Proceeding to chapter content generation (Stage 2 - NOT IMPLEMENTED YET)...")
-
-            # === GIAI ĐOẠN 2: TẠO NỘI DUNG TỪNG CHAPTER ===
-            logger.info("Starting Stage 2: Generating content for each chapter...")
+            # === GIAI ĐOẠN 2: TẠO NỘI DUNG CHAPTER ===
+            logger.info("Starting Stage 2 (Advanced/Article): Generating content for each chapter...")
             all_chapters_sentences = {}
             all_chapters_successful = True
+            original_source_dict = {'type': 'article', 'data': article}
 
-            # *** SỬA LỖI: Xác định original_source_dict NGOÀI vòng lặp ***
-            original_source_dict = {'type': 'article', 'data': article} # Sử dụng biến 'article' từ tham số hàm
-
-            # Lặp qua từng chapter trong layout
             for chapter_outline in layout_data.get('layout', []):
                 chapter_num = chapter_outline.get('chapter_number')
                 if chapter_num is None:
-                    logger.warning("Skipping chapter with missing number in layout.")
-                    all_chapters_successful = False
-                    continue
+                     logger.warning("Skipping chapter with missing number.")
+                     continue
 
-                # Gọi hàm tạo nội dung cho chapter hiện tại
                 chapter_sentences = self._generate_chapter_content(
-                    original_source_data=original_source_dict, # Truyền dict đã tạo
+                    original_source_data=original_source_dict,
                     full_layout_data=layout_data,
                     current_chapter_outline=chapter_outline,
-                    style_config=style_config,
+                    style_strategy=style_strategy,
                     language=language
                 )
-
-                # Xử lý kết quả (giữ nguyên logic xử lý lỗi)
                 if chapter_sentences is not None:
                     all_chapters_sentences[chapter_num] = chapter_sentences
-                    if not chapter_sentences:
-                        logger.warning(f"Chapter {chapter_num} generation returned empty list.")
                 else:
-                    logger.error(f"Critical failure generating content for Chapter {chapter_num}. Aborting script generation.")
-                    all_chapters_successful = False
-                    return None # Dừng nếu lỗi nghiêm trọng
+                     logger.error(f"Critical failure generating content for Chapter {chapter_num}. Aborting.")
+                     all_chapters_successful = False
+                     return None
 
-            # Kiểm tra sau khi lặp xong (giữ nguyên)
             if not all_chapters_successful or not all_chapters_sentences:
-                logger.error("Stage 2 Failed: Content generation was not successful for all chapters.")
-                return None
-
-            logger.info("Stage 2 completed successfully. All chapter contents generated.")
-            # --- KẾT THÚC GIAI ĐOẠN 2 ---
+                 logger.error("Stage 2 Failed (Article): Content generation incomplete.")
+                 return None
+            logger.info("Stage 2 (Article) completed successfully.")
 
             # === GIAI ĐOẠN 3: GỘP VÀ HOÀN THIỆN ===
-            logger.info("Proceeding to Stage 3: Assembling final script...")
-
-            # Chuẩn bị source_info cho hàm assembler
+            logger.info("Proceeding to Stage 3 (Advanced/Article): Assembling final script...")
             source_info_for_assembly = {
                 'source': article.get('source', 'Unknown'),
                 'url': article.get('url', ''),
-                'keyword': None # Không có keyword cho article
+                'image_url': article.get('image_url'),
+                'keyword': None
             }
-
             script_result = self._assemble_final_script(
                 project_id=project_id,
                 layout_data=layout_data,
                 all_chapters_sentences=all_chapters_sentences,
-                style_config=style_config, # Truyền cả config thay vì chỉ tone
+                style_strategy=style_strategy,
                 language=language,
-                input_type='article', # Truyền input type gốc
+                input_type='article',
                 source_info=source_info_for_assembly
             )
-
-            # Hàm _assemble_final_script sẽ trả về script hoàn chỉnh hoặc None nếu lỗi
             if not script_result:
-                logger.error("Advanced script generation failed during final assembly (Stage 3).")
-                return None
+                 logger.error("Advanced script generation failed during final assembly (Stage 3 - Article).")
+                 return None
+            logger.info("Advanced script generation completed all stages for Article.")
 
-            # Nếu thành công, script_result đã là script cuối cùng
-            logger.info("Advanced script generation completed all stages.")
-            return script_result # Trả về script hoàn chỉnh
+        # --- Trường hợp không xác định được mode ---
+        else:
+            logger.error(f"Internal Error: Invalid final_mode '{final_mode}' for article. Cannot generate script.")
+            return None
+
+        # --- Return cuối cùng ---
+        logger.debug("---------------------------------------------")
+        logger.debug(f"Preparing to return from generate_script (Mode: {final_mode})...")
+        if isinstance(script_result, dict):
+            logger.debug(f"Returning type: dict")
+            logger.debug(f"Scene count: {len(script_result.get('scenes', []))}")
+            logger.debug(f"Speech unit count: {len(script_result.get('speech_units', []))}")
+        elif script_result is None:
+            logger.debug("Returning type: None")
+        else:
+            logger.debug(f"Returning UNEXPECTED type: {type(script_result)}")
+        logger.debug("---------------------------------------------")
+        return script_result
 
     # --- Hàm generate_script_from_keyword ---
-    def generate_script_from_keyword(self, keyword, style="informative", language=None, video_mode="basic"):
+    def generate_script_from_keyword(self, keyword, style_strategy: BaseVideoStyle, language=None, video_mode="basic"):
         """
-        Tạo kịch bản từ từ khóa sử dụng quy trình 2 bước.
+        Tạo kịch bản từ từ khóa sử dụng strategy, ưu tiên xử lý Basic Mode trước.
         """
         project_id = generate_project_id(keyword)
-        logger.info(f"Generating script for keyword '{keyword}' (Style: {style})")
+        style_config = style_strategy.get_style_config()
+        style_tone = style_config.get('tone', 'Unknown')
+        logger.info(f"Generating script for keyword '{keyword}' (Style Tone: {style_tone})")
 
-        if style not in cfg.style_configs:
-            logger.warning(f"Unknown style '{style}', defaulting to 'informative'.")
-            style = "informative"
-        style_config = cfg.style_configs[style]
-        language = language or detect_language(keyword)
+        language = language or detect_language(keyword) # Ước lượng ngôn ngữ từ keyword
 
+        # Xác định chế độ thực thi cuối cùng
+        final_mode = video_mode
+        if style_strategy.should_override_layout() and video_mode == "basic":
+             logger.info(f"Strategy for '{style_tone}' forces Advanced Layout mode. Overriding 'basic' mode.")
+             final_mode = "advanced"
+        elif not style_strategy.should_override_layout() and video_mode == "advanced":
+             logger.warning(f"Advanced mode requested, but Strategy for '{style_tone}' does not support layout override. Falling back to Basic mode.")
+             final_mode = "basic"
+
+        logger.info(f"Executing script generation in '{final_mode.upper()}' mode for Keyword.")
         script_result = None
-        enhanced_script = None
 
-        if video_mode == "basic":
-            logger.info("Generating keyword script in Basic mode...")
-            # --- Step 1: Tạo script với câu hoàn chỉnh ---
-            initial_script_data = self._generate_initial_script_sentences(
-                style_config=style_config,
-                keyword=keyword,
-                language=language
-            )
+        # --- XỬ LÝ BASIC MODE (2 BƯỚC) ---
+        if final_mode == "basic":
+            logger.info("Generating script in Basic mode (2-Step: Sentences -> Shots) for Keyword...")
+
+            # === BƯỚC 1: TẠO SCRIPT CÂU BAN ĐẦU ===
+            logger.info("Step 1 (Basic/Keyword): Generating initial sentences...")
+            source_data = {'type': 'keyword', 'data': keyword}
+            prompt_step1 = style_strategy.generate_script_prompt(source_data, language, 'basic')
+
+            if "Error:" in prompt_step1:
+                 logger.error(f"Failed to generate Step 1 prompt: {prompt_step1}")
+                 return None
+
+            response_json_str_s1 = self._call_llm_api(prompt_step1, require_json=True, request_timeout=180)
+            initial_script_data = None
+            if response_json_str_s1:
+                 try:
+                     initial_script_data = json.loads(response_json_str_s1)
+                     if not isinstance(initial_script_data, dict) or \
+                        "title" not in initial_script_data or \
+                        "initial_scenes" not in initial_script_data or \
+                        not isinstance(initial_script_data.get("initial_scenes"), list) or \
+                        not initial_script_data.get("initial_scenes"):
+                         logger.error(f"Invalid JSON structure from LLM (Step 1 - Basic/Keyword): Expected 'title' and 'initial_scenes'. Got: {initial_script_data}")
+                         initial_script_data = None
+                     elif not all(isinstance(s, str) for s in initial_script_data.get("initial_scenes", [])):
+                          logger.error("Not all items in 'initial_scenes' are strings (Step 1 - Basic/Keyword).")
+                          initial_script_data = None
+                 except json.JSONDecodeError as e:
+                      logger.error(f"Failed to decode LLM JSON response (Step 1 - Basic/Keyword): {e}")
+                      logger.debug(f"Received: {response_json_str_s1}")
+                      initial_script_data = None
+
             if not initial_script_data:
+                logger.error("Script generation failed (Basic/Keyword): Could not get valid initial sentences.")
                 return None
 
-            final_title = initial_script_data.get("title", "Untitled") # Use .get for safety
-            initial_sentences = initial_script_data.get("initial_scenes", []) # Use .get for safety
+            final_title = initial_script_data["title"]
+            initial_sentences = initial_script_data["initial_scenes"]
+            logger.info(f"Step 1 (Basic/Keyword) Success: Generated {len(initial_sentences)} initial sentences.")
 
-            # --- Step 2: Xử lý sentences (chia thành shots hoặc không) ---
+            # === BƯỚC 2: CHIA CÂU THÀNH SHOTS ===
             final_scenes = []
             final_speech_units = []
             global_shot_number = 1
             speech_unit_number = 1
+            logger.info("Step 2 (Basic/Keyword): Processing sentences into shots...")
+            start_time_step2 = time.time()
 
-            logger.info("Step 2 (Basic/Keyword): Processing sentences...")
-            start_time_step2 = time.time() # Measure Step 2 time
+            for sentence_idx, sentence in enumerate(initial_sentences):
+                 original_sentence = sentence.strip()
+                 if not original_sentence: continue
 
-            for sentence_idx, sentence in enumerate(initial_sentences): # Add index for logging
-                original_sentence = sentence.strip()
-                if not original_sentence: continue
+                 enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
+                 shots_for_sentence_content = []
 
-                enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
-                shots_for_sentence_content = []
+                 if enable_breakdown:
+                     logger.debug(f"  (Breakdown {sentence_idx+1}/{len(initial_sentences)}) Processing: '{original_sentence[:50]}...'")
+                     shots_for_sentence_content = self._breakdown_sentence_into_shots(original_sentence, style_tone)
+                     if not shots_for_sentence_content:
+                          logger.warning(f"  (Breakdown {sentence_idx+1}) Failed or empty. Using full sentence.")
+                          shots_for_sentence_content = [original_sentence]
+                 else:
+                      logger.debug(f"  (No Breakdown {sentence_idx+1}) Using full sentence as single shot.")
+                      shots_for_sentence_content = [original_sentence]
 
-                if enable_breakdown:
-                    logger.debug(f"  (Breakdown {sentence_idx+1}/{len(initial_sentences)}) Processing: '{original_sentence[:50]}...'")
-                    # Maybe use a shorter timeout for breakdown? e.g., 30s
-                    shots_for_sentence_content = self._breakdown_sentence_into_shots(original_sentence, style_config['tone']) # Returns list or None
-                    if shots_for_sentence_content is None: # Explicitly check for None from API error
-                        logger.warning(f"  (Breakdown {sentence_idx+1}) API call failed. Using full sentence.")
-                        shots_for_sentence_content = [original_sentence]
-                    elif not shots_for_sentence_content: # API returned empty list? (Unlikely with fallback)
-                         logger.warning(f"  (Breakdown {sentence_idx+1}) Returned empty list. Using full sentence.")
-                         shots_for_sentence_content = [original_sentence]
+                 shot_numbers_for_this_unit = []
+                 valid_shots_found = False
+                 if shots_for_sentence_content:
+                      for shot_content in shots_for_sentence_content:
+                           shot_content_stripped = shot_content.strip()
+                           if not shot_content_stripped: continue
+                           final_scenes.append({
+                               "number": global_shot_number,
+                               "content": shot_content_stripped
+                           })
+                           shot_numbers_for_this_unit.append(global_shot_number)
+                           global_shot_number += 1
+                           valid_shots_found = True
 
-                else:
-                    logger.debug(f"  (No Breakdown {sentence_idx+1}) Using full sentence as single shot.")
-                    shots_for_sentence_content = [original_sentence]
-
-                shot_numbers_for_this_unit = []
-                valid_shots_found = False
-                if shots_for_sentence_content: # Should always be True now
-                    for shot_content in shots_for_sentence_content:
-                        shot_content_stripped = shot_content.strip()
-                        if not shot_content_stripped: continue
-                        final_scenes.append({
-                            "number": global_shot_number,
-                            "content": shot_content_stripped
-                        })
-                        shot_numbers_for_this_unit.append(global_shot_number)
-                        global_shot_number += 1
-                        valid_shots_found = True
-
-                if valid_shots_found:
-                    final_speech_units.append({
-                        "unit_number": speech_unit_number,
-                        "text": original_sentence,
-                        "scene_numbers": shot_numbers_for_this_unit
-                    })
-                    speech_unit_number += 1
-                elif original_sentence:
-                    logger.warning(f"  Sentence {sentence_idx+1}: No valid shots generated despite non-empty input. Skipping speech unit.")
+                 if valid_shots_found:
+                      final_speech_units.append({
+                           "unit_number": speech_unit_number,
+                           "text": original_sentence,
+                           "scene_numbers": shot_numbers_for_this_unit
+                      })
+                      speech_unit_number += 1
+                 elif original_sentence:
+                      logger.warning(f"  Sentence {sentence_idx+1}: No valid shots generated. Skipping speech unit for: '{original_sentence[:50]}...'")
 
             end_time_step2 = time.time()
-            logger.info(f"Step 2 (Basic/Keyword) finished processing sentences in {end_time_step2 - start_time_step2:.2f} seconds.") # Log Step 2 duration
+            logger.info(f"Step 2 (Basic/Keyword) finished processing sentences in {end_time_step2 - start_time_step2:.2f} seconds.")
 
             if not final_scenes or not final_speech_units:
-                logger.error("Script generation failed (Basic-Keyword): No valid scenes or speech units were created.")
-                return None # This check should still be here
+                logger.error("Script generation failed (Basic/Keyword): No valid scenes or units created after breakdown.")
+                return None
 
-            logger.info(f"Script generation complete (Basic-Keyword): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
+            logger.info(f"Script generation complete (Basic/Keyword): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
 
-            # === BƯỚC PHÂN TÍCH VIDEO PREFERENCE (THÊM VÀO) ===
+            # === BƯỚC PHÂN TÍCH VIDEO PREFERENCE ===
             logger.info("Analyzing scenes for video clip suitability...")
-            # Gọi hàm phân tích cho danh sách scenes cuối cùng
             analysis_results = self._analyze_shots_for_video_batch(final_scenes)
-
             if analysis_results:
-                logger.info(f"Updating {len(final_scenes)} scenes with video preference analysis results...")
                 updated_scene_count = 0
                 for scene in final_scenes:
                     scene_num = scene.get('number')
                     if scene_num is not None:
-                        # Lấy kết quả phân tích (True/False) cho scene này, mặc định là False nếu không tìm thấy
                         prefer_video_flag = analysis_results.get(scene_num, False)
-                        # Thêm hoặc cập nhật key 'prefer_video' vào dictionary của scene
                         scene['prefer_video'] = prefer_video_flag
-                        if prefer_video_flag:
-                            updated_scene_count += 1
-                    else:
-                        # Xử lý trường hợp scene không có 'number' (dù không nên xảy ra)
-                        scene['prefer_video'] = False
+                        if prefer_video_flag: updated_scene_count += 1
                 logger.info(f"Marked {updated_scene_count} scenes as preferring video.")
             else:
-                # Log nếu phân tích bị tắt, lỗi hoặc không trả về kết quả hợp lệ
-                logger.warning("Video analysis skipped or failed. Proceeding without 'prefer_video' flags in scenes.")
-                # Đảm bảo key 'prefer_video' tồn tại và là False nếu không có phân tích
-                for scene in final_scenes:
-                    scene['prefer_video'] = False
+                 logger.warning("Video analysis skipped/failed. Defaulting 'prefer_video' to false.")
+                 for scene in final_scenes: scene['prefer_video'] = False
 
-            # --- Tạo đối tượng script cuối cùng (Added .get for safety) ---
+            # --- Tạo đối tượng script cuối cùng (Basic mode cho Keyword) ---
             script_result = {
                 "project_id": project_id,
-                "title": final_title, # Already checked via initial_script_data
-                "scenes": final_scenes, # Checked not empty
-                "speech_units": final_speech_units, # Checked not empty
+                "title": final_title,
+                "scenes": final_scenes, # Đã có prefer_video
+                "speech_units": final_speech_units,
                 "source": "AI Generated",
                 "url": f"keyword://{keyword}",
-                "style": style, # Provided as argument
-                "language": language, # Provided or detected
-                "image_url": None,
-                "keyword": keyword, # Provided as argument
+                "image_url": None, # Keyword không có image_url gốc
+                "style": style_tone,
+                "language": language,
+                "keyword": keyword, # Thêm keyword vào kết quả
                 "script_mode": "basic",
                 "is_ai_generated": True,
                 "creation_timestamp": datetime.datetime.now().isoformat()
-             }
+            }
 
-            # --- ADD THE DEBUG LOGS REQUESTED EARLIER ---
-            logger.debug("---------------------------------------------")
-            logger.debug(f"Preparing to return from generate_script_from_keyword (Basic)...")
-            if isinstance(script_result, dict):
-                logger.debug(f"Returning type: dict")
-                logger.debug(f"Script Keys: {list(script_result.keys())}")
-                logger.debug(f"Scene count: {len(script_result.get('scenes', []))}")
-                logger.debug(f"Speech unit count: {len(script_result.get('speech_units', []))}")
-            elif script_result is None:
-                logger.debug("Returning type: None")
-            else:
-                logger.debug(f"Returning UNEXPECTED type: {type(script_result)}")
-                logger.debug(f"Value being returned: {script_result}")
-            logger.debug("---------------------------------------------")
-            # --- END DEBUG LOGS ---
-
-            return script_result # Return the created dictionary
-
-        elif video_mode == "advanced":
+        # --- XỬ LÝ ADVANCED MODE ---
+        elif final_mode == "advanced":
             logger.info("Generating keyword script in Advanced (Chapters) mode...")
 
             # === BƯỚC 1: TẠO LAYOUT ===
+            logger.info("Stage 1 (Advanced/Keyword): Generating video layout/outline...")
             layout_data = self._generate_video_layout(
-                source_data={'type': 'keyword', 'data': keyword}, # Truyền keyword vào data
-                style_config=style_config,
+                source_data={'type': 'keyword', 'data': keyword},
+                style_strategy=style_strategy,
                 language=language
             )
-
             if not layout_data:
                 logger.error("Failed to generate video layout for keyword. Cannot proceed.")
                 return None
 
-            # === GIAI ĐOẠN 2: TẠO NỘI DUNG TỪNG CHAPTER ===
-            logger.info("Starting Stage 2: Generating content for each chapter...")
+            # === GIAI ĐOẠN 2: TẠO NỘI DUNG CHAPTER ===
+            logger.info("Starting Stage 2 (Advanced/Keyword): Generating content for each chapter...")
             all_chapters_sentences = {}
             all_chapters_successful = True
+            original_source_dict = {'type': 'keyword', 'data': keyword}
 
-            # *** SỬA LỖI: Xác định original_source_dict NGOÀI vòng lặp ***
-            original_source_dict = {'type': 'keyword', 'data': keyword} # Sử dụng biến 'keyword' từ tham số hàm
-
-            # Lặp qua từng chapter trong layout
             for chapter_outline in layout_data.get('layout', []):
                 chapter_num = chapter_outline.get('chapter_number')
-                if chapter_num is None:
-                    logger.warning("Skipping chapter with missing number in layout.")
-                    all_chapters_successful = False
-                    continue
+                if chapter_num is None: continue
 
-                # Gọi hàm tạo nội dung cho chapter hiện tại
                 chapter_sentences = self._generate_chapter_content(
-                    original_source_data=original_source_dict, # Truyền dict đã tạo
+                    original_source_data=original_source_dict,
                     full_layout_data=layout_data,
                     current_chapter_outline=chapter_outline,
-                    style_config=style_config,
+                    style_strategy=style_strategy,
                     language=language
                 )
-
-                # Xử lý kết quả (giữ nguyên)
                 if chapter_sentences is not None:
                     all_chapters_sentences[chapter_num] = chapter_sentences
-                    if not chapter_sentences:
-                        logger.warning(f"Chapter {chapter_num} generation returned empty list.")
                 else:
-                    logger.error(f"Critical failure generating content for Chapter {chapter_num}. Aborting script generation.")
-                    all_chapters_successful = False
-                    return None # Dừng nếu lỗi nghiêm trọng
+                     logger.error(f"Critical failure generating content for Chapter {chapter_num}. Aborting.")
+                     all_chapters_successful = False
+                     return None
 
-            # Kiểm tra sau khi lặp xong (giữ nguyên)
             if not all_chapters_successful or not all_chapters_sentences:
-                logger.error("Stage 2 Failed: Content generation was not successful for all chapters.")
-                return None
-
-            logger.info("Stage 2 completed successfully. All chapter contents generated.")
-            # --- KẾT THÚC GIAI ĐOẠN 2 ---
+                 logger.error("Stage 2 Failed (Keyword): Content generation incomplete.")
+                 return None
+            logger.info("Stage 2 (Keyword) completed successfully.")
 
             # === GIAI ĐOẠN 3: GỘP VÀ HOÀN THIỆN ===
-            logger.info("Proceeding to Stage 3: Assembling final script...")
-
-            # Chuẩn bị source_info
+            logger.info("Proceeding to Stage 3 (Advanced/Keyword): Assembling final script...")
             source_info_for_assembly = {
                 'source': 'AI Generated (Chapters)',
                 'url': f"keyword_chapters://{keyword}",
-                'keyword': keyword # Thêm keyword vào đây
+                'image_url': None,
+                'keyword': keyword
             }
-
             script_result = self._assemble_final_script(
                 project_id=project_id,
                 layout_data=layout_data,
                 all_chapters_sentences=all_chapters_sentences,
-                style_config=style_config,
+                style_strategy=style_strategy,
                 language=language,
-                input_type='keyword', # Truyền input type gốc
+                input_type='keyword',
                 source_info=source_info_for_assembly
             )
-
             if not script_result:
-                logger.error("Advanced script generation failed during final assembly (Stage 3).")
-                return None
+                 logger.error("Advanced script generation failed during final assembly (Stage 3 - Keyword).")
+                 return None
+            logger.info("Advanced script generation completed all stages for Keyword.")
 
-            logger.info("Advanced script generation completed all stages.")
-            return script_result # Trả về script hoàn chỉnh
+        # --- Trường hợp không xác định được mode ---
+        else:
+            logger.error(f"Internal Error: Invalid final_mode '{final_mode}' for keyword. Cannot generate script.")
+            return None
+
+        # --- Return cuối cùng ---
+        logger.debug("---------------------------------------------")
+        logger.debug(f"Preparing to return from generate_script_from_keyword (Mode: {final_mode})...")
+        if isinstance(script_result, dict):
+            logger.debug(f"Returning type: dict")
+            logger.debug(f"Scene count: {len(script_result.get('scenes', []))}")
+            logger.debug(f"Speech unit count: {len(script_result.get('speech_units', []))}")
+        elif script_result is None:
+            logger.debug("Returning type: None")
+        else:
+            logger.debug(f"Returning UNEXPECTED type: {type(script_result)}")
+        logger.debug("---------------------------------------------")
+        return script_result
         
     # --- function for TRANSCRIPT/TEXT input ---
-    def generate_script_from_text(self, input_text, style="informative", language="en", context_hint=None, video_mode="basic"):
+    def generate_script_from_text(self, input_text, style_strategy: BaseVideoStyle, language="en", context_hint=None, video_mode="basic"):
         """
-        Generates a script from raw text (like a transcript) using the 2-step process.
+        Generates a script from raw text using the strategy object, prioritizing Basic Mode first.
         """
-        # Generate a project ID based on the text's beginning
         project_id_hint = context_hint if context_hint else input_text[:50]
         project_id = generate_project_id(project_id_hint)
-        logger.info(f"Generating script from text (Style: {style}, Lang: {language}, Hint: {context_hint or 'N/A'})")
+        style_config = style_strategy.get_style_config()
+        style_tone = style_config.get('tone', 'Unknown')
+        logger.info(f"Generating script from text (Style Tone: {style_tone}, Lang: {language}, Hint: {context_hint or 'N/A'})")
 
-        if style not in cfg.style_configs:
-            logger.warning(f"Unknown style '{style}', defaulting to 'informative'.")
-            style = "informative"
-        style_config = cfg.style_configs[style]
-        # Language is passed directly
+        # Language is passed directly, no detection needed for raw text usually
 
+        # Xác định chế độ thực thi cuối cùng
+        final_mode = video_mode
+        if style_strategy.should_override_layout() and video_mode == "basic":
+             logger.info(f"Strategy for '{style_tone}' forces Advanced Layout mode. Overriding 'basic' mode.")
+             final_mode = "advanced"
+        elif not style_strategy.should_override_layout() and video_mode == "advanced":
+             logger.warning(f"Advanced mode requested, but Strategy for '{style_tone}' does not support layout override. Falling back to Basic mode.")
+             final_mode = "basic"
+
+        logger.info(f"Executing script generation in '{final_mode.upper()}' mode for Text Input.")
         script_result = None
-        enhanced_script = None
 
-        if video_mode == "basic":
-            logger.info("Generating text script in Basic mode...")
-            # --- Step 1: Generate initial script with full sentences ---
-            initial_script_data = self._generate_initial_script_sentences(
-                 style_config=style_config,
-                 transcript_text=input_text, # Sử dụng input_text
-                 language=language,
-                 context_hint=context_hint
-            )
-            if not initial_script_data: return None
+        # --- XỬ LÝ BASIC MODE (2 BƯỚC) ---
+        if final_mode == "basic":
+            logger.info("Generating script in Basic mode (2-Step: Sentences -> Shots) for Text...")
 
-            final_title = initial_script_data.get("title", "Untitled")
-            initial_sentences = initial_script_data.get("initial_scenes", [])
+            # === BƯỚC 1: TẠO SCRIPT CÂU BAN ĐẦU ===
+            logger.info("Step 1 (Basic/Text): Generating initial sentences...")
+            source_data = {'type': 'text', 'data': input_text, 'context': context_hint}
+            prompt_step1 = style_strategy.generate_script_prompt(source_data, language, 'basic')
 
-            # --- Step 2: Process sentences (breakdown or not) ---
+            if "Error:" in prompt_step1:
+                 logger.error(f"Failed to generate Step 1 prompt: {prompt_step1}")
+                 return None
+
+            response_json_str_s1 = self._call_llm_api(prompt_step1, require_json=True, request_timeout=180)
+            initial_script_data = None
+            if response_json_str_s1:
+                 try:
+                     initial_script_data = json.loads(response_json_str_s1)
+                     # Validate cấu trúc Bước 1: title và initial_scenes (list of strings)
+                     if not isinstance(initial_script_data, dict) or \
+                        "title" not in initial_script_data or \
+                        "initial_scenes" not in initial_script_data or \
+                        not isinstance(initial_script_data.get("initial_scenes"), list) or \
+                        not initial_script_data.get("initial_scenes"):
+                         logger.error(f"Invalid JSON structure from LLM (Step 1 - Basic/Text): Expected 'title' and 'initial_scenes'. Got: {initial_script_data}")
+                         initial_script_data = None
+                     elif not all(isinstance(s, str) for s in initial_script_data.get("initial_scenes", [])):
+                          logger.error("Not all items in 'initial_scenes' are strings (Step 1 - Basic/Text).")
+                          initial_script_data = None
+                 except json.JSONDecodeError as e:
+                      logger.error(f"Failed to decode LLM JSON response (Step 1 - Basic/Text): {e}")
+                      logger.debug(f"Received: {response_json_str_s1}")
+                      initial_script_data = None
+
+            if not initial_script_data:
+                logger.error("Script generation failed (Basic/Text): Could not get valid initial sentences.")
+                return None
+
+            final_title = initial_script_data["title"]
+            initial_sentences = initial_script_data["initial_scenes"]
+            logger.info(f"Step 1 (Basic/Text) Success: Generated {len(initial_sentences)} initial sentences.")
+
+            # === BƯỚC 2: CHIA CÂU THÀNH SHOTS ===
             final_scenes = []
             final_speech_units = []
             global_shot_number = 1
             speech_unit_number = 1
-
-            logger.info("Step 2 (Basic/Text): Processing sentences...") # Sửa log
-            start_time_step2 = time.time() # Log thời gian
+            logger.info("Step 2 (Basic/Text): Processing sentences into shots...")
+            start_time_step2 = time.time()
 
             for sentence_idx, sentence in enumerate(initial_sentences):
-                original_sentence = sentence.strip()
-                if not original_sentence: continue
+                 original_sentence = sentence.strip()
+                 if not original_sentence: continue
 
-                enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
-                shots_for_sentence_content = []
+                 enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
+                 shots_for_sentence_content = []
 
-                if enable_breakdown:
-                    logger.debug(f"  (Breakdown {sentence_idx+1}/{len(initial_sentences)}) Processing: '{original_sentence[:50]}...'")
-                    shots_for_sentence_content = self._breakdown_sentence_into_shots(original_sentence, style_config['tone'])
-                    if shots_for_sentence_content is None:
-                        logger.warning(f"  (Breakdown {sentence_idx+1}) API call failed. Using full sentence.")
-                        shots_for_sentence_content = [original_sentence]
-                    elif not shots_for_sentence_content:
-                         logger.warning(f"  (Breakdown {sentence_idx+1}) Returned empty list. Using full sentence.")
-                         shots_for_sentence_content = [original_sentence]
-                else:
-                    logger.debug(f"  (No Breakdown {sentence_idx+1}) Using full sentence as single shot.")
-                    shots_for_sentence_content = [original_sentence]
+                 if enable_breakdown:
+                     logger.debug(f"  (Breakdown {sentence_idx+1}/{len(initial_sentences)}) Processing: '{original_sentence[:50]}...'")
+                     shots_for_sentence_content = self._breakdown_sentence_into_shots(original_sentence, style_tone)
+                     if not shots_for_sentence_content:
+                          logger.warning(f"  (Breakdown {sentence_idx+1}) Failed or empty. Using full sentence.")
+                          shots_for_sentence_content = [original_sentence]
+                 else:
+                      logger.debug(f"  (No Breakdown {sentence_idx+1}) Using full sentence as single shot.")
+                      shots_for_sentence_content = [original_sentence]
 
-                # (Giữ nguyên logic xử lý shots_for_sentence_content và tạo final_scenes, final_speech_units)
-                shot_numbers_for_this_unit = []
-                valid_shots_found = False
-                if shots_for_sentence_content:
-                    for shot_content in shots_for_sentence_content:
-                         shot_content_stripped = shot_content.strip()
-                         if not shot_content_stripped: continue
-                         final_scenes.append({
-                             "number": global_shot_number,
-                             "content": shot_content_stripped
-                         })
-                         shot_numbers_for_this_unit.append(global_shot_number)
-                         global_shot_number += 1
-                         valid_shots_found = True
-                if valid_shots_found:
-                    final_speech_units.append({
-                         "unit_number": speech_unit_number,
-                         "text": original_sentence,
-                         "scene_numbers": shot_numbers_for_this_unit
-                    })
-                    speech_unit_number += 1
-                elif original_sentence:
-                     logger.warning(f"  Sentence {sentence_idx+1}: No valid shots generated. Skipping speech unit.")
+                 shot_numbers_for_this_unit = []
+                 valid_shots_found = False
+                 if shots_for_sentence_content:
+                      for shot_content in shots_for_sentence_content:
+                           shot_content_stripped = shot_content.strip()
+                           if not shot_content_stripped: continue
+                           final_scenes.append({
+                               "number": global_shot_number,
+                               "content": shot_content_stripped
+                           })
+                           shot_numbers_for_this_unit.append(global_shot_number)
+                           global_shot_number += 1
+                           valid_shots_found = True
+
+                 if valid_shots_found:
+                      final_speech_units.append({
+                           "unit_number": speech_unit_number,
+                           "text": original_sentence,
+                           "scene_numbers": shot_numbers_for_this_unit
+                      })
+                      speech_unit_number += 1
+                 elif original_sentence:
+                      logger.warning(f"  Sentence {sentence_idx+1}: No valid shots generated. Skipping speech unit for: '{original_sentence[:50]}...'")
 
             end_time_step2 = time.time()
-            logger.info(f"Step 2 (Basic/Text) finished processing sentences in {end_time_step2 - start_time_step2:.2f} seconds.") # Log thời gian
+            logger.info(f"Step 2 (Basic/Text) finished processing sentences in {end_time_step2 - start_time_step2:.2f} seconds.")
 
             if not final_scenes or not final_speech_units:
-                logger.error("Script generation failed (Basic-Text): No valid scenes or speech units created.")
+                logger.error("Script generation failed (Basic/Text): No valid scenes or units created after breakdown.")
                 return None
 
-            logger.info(f"Script generation complete (Basic-Text): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
+            logger.info(f"Script generation complete (Basic/Text): {len(final_scenes)} shots, {len(final_speech_units)} speech units.")
 
-            # === BƯỚC PHÂN TÍCH VIDEO PREFERENCE (THÊM VÀO) ===
+            # === BƯỚC PHÂN TÍCH VIDEO PREFERENCE ===
             logger.info("Analyzing scenes for video clip suitability...")
-            # Gọi hàm phân tích cho danh sách scenes cuối cùng
             analysis_results = self._analyze_shots_for_video_batch(final_scenes)
-
             if analysis_results:
-                logger.info(f"Updating {len(final_scenes)} scenes with video preference analysis results...")
                 updated_scene_count = 0
                 for scene in final_scenes:
                     scene_num = scene.get('number')
                     if scene_num is not None:
-                        # Lấy kết quả phân tích (True/False) cho scene này, mặc định là False nếu không tìm thấy
                         prefer_video_flag = analysis_results.get(scene_num, False)
-                        # Thêm hoặc cập nhật key 'prefer_video' vào dictionary của scene
                         scene['prefer_video'] = prefer_video_flag
-                        if prefer_video_flag:
-                            updated_scene_count += 1
-                    else:
-                        # Xử lý trường hợp scene không có 'number' (dù không nên xảy ra)
-                        scene['prefer_video'] = False
+                        if prefer_video_flag: updated_scene_count += 1
                 logger.info(f"Marked {updated_scene_count} scenes as preferring video.")
             else:
-                # Log nếu phân tích bị tắt, lỗi hoặc không trả về kết quả hợp lệ
-                logger.warning("Video analysis skipped or failed. Proceeding without 'prefer_video' flags in scenes.")
-                # Đảm bảo key 'prefer_video' tồn tại và là False nếu không có phân tích
-                for scene in final_scenes:
-                    scene['prefer_video'] = False
+                 logger.warning("Video analysis skipped/failed. Defaulting 'prefer_video' to false.")
+                 for scene in final_scenes: scene['prefer_video'] = False
 
-            # --- Final script object ---
+            # --- Tạo đối tượng script cuối cùng (Basic mode cho Text) ---
             script_result = {
                 "project_id": project_id,
                 "title": final_title,
-                "scenes": final_scenes,
+                "scenes": final_scenes, # Đã có prefer_video
                 "speech_units": final_speech_units,
                 "source": f"AI Generated from Text ({context_hint or 'Input Text'})",
                 "url": f"text://{project_id}",
-                "style": style,
-                "image_url": None,
+                "image_url": None, # Text input không có image_url
+                "style": style_tone,
                 "language": language,
                 "script_mode": "basic",
-                "is_ai_generated": True, # Từ text là AI gen
+                "is_ai_generated": True, # Luôn là True cho text input
                 "creation_timestamp": datetime.datetime.now().isoformat()
-             }
+            }
 
-            # --- THÊM KHỐI DEBUG LOG ---
-            logger.debug("---------------------------------------------")
-            logger.debug(f"Preparing to return from generate_script_from_text (Basic)...")
-            # (Copy khối debug log giống như trong generate_script_from_keyword)
-            if isinstance(script_result, dict): logger.debug(f"Returning type: dict"); # ... (thêm log chi tiết)
-            elif script_result is None: logger.debug("Returning type: None")
-            else: logger.debug(f"Returning UNEXPECTED type: {type(script_result)}")
-            logger.debug("---------------------------------------------")
-            # --- KẾT THÚC DEBUG LOG ---
-
-            return script_result
-        
-        elif video_mode == "advanced":
+        # --- XỬ LÝ ADVANCED MODE ---
+        elif final_mode == "advanced":
             logger.info("Generating text script in Advanced (Chapters) mode...")
 
             # === BƯỚC 1: TẠO LAYOUT ===
+            logger.info("Stage 1 (Advanced/Text): Generating video layout/outline...")
             layout_data = self._generate_video_layout(
-                source_data={'type': 'text', 'data': input_text, 'context': context_hint}, # Truyền text vào data
-                style_config=style_config,
+                source_data={'type': 'text', 'data': input_text, 'context': context_hint},
+                style_strategy=style_strategy,
                 language=language
             )
-
             if not layout_data:
-                logger.error("Failed to generate video layout from text. Cannot proceed.")
+                logger.error("Failed to generate video layout for text. Cannot proceed.")
                 return None
 
-            # === GIAI ĐOẠN 2: TẠO NỘI DUNG TỪNG CHAPTER ===
-            logger.info("Starting Stage 2: Generating content for each chapter...")
+            # === GIAI ĐOẠN 2: TẠO NỘI DUNG CHAPTER ===
+            logger.info("Starting Stage 2 (Advanced/Text): Generating content for each chapter...")
             all_chapters_sentences = {}
             all_chapters_successful = True
+            original_source_dict = {'type': 'text', 'data': input_text, 'context': context_hint}
 
-            # *** SỬA LỖI: Xác định original_source_dict NGOÀI vòng lặp ***
-            original_source_dict = {'type': 'text', 'data': input_text, 'context': context_hint} # Sử dụng 'input_text' và 'context_hint' từ tham số hàm
-
-            # Lặp qua từng chapter trong layout
             for chapter_outline in layout_data.get('layout', []):
                 chapter_num = chapter_outline.get('chapter_number')
-                if chapter_num is None:
-                    logger.warning("Skipping chapter with missing number in layout.")
-                    all_chapters_successful = False
-                    continue
+                if chapter_num is None: continue
 
-                # Gọi hàm tạo nội dung cho chapter hiện tại
                 chapter_sentences = self._generate_chapter_content(
-                    original_source_data=original_source_dict, # Truyền dict đã tạo
+                    original_source_data=original_source_dict,
                     full_layout_data=layout_data,
                     current_chapter_outline=chapter_outline,
-                    style_config=style_config,
+                    style_strategy=style_strategy,
                     language=language
                 )
-
-                # Xử lý kết quả (giữ nguyên)
                 if chapter_sentences is not None:
                     all_chapters_sentences[chapter_num] = chapter_sentences
-                    if not chapter_sentences:
-                        logger.warning(f"Chapter {chapter_num} generation returned empty list.")
                 else:
-                    logger.error(f"Critical failure generating content for Chapter {chapter_num}. Aborting script generation.")
-                    all_chapters_successful = False
-                    return None # Dừng nếu lỗi nghiêm trọng
+                     logger.error(f"Critical failure generating content for Chapter {chapter_num}. Aborting.")
+                     all_chapters_successful = False
+                     return None
 
-            # Kiểm tra sau khi lặp xong (giữ nguyên)
             if not all_chapters_successful or not all_chapters_sentences:
-                logger.error("Stage 2 Failed: Content generation was not successful for all chapters.")
-                return None
-
-            logger.info("Stage 2 completed successfully. All chapter contents generated.")
-            # --- KẾT THÚC GIAI ĐOẠN 2 ---
+                 logger.error("Stage 2 Failed (Text): Content generation incomplete.")
+                 return None
+            logger.info("Stage 2 (Text) completed successfully.")
 
             # === GIAI ĐOẠN 3: GỘP VÀ HOÀN THIỆN ===
-            logger.info("Proceeding to Stage 3: Assembling final script...")
-
-            # Chuẩn bị source_info
+            logger.info("Proceeding to Stage 3 (Advanced/Text): Assembling final script...")
             source_info_for_assembly = {
                 'source': f"AI Generated from Text (Chapters - {context_hint or 'Input Text'})",
                 'url': f"text_chapters://{project_id}",
-                'keyword': None # Không có keyword cho text input
+                'image_url': None,
+                'keyword': None
             }
-
             script_result = self._assemble_final_script(
                 project_id=project_id,
                 layout_data=layout_data,
                 all_chapters_sentences=all_chapters_sentences,
-                style_config=style_config,
+                style_strategy=style_strategy,
                 language=language,
-                input_type='text', # Truyền input type gốc
+                input_type='text',
                 source_info=source_info_for_assembly
             )
-
             if not script_result:
-                logger.error("Advanced script generation failed during final assembly (Stage 3).")
-                return None
+                 logger.error("Advanced script generation failed during final assembly (Stage 3 - Text).")
+                 return None
+            logger.info("Advanced script generation completed all stages for Text.")
 
-            logger.info("Advanced script generation completed all stages.")
-            return script_result # Trả về script hoàn chỉnh
+        # --- Trường hợp không xác định được mode ---
+        else:
+            logger.error(f"Internal Error: Invalid final_mode '{final_mode}' for text input. Cannot generate script.")
+            return None
 
-    def _generate_video_layout(self, source_data, style_config, language):
+        # --- Return cuối cùng ---
+        logger.debug("---------------------------------------------")
+        logger.debug(f"Preparing to return from generate_script_from_text (Mode: {final_mode})...")
+        if isinstance(script_result, dict):
+            logger.debug(f"Returning type: dict")
+            logger.debug(f"Scene count: {len(script_result.get('scenes', []))}")
+            logger.debug(f"Speech unit count: {len(script_result.get('speech_units', []))}")
+        elif script_result is None:
+            logger.debug("Returning type: None")
+        else:
+            logger.debug(f"Returning UNEXPECTED type: {type(script_result)}")
+        logger.debug("---------------------------------------------")
+        return script_result
+    
+    def _generate_video_layout(self, source_data, style_strategy: BaseVideoStyle, language):
         """
         Giai đoạn 1 (Advanced Mode): Tạo layout/outline cho video.
         Sử dụng cấu hình layout_override linh hoạt để xử lý các style đặc biệt
@@ -1284,27 +1119,24 @@ class ScriptGenerator:
         logger.info("Stage 1 (Advanced): Generating video layout/outline...")
 
         # --- 1. Kiểm tra và Lấy Cấu hình Layout Override ---
-        layout_config = style_config.get("layout_override", {})
-        use_override_layout = layout_config.get("enabled", False)
-        target_audience = style_config.get("target_audience")
+        style_config_data = style_strategy.get_style_config() # Lấy config chung
+        use_override_layout = style_strategy.should_override_layout()
+        layout_params = style_strategy.get_layout_generation_params() if use_override_layout else {}
+        target_audience = style_config_data.get("target_audience") # Lấy target audience từ config
 
         # --- 2. Xác định Tham số Layout Động ---
         if use_override_layout:
-            logger.info(f"Using specific layout override instructions for style '{style_config.get('tone', 'N/A')}'.")
-            # Lấy các tham số từ cấu hình override, cung cấp defaults an toàn
-            ch_min, ch_max = layout_config.get("chapter_count_range", (3, 5)) # VD: Default cho override
-            wt_min, wt_max = layout_config.get("chapter_word_target_range", (400, 700)) # VD: Default cao cho override
-            ttw_min, ttw_max = layout_config.get("target_total_word_range", (1500, 3000)) # VD: Default cao cho override
-            # Lấy và format structure_prompt (nếu có)
-            raw_structure_instruction = layout_config.get("structure_prompt", "")
+            logger.info(f"Using specific layout override instructions for style '{style_config_data.get('tone', 'N/A')}'.")
+            ch_min, ch_max = layout_params.get("chapter_count_range", (3, 5))
+            wt_min, wt_max = layout_params.get("chapter_word_target_range", (400, 700))
+            ttw_min, ttw_max = layout_params.get("target_total_word_range", (1500, 3000))
+            raw_structure_instruction = layout_params.get("structure_prompt", "")
             structure_instruction = raw_structure_instruction.format(chapter_count_min=ch_min, chapter_count_max=ch_max) if raw_structure_instruction else ""
         else:
-            logger.info("Using default layout instructions.")
-            # Giá trị mặc định cho các style thông thường
             ch_min, ch_max = (3, 7)
-            wt_min, wt_max = (150, 300) # Word target chuẩn
-            ttw_min, ttw_max = (0, 0) # Không cần kiểm tra tổng word count cho default
-            structure_instruction = "" # Không có hướng dẫn cấu trúc đặc biệt
+            wt_min, wt_max = (150, 300)
+            ttw_min, ttw_max = (0, 0)
+            structure_instruction = ""
 
         # --- 3. Xây dựng Prompt ---
         prompt_step1_layout = f"""
@@ -1314,8 +1146,8 @@ class ScriptGenerator:
         Do NOT write the detailed script content yet.
 
         Video Style Context:
-        - Tone: {style_config['tone']}
-        - Goal: {style_config.get('goal', 'To inform and engage')}
+        - Tone: {style_config_data['tone']}
+        - Goal: {style_config_data.get('goal', 'To inform and engage')}
         """
         if target_audience: # Thêm target audience nếu có
             prompt_step1_layout += f"- Target Audience: {target_audience}\n"
@@ -1473,7 +1305,7 @@ class ScriptGenerator:
             return None
     # --- Kết thúc hàm _generate_video_layout ---
 
-    def _generate_chapter_content(self, original_source_data, full_layout_data, current_chapter_outline, style_config, language):
+    def _generate_chapter_content(self, original_source_data, full_layout_data, current_chapter_outline, style_strategy: BaseVideoStyle, language):
         """
         Giai đoạn 2 (Advanced Mode): Tạo nội dung tường thuật chi tiết cho một chapter cụ thể.
         Sử dụng style_config để điều chỉnh prompt về tone, audience, detail level, và transitions.
@@ -1492,18 +1324,26 @@ class ScriptGenerator:
         chapter_num = current_chapter_outline['chapter_number']
         chapter_title = current_chapter_outline['chapter_title']
         chapter_summary = current_chapter_outline.get('summary', '')
-        word_count_target = current_chapter_outline.get('word_count_target', 150) # Lấy target từ outline
-        target_audience = style_config.get("target_audience") # Lấy target audience từ style config
+        word_count_target = current_chapter_outline.get('word_count_target', 150)
 
+        # --- Lấy thông tin từ strategy ---
+        style_config_data = style_strategy.get_style_config() # Lấy config từ strategy
+        style_tone = style_config_data.get('tone', 'Unknown')
+        style_instructions = style_config_data.get('instructions', [])
+        target_audience = style_config_data.get("target_audience")
+
+        # --- Xử lý style_name (Tạm thời, nên chuyển vào strategy) ---
         style_name = None
-        for name, config in cfg.style_configs.items(): # Cần import cfg hoặc truy cập style_configs đúng cách
-             if config == style_config:
-                 style_name = name
-                 break
+        from src import project_config as cfg # Cần import ở đây hoặc global
+        for name, config_iter in cfg.style_configs.items(): # Vẫn cần truy cập cfg.style_configs CŨ để lấy tên TẠM THỜI
+            # So sánh bằng tone hoặc cách khác để nhận diện strategy
+            if config_iter.get('tone') == style_tone: # Giả sử tone là duy nhất
+                style_name = name
+                break
+        # ------------------------------------------------------        
 
         logger.info(f"  Stage 2: Generating content for Chapter {chapter_num}: '{chapter_title}' (Target: ~{word_count_target} words)...")
-        if target_audience:
-            logger.info(f"    Target Audience: {target_audience}")
+        if target_audience: logger.info(f"    Target Audience: {target_audience}")
 
         # --- 2. Xác định thông tin Chapter tiếp theo (để gợi ý chuyển tiếp) ---
         next_chapter_title = None
@@ -1514,7 +1354,7 @@ class ScriptGenerator:
 
         # --- 3. Xây dựng Prompt ---
         prompt_stage2_chapter = f"""
-        You are a detailed and engaging scriptwriter specializing in the style: '{style_config['tone']}'.
+        You are a detailed and engaging scriptwriter specializing in the style: '{style_tone}'.
         Your task is to write the narrative script content *ONLY* for a specific chapter of a video, based on the provided context and overall structure.
         """
         # --- 3a. Thêm thông tin Target Audience (nếu có) ---
@@ -1529,7 +1369,7 @@ class ScriptGenerator:
         ```json
         {json.dumps(full_layout_data['layout'], indent=2, ensure_ascii=False)}
         ```
-        - Target Style/Tone: {style_config['tone']}
+        - Target Style/Tone: {style_tone}
 
         **Current Chapter Focus:**
         - You are writing ONLY for: **Chapter {chapter_num}: "{chapter_title}"**
@@ -1595,12 +1435,12 @@ class ScriptGenerator:
             - Target word count (~{word_count_target} words.
             """       
 
-        # --- 3d. Hướng dẫn Chung (Đã cập nhật) ---
+        # --- 3d. Hướng dẫn Chung ---
         prompt_stage2_chapter += f"""
         **General Instructions (Apply to all sentences written for Chapter {chapter_num}):**
         1.  Write detailed, engaging narrative sentences {lang_instruction} that thoroughly explore the key points outlined in the Chapter Summary/Goal. Aim to reach the **Target Word Count Guideline (~{word_count_target} words)** by providing **sufficient depth, detail, examples, and explanation**.
         2.  Expand significantly on the summary using information *strictly* from the provided Source Material. Do NOT invent facts.
-        3.  Consistently maintain the specified video style ('{style_config['tone']}') and follow the general style instructions: {'; '.join(style_config['instructions'])}
+        3.  Consistently maintain the specified video style ({style_tone}) and follow the general style instructions: {'; '.join(style_instructions)}
         4.  Ensure sentences flow logically within the chapter.
         5.  **Smooth Transitions:**
             - If this is Chapter > 1, ensure the *first sentence* provides a natural, conversational continuation from the previous chapter's topic (implied from the layout summary). Avoid abrupt starts.
@@ -1675,7 +1515,7 @@ class ScriptGenerator:
             return None
     # --- Kết thúc hàm _generate_chapter_content ---
 
-    def _assemble_final_script(self, project_id, layout_data, all_chapters_sentences, style_config, language, input_type, source_info):
+    def _assemble_final_script(self, project_id, layout_data, all_chapters_sentences, style_strategy: BaseVideoStyle, language, input_type, source_info):
         """
         Giai đoạn 3 (Advanced Mode): Gộp nội dung chapter, breakdown thành shots, và tạo script cuối cùng.
 
@@ -1694,6 +1534,10 @@ class ScriptGenerator:
             dict: Script cuối cùng hoàn chỉnh hoặc None nếu lỗi.
         """
         logger.info("Starting Stage 3: Assembling final script...")
+
+        # --- Lấy thông tin từ strategy ---
+        style_config_data = style_strategy.get_style_config()
+        style_tone = style_config_data.get('tone', 'Unknown')
 
         final_title = layout_data.get("title", "Untitled Video")
         final_scenes = []
@@ -1726,7 +1570,7 @@ class ScriptGenerator:
 
                 if enable_breakdown:
                     # logger.debug(f"    Breaking down: '{original_sentence[:50]}...'")
-                    shots_content_list = self._breakdown_sentence_into_shots(original_sentence, style_config['tone'])
+                    shots_content_list = self._breakdown_sentence_into_shots(original_sentence, style_tone)
                     if not shots_content_list:
                         logger.warning(f"    Breakdown failed for sentence in Ch {chapter_num}, using full sentence.")
                         shots_content_list = [original_sentence]
@@ -1829,7 +1673,7 @@ class ScriptGenerator:
             "source": source_info.get('source', 'Unknown'),
             "url": source_info.get('url', ''),
             "image_url": article_image_url,
-            "style": style_config.get('tone', 'informative'),
+            "style": style_tone,
             "language": language,
             "script_mode": "advanced",
             "is_chapter_based": True,

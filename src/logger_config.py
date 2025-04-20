@@ -1,7 +1,7 @@
 # src/logger_config.py
 
 import logging
-from src import project_config as cfg
+from config import settings
 
 
 def setup_logger(name=__name__):
@@ -13,7 +13,7 @@ def setup_logger(name=__name__):
 
     # Tránh tạo nhiều handler khi import nhiều lần
     if not logger.hasHandlers():
-        formatter = logging.Formatter(cfg.LOGGER_FORMAT)
+        formatter = logging.Formatter(settings.LOGGER_FORMAT)
 
         # Console Handler
         console_handler = logging.StreamHandler()
