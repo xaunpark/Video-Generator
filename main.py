@@ -526,7 +526,7 @@ def main():
 
         language = selected_article.get('language', 'en') # Detect language from selected article
         logger.info(f"Article language: {language}. Generating script...")
-        script = script_generator.generate_script(
+        script = script_generator.generate_script_from_article(
             article=selected_article,
             style_strategy=selected_style_strategy,
             language=language,
@@ -549,7 +549,7 @@ def main():
 
         language = selected_article.get('language', 'en')
         logger.info(f"Article language: {language}. Generating script...")
-        script = script_generator.generate_script(
+        script = script_generator.generate_script_from_article(
             article=selected_article, # Sửa tên tham số
             style_strategy=selected_style_strategy, # TRUYỀN STRATEGY OBJECT
             language=language,

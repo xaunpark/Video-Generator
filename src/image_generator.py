@@ -23,7 +23,6 @@ logger = setup_logger(__name__)
 from config.credentials import SERPER_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
 from config.settings import TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS, DALLE_SETTINGS, IMAGEN_SETTINGS
 from src.video_clip_finder import VideoClipFinder
-from src import project_config as cfg
 
 # --- IMPORTS CHO GEMINI ---
 try:
