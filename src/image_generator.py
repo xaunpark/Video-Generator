@@ -505,27 +505,27 @@ class ImageGenerator:
                 if not theme_queries:
                     logger.warning("Failed to generate theme queries. Using title as fallback query.")
                     # Fallback: dùng title làm query duy nhất
-                    theme_queries = [script.get('title', 'abstract background')]
+                    theme_queries = [script.get('title', 'natural')]
                     # Nếu fallback, chỉ nên gọi API 1 vài lần
                     num_api_calls_to_make = min(num_api_calls_to_make, 3)
 
                     # --- THÊM LOGIC KIỂM TRA VÀ OVERRIDE SEARCH QUERY Ở ĐÂY ---
-                    final_theme_queries = theme_queries # Mặc định dùng query đã tạo
-                    if visual_source == "video_only" and style_strategy:
-                        try:
-                            query_override = style_strategy.get_video_search_query_override()
-                            if query_override:
-                                if isinstance(query_override, list) and query_override:
-                                        final_theme_queries = query_override # Thay thế hoàn toàn bằng list từ strategy
-                                        logger.info(f"Theme Mode: Overriding theme queries with fixed list from strategy ({len(final_theme_queries)} queries).")
-                                elif isinstance(query_override, str) and query_override.strip():
-                                        final_theme_queries = [query_override.strip()] # Dùng string cố định làm query duy nhất
-                                        logger.info(f"Theme Mode: Overriding theme queries with fixed string from strategy: '{final_theme_queries[0]}'")
-                                # Nếu override không hợp lệ thì vẫn dùng theme_queries gốc
-                        except AttributeError:
-                            logger.debug("Theme Mode: Strategy does not support query override.")
-                        except Exception as e:
-                            logger.error(f"Theme Mode: Error getting query override: {e}. Using generated queries.")
+                final_theme_queries = theme_queries # Mặc định dùng query đã tạo
+                if visual_source == "video_only" and style_strategy:
+                    try:
+                        query_override = style_strategy.get_video_search_query_override()
+                        if query_override:
+                            if isinstance(query_override, list) and query_override:
+                                    final_theme_queries = query_override # Thay thế hoàn toàn bằng list từ strategy
+                                    logger.info(f"Theme Mode: Overriding theme queries with fixed list from strategy ({len(final_theme_queries)} queries).")
+                            elif isinstance(query_override, str) and query_override.strip():
+                                    final_theme_queries = [query_override.strip()] # Dùng string cố định làm query duy nhất
+                                    logger.info(f"Theme Mode: Overriding theme queries with fixed string from strategy: '{final_theme_queries[0]}'")
+                            # Nếu override không hợp lệ thì vẫn dùng theme_queries gốc
+                    except AttributeError:
+                        logger.debug("Theme Mode: Strategy does not support query override.")
+                    except Exception as e:
+                        logger.error(f"Theme Mode: Error getting query override: {e}. Using generated queries.")
                     # --- KẾT THÚC LOGIC OVERRIDE ---
 
                 # --- 4. Mở rộng danh sách query để thực hiện API calls ---
@@ -686,7 +686,7 @@ class ImageGenerator:
                           if scene_content:
                                queries_for_scenes[i] = self._create_search_query_with_openai(scene_content, script['title'])
                           else:
-                               queries_for_scenes[i] = "abstract background" # Fallback cho scene rỗng
+                               queries_for_scenes[i] = "natural" # Fallback cho scene rỗng
                      logger.info("Finished generating OpenAI queries.")
                 # --- KẾT THÚC XÁC ĐỊNH DANH SÁCH QUERY ---
 
@@ -721,7 +721,7 @@ class ImageGenerator:
                     # ==============================================================
 
                     use_image_fallback_chain = False # Biến điều khiển chuỗi fallback ảnh
-                    
+
                     # --- OPTION 1: Primary Source is SEARCH ---
                     if visual_source == "search":
                         logger.debug(f"Scene {scene_number}: Using SEARCH as primary source.")
