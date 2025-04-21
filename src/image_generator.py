@@ -65,30 +65,38 @@ class ImageGenerator:
         # --- KẾT THÚC LƯU INSTANCE ---
 
         # --- KHỞI TẠO GEMINI CLIENT VÀ ĐỌC CẤU HÌNH IMAGEN ---
-        self.gemini_client = None
+        self.gemini_client = None # Vẫn khởi tạo là None
+        self.genai_types = None   # Thêm để lưu types nếu cần
         if GOOGLE_AI_AVAILABLE and GEMINI_API_KEY:
             try:
-                # Sử dụng key trực tiếp khi khởi tạo client
-                genai.configure(api_key=GEMINI_API_KEY) # Cấu hình global hoặc client-specific
-                # Khởi tạo client (nếu cần) - Hoặc dùng hàm genai.* trực tiếp
-                # self.gemini_client = genai.Client(api_key=GEMINI_API_KEY) # Cách này cũng được
-                self.gemini_client = genai # Gán module để gọi hàm generate_images sau này
-                logger.info("Google AI (for Imagen) configured successfully.")
-                # Đọc cấu hình Imagen
-                self.imagen_model = IMAGEN_SETTINGS.get("model", "models/imagen-3.0-generate-002") # Cập nhật tên model
+                # --- THAY ĐỔI CHÍNH ---
+                # Bỏ genai.configure(...)
+                # Tạo client instance như sample code
+                self.gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+                self.genai_types = genai_types # Lưu lại types để dùng sau
+                # --- KẾT THÚC THAY ĐỔI ---
+                logger.info("Google AI Client (for Imagen) initialized successfully using genai.Client.")
+                # Đọc cấu hình Imagen (giữ nguyên)
+                self.imagen_model = IMAGEN_SETTINGS.get("model", "models/imagen-3.0-generate-002")
                 self.imagen_num_images = IMAGEN_SETTINGS.get("number_of_images", 1)
                 self.imagen_aspect_ratio = IMAGEN_SETTINGS.get("aspect_ratio", "16:9")
-                self.imagen_negative_prompt = IMAGEN_SETTINGS.get("negative_prompt", None) # Thêm negative prompt
-                self.imagen_style_raw = IMAGEN_SETTINGS.get("style_raw", False) # Thêm style_raw
+                self.imagen_negative_prompt = IMAGEN_SETTINGS.get("negative_prompt", None)
+                self.imagen_style_raw = IMAGEN_SETTINGS.get("style_raw", False)
                 logger.info(f"Imagen settings loaded: Model={self.imagen_model}, Num={self.imagen_num_images}, AspectRatio={self.imagen_aspect_ratio}, StyleRaw={self.imagen_style_raw}")
 
+            except AttributeError as client_attr_err: # Bắt lỗi nếu genai không có Client
+                logger.error(f"Failed to initialize Google AI Client - AttributeError: {client_attr_err}")
+                logger.error("It seems 'from google import genai' does not provide 'genai.Client'. Check library version or installation.")
+                self.gemini_client = None
+                self.genai_types = None
             except Exception as e:
-                logger.error(f"Failed to configure Google AI: {e}", exc_info=True)
-                self.gemini_client = None # Đặt lại là None nếu lỗi
+                logger.error(f"Failed to initialize Google AI Client: {e}", exc_info=True)
+                self.gemini_client = None
+                self.genai_types = None
         elif not GOOGLE_AI_AVAILABLE:
-             logger.warning("Google AI library not installed, Imagen generation disabled.")
-        else: # GOOGLE_AI_AVAILABLE is True but no API key
-             logger.warning("GEMINI_API_KEY not found in environment variables. Imagen generation disabled.")
+            logger.warning("Google AI library not installed, Imagen generation disabled.")
+        else:
+            logger.warning("GEMINI_API_KEY not found in environment variables. Imagen generation disabled.")
         # --- KẾT THÚC KHỞI TẠO GEMINI ---
 
         # --- Các cài đặt thư mục và video dimensions ---
@@ -1212,24 +1220,29 @@ class ImageGenerator:
             logger.error("Google AI Client not initialized. Cannot generate Imagen images.")
             return None
 
+        if not self.genai_types:
+            logger.error("Google AI types not available. Cannot create config.")
+            # Hoặc thử import lại: from google.genai import types as genai_types
+            # Nếu import lại không được thì return None
+            return None
+        
         logger.info(f"Requesting Imagen image (Model: {self.imagen_model}) with prompt: {prompt[:80]}...")
 
         try:
-            # Create config object using the correct class - REMOVE quality parameter
-            config = genai_types.GenerateImagesConfig(
+            # Tạo config sử dụng self.genai_types
+            config = self.genai_types.GenerateImagesConfig(
                 number_of_images=self.imagen_num_images,
                 aspect_ratio=self.imagen_aspect_ratio
-                # Remove the quality parameter completely as it's not supported
+                # Thêm các tham số config khác nếu cần
             )
 
-            # Make the API request following the working pattern
-            response = self.gemini_client.models.generate_images(
+            # Gọi qua client instance đã lưu trong self.gemini_client
+            response = self.gemini_client.models.generate_images( # DÙNG self.gemini_client
                 model=self.imagen_model,
                 prompt=prompt,
                 config=config
             )
 
-            # Rest of the method remains the same
             if hasattr(response, 'generated_images') and response.generated_images and len(response.generated_images) > 0:
                 # Get the first image from the response
                 generated_image_data = response.generated_images[0]
