@@ -123,21 +123,33 @@ LLM_PROVIDERS = {
     "openai": {
         "api_key_name": "OPENAI_API_KEY", # Name of the key variable in credentials.py
         "base_url": "https://api.openai.com/v1",
-        "chat_model": "gpt-4o", # Or your preferred OpenAI model
+        "chat_model": "gpt-4o",
         "supports_json_mode": True,
     },
     "deepseek": {
         "api_key_name": "DEEPSEEK_API_KEY",
         "base_url": "https://api.deepseek.com/v1",
-        "chat_model": "deepseek-chat", #deepseek-reasoner không hỗ trợ json mode
-        "supports_json_mode": True, # IMPORTANT: Verify if Deepseek supports a forced JSON output mode like OpenAI. Set to False if not.
+        "chat_model": "deepseek-chat",
+        "supports_json_mode": True,
     },
-    # Add other providers here in the future
+    "deepseek_reasoner": {
+        "api_key_name": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com/v1",
+        "chat_model": "deepseek-reasoner",
+        "supports_json_mode": False,
+    },
 }
 
 DEFAULT_LLM_PROVIDER = "openai"
 if DEFAULT_LLM_PROVIDER not in LLM_PROVIDERS:
     raise ValueError(f"DEFAULT_LLM_PROVIDER ('{DEFAULT_LLM_PROVIDER}') in settings.py is not defined in LLM_PROVIDERS.")
+
+LLM_PROVIDER_DISPLAY_NAMES = {
+    "openai": "OpenAI",
+    "deepseek": "DeepSeek Chat",
+    "deepseek_reasoner": "DeepSeek Reasoner",
+    # Thêm tên hiển thị cho các provider khác nếu có
+}
 
 # DALL-E Settings
 DALLE_SETTINGS = {

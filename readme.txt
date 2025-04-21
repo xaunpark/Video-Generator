@@ -54,3 +54,6 @@ For a description of the Bot API, see this page: https://core.telegram.org/bots/
 
 ---
 Telegram bot id của MyVideoUploadNotifyBot: 6452766273
+---
+
+Thêm is_core_content_task = False trong các hàm không cần phải sử dụng DeepSeek Reasoner mà sẽ dùng LLM mặc định (trong trường hợp chọn dùng DeepSeek Reasoner)

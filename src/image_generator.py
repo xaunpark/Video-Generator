@@ -35,7 +35,7 @@ except ImportError:
     GOOGLE_AI_AVAILABLE = False
 
 class ImageGenerator:
-    def __init__(self):
+    def __init__(self, script_generator=None):
         """Initializes ImageGenerator with Serper and OpenAI configurations."""
         self.serper_api_key = SERPER_API_KEY
         if not self.serper_api_key:
@@ -43,11 +43,12 @@ class ImageGenerator:
             # Consider raising an error if Serper is mandatory
             # raise ValueError("Serper API key is required.")
 
-        # --- OpenAI Configuration ---
+        # --- OpenAI Configuration (giữ lại key làm fallback) ---
         self.openai_api_key = OPENAI_API_KEY
         if not self.openai_api_key:
-            # Warn if OpenAI key is missing, since it's required for query generation
-            logger.warning("OpenAI API key not found. Search queries will use a simple fallback method.")
+            # Chỉ cảnh báo, vì ưu tiên dùng script_generator
+            logger.warning("OpenAI API key not found. Fallback LLM calls within ImageGenerator might fail if ScriptGenerator is not provided.")
+        # Giữ lại base_url và headers phòng trường hợp cần gọi trực tiếp làm fallback cuối cùng
         self.openai_base_url = "https://api.openai.com/v1"
         self.openai_headers = {
             "Authorization": f"Bearer {self.openai_api_key}",
@@ -55,23 +56,34 @@ class ImageGenerator:
         }
         # --- End OpenAI Configuration ---
 
+        # --- LƯU LẠI INSTANCE SCRIPT GENERATOR ---
+        self.script_generator = script_generator
+        if not self.script_generator:
+            logger.warning("ImageGenerator initialized without a ScriptGenerator instance. LLM calls for prompts/queries will use fallback methods (potentially direct OpenAI calls).")
+        else:
+             logger.info("ImageGenerator initialized with a ScriptGenerator instance for centralized LLM calls.")
+        # --- KẾT THÚC LƯU INSTANCE ---
+
         # --- KHỞI TẠO GEMINI CLIENT VÀ ĐỌC CẤU HÌNH IMAGEN ---
         self.gemini_client = None
         if GOOGLE_AI_AVAILABLE and GEMINI_API_KEY:
             try:
                 # Sử dụng key trực tiếp khi khởi tạo client
-                self.gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-                logger.info("Google AI Client (for Imagen) initialized successfully.")
+                genai.configure(api_key=GEMINI_API_KEY) # Cấu hình global hoặc client-specific
+                # Khởi tạo client (nếu cần) - Hoặc dùng hàm genai.* trực tiếp
+                # self.gemini_client = genai.Client(api_key=GEMINI_API_KEY) # Cách này cũng được
+                self.gemini_client = genai # Gán module để gọi hàm generate_images sau này
+                logger.info("Google AI (for Imagen) configured successfully.")
                 # Đọc cấu hình Imagen
-                self.imagen_model = IMAGEN_SETTINGS.get("model", "imagen-3.0-generate-002")
+                self.imagen_model = IMAGEN_SETTINGS.get("model", "models/imagen-3.0-generate-002") # Cập nhật tên model
                 self.imagen_num_images = IMAGEN_SETTINGS.get("number_of_images", 1)
-                self.imagen_aspect_ratio = IMAGEN_SETTINGS.get("aspect_ratio", "16:9") # Đọc tỉ lệ
-                # self.imagen_quality = IMAGEN_SETTINGS.get("quality", None) # Đọc quality nếu có
-                # Có thể thêm các cấu hình khác ở đây
-                logger.info(f"Imagen settings loaded: Model={self.imagen_model}, Num={self.imagen_num_images}, AspectRatio={self.imagen_aspect_ratio}")
+                self.imagen_aspect_ratio = IMAGEN_SETTINGS.get("aspect_ratio", "16:9")
+                self.imagen_negative_prompt = IMAGEN_SETTINGS.get("negative_prompt", None) # Thêm negative prompt
+                self.imagen_style_raw = IMAGEN_SETTINGS.get("style_raw", False) # Thêm style_raw
+                logger.info(f"Imagen settings loaded: Model={self.imagen_model}, Num={self.imagen_num_images}, AspectRatio={self.imagen_aspect_ratio}, StyleRaw={self.imagen_style_raw}")
 
             except Exception as e:
-                logger.error(f"Failed to initialize Google AI Client: {e}", exc_info=True)
+                logger.error(f"Failed to configure Google AI: {e}", exc_info=True)
                 self.gemini_client = None # Đặt lại là None nếu lỗi
         elif not GOOGLE_AI_AVAILABLE:
              logger.warning("Google AI library not installed, Imagen generation disabled.")
@@ -79,6 +91,7 @@ class ImageGenerator:
              logger.warning("GEMINI_API_KEY not found in environment variables. Imagen generation disabled.")
         # --- KẾT THÚC KHỞI TẠO GEMINI ---
 
+        # --- Các cài đặt thư mục và video dimensions ---
         self.temp_dir = TEMP_DIR
         self.assets_dir = ASSETS_DIR
         self.width = VIDEO_SETTINGS["width"]
@@ -91,34 +104,37 @@ class ImageGenerator:
             "Content-Type": "application/json"
         }
 
-        # Create temporary image storage directory
+        # Tạo thư mục tạm và cache
         self.image_dir = os.path.join(self.temp_dir, "images")
         os.makedirs(self.image_dir, exist_ok=True)
-
-        # Create image cache directory
         self.cache_dir = os.path.join(self.temp_dir, "image_cache")
         os.makedirs(self.cache_dir, exist_ok=True)
 
-        # Create assets and fonts directories if they don't exist
+        # Tạo thư mục assets và fonts
         os.makedirs(self.assets_dir, exist_ok=True)
         self.fonts_dir = os.path.join(self.assets_dir, "fonts")
         os.makedirs(self.fonts_dir, exist_ok=True)
 
-        # Check for required fonts
-        self._check_fonts() # Renamed from _check_and_download_fonts
+        # Kiểm tra fonts
+        self._check_fonts()
 
-        # Thêm video clip finder (sẽ được khởi tạo khi cần)
+        # Khởi tạo video finder (sẽ được gọi khi cần)
         self.video_finder = None
 
         # Đường dẫn cache cho video
         self.video_cache_dir = os.path.join(self.temp_dir, "video_cache")
         os.makedirs(self.video_cache_dir, exist_ok=True)
 
-        # Tạo thư mục fallback video (nếu chưa có)
+        # Tạo thư mục fallback video và load danh sách
         self.fallback_video_dir = os.path.join(self.assets_dir, "fallback_videos")
         os.makedirs(self.fallback_video_dir, exist_ok=True)
-        # Có thể load danh sách file fallback ở đây nếu muốn tối ưu
-        self.fallback_video_files = glob.glob(os.path.join(self.fallback_video_dir, "*.mp4")) # Ví dụ
+        self.fallback_video_files = []
+        try:
+             self.fallback_video_files = [os.path.join(self.fallback_video_dir, f) for f in os.listdir(self.fallback_video_dir) if f.lower().endswith(('.mp4', '.mov', '.webm'))]
+             if self.fallback_video_files:
+                 logger.info(f"Loaded {len(self.fallback_video_files)} fallback video files.")
+        except Exception as e:
+            logger.warning(f"Could not list fallback video files: {e}")
 
     # --- Tạo Theme Queries/Prompts PHỤC VỤ overall_theme_fixed_duration ---
     def _generate_theme_queries(self, main_title, count, language):
@@ -177,33 +193,29 @@ class ImageGenerator:
         # TẠM THỜI: Giả sử có một phương thức _call_llm_api tương tự ScriptGenerator
         # Hoặc đơn giản là gọi trực tiếp OpenAI/Deepseek ở đây nếu không cần chuyển đổi LLM cho việc này.
         # Ví dụ gọi trực tiếp OpenAI (cần điều chỉnh nếu dùng Deepseek hoặc wrapper):
-        if not self.openai_api_key: # Kiểm tra key OpenAI cụ thể ở đây
-            logger.warning("OpenAI API key not available for generating theme queries. Using fallback.")
-        else:
+        if self.script_generator: # Chỉ gọi nếu có instance
             try:
-                openai_url = "https://api.openai.com/v1/chat/completions" # URL OpenAI
-                payload = {
-                    "model": "gpt-4o-mini", # Dùng model nhỏ hơn cho task này
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.8, # Tăng nhiệt độ để đa dạng hơn
-                    #"max_tokens": 300, # Đủ cho khoảng 7-10 queries
-                    "response_format": {"type": "json_object"}
-                }
-                response = requests.post(openai_url, headers={"Authorization": f"Bearer {self.openai_api_key}", "Content-Type": "application/json"}, json=payload, timeout=60)
-                response.raise_for_status()
-                data = response.json()
-                if data.get('choices') and data['choices'][0].get('message'):
-                    content_str = data['choices'][0]['message']['content']
-                    parsed_data = json.loads(content_str)
+                response_json_str = self.script_generator._call_llm_api(
+                    user_prompt=prompt,
+                    system_prompt="You are an assistant brainstorming diverse visual ideas based on a theme.", # Prompt hệ thống đơn giản
+                    require_json=True,
+                    is_core_content_task=False, # Đây là task phụ trợ
+                    request_timeout=60
+                )
+                if response_json_str:
+                    parsed_data = json.loads(response_json_str)
                     queries = parsed_data.get("theme_visual_ideas")
                     if queries and isinstance(queries, list) and all(isinstance(q, str) for q in queries):
-                        logger.info(f"LLM generated {len(queries)} theme visual ideas.")
-                        # Trả về đúng số lượng yêu cầu, loại bỏ chuỗi rỗng
+                        logger.info(f"LLM generated {len(queries)} theme visual ideas via ScriptGenerator.")
                         return [q for q in queries if q][:count]
                     else:
-                         logger.warning("LLM response for theme queries had invalid format.")
+                        logger.warning("LLM response (via SG) for theme queries had invalid format.")
+                else:
+                    logger.warning("LLM call (via SG) for theme queries returned no response.")
             except Exception as e:
-                logger.error(f"Error calling LLM to generate theme queries: {e}", exc_info=True)
+                logger.error(f"Error calling LLM (via SG) for theme queries: {e}", exc_info=True)
+        else:
+            logger.warning("ScriptGenerator instance not available for theme query generation.")
 
         # --- Fallback Logic ---
         logger.warning("LLM failed or unavailable for theme queries. Using simple fallback based on title.")
@@ -684,7 +696,7 @@ class ImageGenerator:
                      for i, scene in enumerate(scenes_in_script):
                           scene_content = scene.get('content', '').strip()
                           if scene_content:
-                               queries_for_scenes[i] = self._create_search_query_with_openai(scene_content, script['title'])
+                               queries_for_scenes[i] = self._create_search_query(scene_content, script['title'])
                           else:
                                queries_for_scenes[i] = "natural" # Fallback cho scene rỗng
                      logger.info("Finished generating OpenAI queries.")
@@ -1101,68 +1113,98 @@ class ImageGenerator:
             return media_items
 
     def _create_imagen_prompt(self, scene_content, video_title, style_strategy: BaseVideoStyle):
-        """Uses GEmini Imagen to generate a descriptive Imagen prompt from scene content."""
+        """
+        Uses the configured LLM (via ScriptGenerator) to generate a descriptive Imagen prompt
+        based on scene content, video title, and guidance from the style strategy.
 
-        # --- KIỂM TRA ---
+        Args:
+            scene_content (str): The narrative content of the current scene/shot.
+            video_title (str): The main title of the video for context.
+            style_strategy (BaseVideoStyle): The selected video style strategy object.
+
+        Returns:
+            str: A generated text prompt suitable for the Imagen API, or a basic fallback prompt.
+        """
+        # --- KIỂM TRA ĐẦU VÀO ---
         if not style_strategy:
             logger.error("Cannot create Imagen prompt: Style Strategy is missing.")
             # Trả về fallback đơn giản nhất
             return f"Simple image representing: {scene_content[:80]}"
         # --------------------
 
-        if not self.openai_api_key: # API Key để *gọi LLM tạo prompt Imagen*
-            logger.warning("OpenAI API key missing for Imagen prompt generation assist. Using basic fallback.")
-            # Fallback đơn giản nếu không có key gọi LLM
-            return f"Image depicting: {scene_content[:100]}"
-
         # --- LẤY PROMPT HƯỚNG DẪN TỪ STRATEGY ---
+        gpt_prompt_instructions = "" # Khởi tạo rỗng
         try:
             # Gọi phương thức của strategy để lấy hướng dẫn tạo prompt Imagen
+            # Phương thức này nên trả về một chuỗi hướng dẫn chi tiết cho LLM khác
             gpt_prompt_instructions = style_strategy.generate_ai_image_prompt(scene_content, video_title)
+            if not gpt_prompt_instructions:
+                 logger.warning(f"Style strategy '{type(style_strategy).__name__}' returned empty instructions for Imagen prompt generation. Using basic fallback.")
+                 return f"Image depicting: {scene_content[:100]}" # Fallback nếu strategy trả về rỗng
+
             logger.debug(f"Received AI image prompt instructions from strategy.")
+
+        except AttributeError: # Nếu strategy không implement phương thức này
+            logger.warning(f"Style strategy '{type(style_strategy).__name__}' does not implement 'generate_ai_image_prompt'. Using basic fallback.")
+            return f"Image depicting: {scene_content[:100]}" # Fallback
         except Exception as strat_err:
             logger.error(f"Error getting AI image prompt instructions from strategy: {strat_err}. Using basic fallback.")
-            return f"Image depicting: {scene_content[:100]}"
+            return f"Image depicting: {scene_content[:100]}" # Fallback
         # ---------------------------------------
 
-        # --- Gọi LLM để tạo prompt Imagen cuối cùng ---
-        try:
-            # Sử dụng gpt_prompt_instructions lấy từ strategy làm user content
-            url = f"{self.openai_base_url}/chat/completions"
-            payload = {
-                "model": "gpt-4o-mini", # Hoặc model bạn muốn dùng cho việc này
-                "messages": [
-                    {"role": "system", "content": "You are an AI assistant that generates text prompts for image generation models like Imagen, based on provided instructions."},
-                    {"role": "user", "content": gpt_prompt_instructions} # DÙNG HƯỚNG DẪN TỪ STRATEGY
-                ],
-                "temperature": 0.6, # Có thể điều chỉnh
-                #"max_tokens": 150 # Giới hạn độ dài prompt Imagen cuối cùng
-            }
-            logger.debug(f"Generating final Imagen prompt via LLM: '{scene_content[:80]}...'")
-            response = requests.post(url, headers=self.openai_headers, json=payload, timeout=30) # Tăng nhẹ timeout
-            response.raise_for_status()
-            data = response.json()
+        # --- Fallback cơ bản nếu không có ScriptGenerator để gọi LLM ---
+        if not self.script_generator:
+            logger.warning("ScriptGenerator not available for Imagen prompt generation refinement. Using basic fallback based on strategy instructions (if any) or scene content.")
+            # Cố gắng dùng instruction từ strategy làm prompt Imagen trực tiếp nếu có
+            if gpt_prompt_instructions:
+                 # Lấy phần cốt lõi của instruction (có thể cần tinh chỉnh dựa trên format của generate_ai_image_prompt)
+                 # Giả sử instruction là một đoạn văn mô tả
+                 return f"{gpt_prompt_instructions[:250]}" # Giới hạn độ dài
+            else:
+                 return f"Image depicting: {scene_content[:100]}" # Fallback cuối
+        # ----------------------------------------------------
 
-            if data.get('choices'):
-                # Trích xuất prompt Imagen cuối cùng do LLM tạo ra
-                final_imagen_prompt = data['choices'][0]['message']['content'].strip().replace('"', '')
-                # Kiểm tra prompt hợp lệ (không rỗng)
+        # --- Gọi LLM (qua ScriptGenerator) để tạo prompt Imagen cuối cùng ---
+        try:
+            logger.debug(f"Refining final Imagen prompt via LLM (SG) based on strategy instructions for scene: '{scene_content[:80]}...'")
+
+            # Gọi _call_llm_api thông qua instance đã lưu
+            # Yêu cầu LLM tạo ra prompt cuối cùng dựa trên hướng dẫn từ strategy
+            final_imagen_prompt_raw = self.script_generator._call_llm_api(
+                user_prompt=gpt_prompt_instructions, # Dùng hướng dẫn từ strategy làm input chính
+                system_prompt="You are an AI assistant specializing in crafting high-quality, descriptive text prompts for advanced image generation models like Google Imagen. Focus on visual details, style, composition, and lighting based on the user's instructions.",
+                require_json=False, # Chỉ cần output là text prompt
+                is_core_content_task=False, # Đây là task phụ trợ
+                request_timeout=35 # Timeout vừa đủ
+            )
+
+            if final_imagen_prompt_raw:
+                # Xử lý prompt nhận được: bỏ dấu ngoặc kép, khoảng trắng thừa
+                final_imagen_prompt = final_imagen_prompt_raw.strip().replace('"', '')
+                # Kiểm tra lại xem prompt có rỗng không sau khi xử lý
                 if not final_imagen_prompt:
-                    logger.error("LLM returned an empty Imagen prompt.")
+                    logger.error("LLM (via SG) returned an empty Imagen prompt after processing.")
                     return f"Image depicting: {scene_content[:100]}" # Fallback
 
-                logger.info(f"Generated final Imagen prompt via LLM: '{final_imagen_prompt[:100]}...'")
+                logger.info(f"Generated final Imagen prompt via LLM (SG): '{final_imagen_prompt[:100]}...'")
                 return final_imagen_prompt # Trả về prompt cuối cùng cho Imagen
             else:
-                logger.error(f"LLM response for final Imagen prompt generation is invalid.")
-                return f"Image depicting: {scene_content[:100]}" # Fallback
+                logger.error(f"LLM call (via SG) for final Imagen prompt generation returned empty.")
+                # Nếu LLM không trả về gì, thử dùng instruction gốc từ strategy làm fallback
+                if gpt_prompt_instructions:
+                    logger.warning("Falling back to using instructions from strategy as Imagen prompt.")
+                    return f"{gpt_prompt_instructions[:250]}"
+                else:
+                    return f"Image depicting: {scene_content[:100]}" # Fallback cuối cùng
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"LLM API error generating final Imagen prompt: {e}")
-            return f"Image depicting: {scene_content[:100]}" # Fallback
         except Exception as e:
-            logger.error(f"Unexpected error generating final Imagen prompt: {e}", exc_info=True)
-            return f"Image depicting: {scene_content[:100]}" # Fallback
+            logger.error(f"Error calling LLM (via SG) for final Imagen prompt generation: {e}", exc_info=True)
+            # Fallback nếu gọi LLM lỗi
+            if gpt_prompt_instructions:
+                 logger.warning("Falling back to using instructions from strategy as Imagen prompt due to LLM error.")
+                 return f"{gpt_prompt_instructions[:250]}"
+            else:
+                 return f"Image depicting: {scene_content[:100]}" # Fallback cuối cùng
 
     def _generate_image_with_imagen(self, prompt):
         """Generates an image using the Google Imagen API via Google AI Client."""
@@ -1953,83 +1995,51 @@ class ImageGenerator:
             # Re-raise the exception to signal failure in resizing
             raise
 
-    def _create_search_query_with_openai(self, scene_content, title):
-        """Uses OpenAI to create an optimized search query based on scene content and title.
-        
-        Args:
-            scene_content (str): The content of the current scene.
-            title (str): The title of the video.
-            
-        Returns:
-            str: The generated search query, or a fallback query if OpenAI fails.
-        """
-        if not self.openai_api_key:
-            logger.warning("OpenAI API key is required but missing. Using default query.")
-            # Simple fallback when API key is missing
-            words = scene_content.split()[:5]  # Take first 5 words
+    def _create_search_query(self, scene_content, title):
+        """Uses the configured LLM (via ScriptGenerator) to create an optimized search query."""
+
+        # --- Fallback cơ bản nếu không có ScriptGenerator ---
+        if not self.script_generator:
+            logger.warning("ScriptGenerator not available for search query generation. Using basic fallback.")
+            words = scene_content.split()[:5]
             simple_query = ' '.join(words) + " news photo"
-            return simple_query[:150]  # Enforce max length
+            return simple_query[:150]
+        # ----------------------------------------------------
 
         try:
-            # Prepare prompt for OpenAI
+            # Prepare prompt (giữ nguyên prompt cũ)
             prompt = f"""
-            Create a specific, detailed image search query for the scene from a news video described below.
-            The query should be optimized to find high-quality, relevant stock photos or news images.
-            The query should be in English, 5-7 words, and focus on the visual elements of the scene.
-            Do NOT include quotes or hashtags in your response.
-            
-            Video Title: "{title}"
-            Scene Content: "{scene_content}"
-            
-            Output ONLY the search query text with no additional explanations, prefixes or formatting.
+            Create a specific, detailed image search query...[Giữ nguyên prompt cũ]...
+            Output ONLY the search query text...
             """
 
-            url = f"{self.openai_base_url}/chat/completions"
-            payload = {
-                "model": "gpt-4o-mini", # Or "gpt-3.5-turbo" for cost savings
-                "messages": [
-                    {"role": "system", "content": "You are an expert at creating optimal image search queries for news content."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.3, # Lower temperature for more consistent results
-                #"max_tokens": 30    # Limit tokens for concise query
-            }
+            logger.debug(f"Calling LLM (via SG) for search query generation: {scene_content[:100]}...")
+            # Gọi _call_llm_api thông qua instance đã lưu
+            query_content = self.script_generator._call_llm_api(
+                user_prompt=prompt,
+                system_prompt="You are an expert at creating optimal image search queries for news content.",
+                require_json=False, # Query chỉ là text, không cần JSON
+                is_core_content_task=False, # Task phụ trợ
+                request_timeout=20 # Timeout ngắn hơn cho query
+            )
 
-            logger.debug(f"Calling OpenAI for search query generation: {scene_content[:100]}...")
-            response = requests.post(url, headers=self.openai_headers, json=payload, timeout=15)
-
-            if response.status_code == 200:
-                data = response.json()
-                if 'choices' in data and data['choices']:
-                    query = data['choices'][0]['message']['content'].strip()
-                    # Clean up the result
-                    query = query.replace('"', '').replace("'", '').replace('#', '').strip()
-                    
-                    # Validate the query
-                    if query and len(query) > 3 and len(query) < 100:
-                        logger.info(f"OpenAI generated search query: '{query}'")
-                        
-                        # Add a suffix for image search if needed
-                        if not any(word in query.lower() for word in ["photo", "image", "picture"]):
-                            suffix = random.choice(["photo", "image"])
-                            #query = f"{query} {suffix}"
-                            query = f"{query}"
-                        
-                        return query[:150]  # Enforce max length
-                    else:
-                        logger.warning(f"OpenAI returned invalid query: '{query}'. Falling back to basic method.")
+            if query_content:
+                query = query_content.strip().replace('"', '').replace("'", '').replace('#', '').strip()
+                if query and len(query) > 3 and len(query) < 100:
+                    logger.info(f"LLM (via SG) generated search query: '{query}'")
+                    # Bỏ phần thêm suffix "photo", để LLM tự quyết định
+                    return query[:150]
                 else:
-                    logger.error(f"OpenAI API response missing choices: {data}")
+                    logger.warning(f"LLM (via SG) returned invalid query: '{query}'. Falling back.")
             else:
-                logger.error(f"OpenAI API error for query generation: {response.status_code}, {response.text}")
+                logger.error(f"LLM call (via SG) for query generation returned empty.")
 
-        except requests.exceptions.Timeout:
-            logger.error("OpenAI API call for query generation timed out.")
         except Exception as e:
-            logger.error(f"Error calling OpenAI API for query generation: {str(e)}", exc_info=True)
+            logger.error(f"Error calling LLM (via SG) for query generation: {str(e)}", exc_info=True)
 
-        # Super simple fallback if OpenAI completely fails
-        words = scene_content.split()[:5]  # Take first 5 words
+        # Fallback cuối cùng
+        logger.warning("Falling back to basic query generation method.")
+        words = scene_content.split()[:5]
         return ' '.join(words) + " news photo hd"
 
     def _wrap_text(self, text, font, max_width):

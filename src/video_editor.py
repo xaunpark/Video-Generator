@@ -343,7 +343,7 @@ class VideoEditor:
                     "-vf", final_vf_filter,
                     "-t", str(target_duration), # *** DÙNG LẠI -t để giới hạn output ***
                     "-c:v", "libx264",
-                    "-preset", "medium",     # Giữ preset trung bình
+                    "-preset", "fast",
                     "-crf", "23",
                     "-r", str(self.fps),      # Output framerate
                     "-an", output_path
@@ -374,7 +374,7 @@ class VideoEditor:
                     *input_options, "-i", media_path,
                     "-t", str(duration_to_use),
                     "-vf", f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=pix_fmts=yuv420p",
-                    "-c:v", "libx264", "-preset", "slow", "-crf", "23",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                     "-r", str(self.fps), "-an", output_path
                 ]
             else:
@@ -662,7 +662,7 @@ class VideoEditor:
                                     logger.warning(f"Unit {unit_number}: Adjusting visual speed by {speed_factor:.3f}")
                                     adjusted_path = os.path.join(temp_project_dir, f"unit{unit_number}_vis_adjusted.mp4")
                                     temp_files_to_clean.append(adjusted_path)
-                                    cmd_speed = [ self.ffmpeg_path, "-y", "-i", unit_vis_concat_path, "-vf", f"setpts={pts_factor:.4f}*PTS", "-c:v", "libx264", "-crf", "23", "-preset", "medium", "-an", adjusted_path ]
+                                    cmd_speed = [ self.ffmpeg_path, "-y", "-i", unit_vis_concat_path, "-vf", f"setpts={pts_factor:.4f}*PTS", "-c:v", "libx264", "-crf", "23", "-preset", "fast", "-an", adjusted_path ]
                                     subprocess.run(cmd_speed, check=True, capture_output=True)
                                     if os.path.exists(adjusted_path): final_unit_segment_path = adjusted_path
                                     else: logger.error(f"Unit {unit_number}: Speed adjustment failed.")
@@ -955,7 +955,7 @@ class VideoEditor:
                         self.ffmpeg_path, "-y",
                         "-i", video_input_for_subs, # Input là video đã có audio/nhạc
                         "-vf", vf_enhance_str,
-                        "-c:v", "libx264", "-crf", "22", "-preset", "medium", # Re-encode video
+                        "-c:v", "libx264", "-crf", "22", "-preset", "fast", # Re-encode video
                         "-c:a", "copy", # SAO CHÉP audio, không re-encode lại
                         enhanced_video_path
                     ]
@@ -1007,7 +1007,7 @@ class VideoEditor:
                             "-i", video_input_for_subs,
                             "-vf", vf_subs,
                             "-c:a", "copy",
-                            "-c:v", "libx264", "-crf", "22", "-preset", "medium", # Chất lượng cuối cùng
+                            "-c:v", "libx264", "-crf", "22", "-preset", "fast", # Chất lượng cuối cùng
                             "-pix_fmt", "yuv420p",
                             subtitled_temp_path # Output tạm có sub
                         ]
@@ -1625,7 +1625,7 @@ class VideoEditor:
                         "-loop", "1", "-i", media_path,
                         "-t", str(target_shot_duration),
                         "-vf", vf_filter,
-                        "-c:v", "libx264", "-crf", "23", "-preset", "medium",  # Changed preset from "veryfast" to "medium" for better quality
+                        "-c:v", "libx264", "-crf", "23", "-preset", "fast",  # Changed preset from "veryfast" to "medium" for better quality
                         "-pix_fmt", "yuv420p", "-r", str(self.fps), "-an",
                         scene_temp_path
                     ]
@@ -1744,7 +1744,7 @@ class VideoEditor:
                         self.ffmpeg_path, "-y",
                         "-i", unit_video_path,
                         "-filter:v", f"setpts={ptsFactor}*PTS",
-                        "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+                        "-c:v", "libx264", "-crf", "23", "-preset", "fast",
                         "-pix_fmt", "yuv420p",
                         adjusted_video_path
                     ]

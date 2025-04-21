@@ -55,103 +55,208 @@ class ScriptGenerator:
         os.makedirs(self.temp_dir, exist_ok=True)
 
     # --- HÀM GỌI API ---
-    def _call_openai_api_internal(self, system_prompt, user_prompt, max_retries=3, request_timeout=90, force_json=True):
-        """Internal method to call OpenAI API."""
+    def _call_openai_api_internal(self, system_prompt, user_prompt, model_name, base_url, headers, supports_json, force_json_output, max_retries=3, request_timeout=90):
+        """
+        Internal method to call OpenAI compatible API.
+
+        Args:
+            system_prompt (str): The system message.
+            user_prompt (str): The user's prompt.
+            model_name (str): The specific model to use (e.g., "gpt-4o").
+            base_url (str): The base URL for the API endpoint.
+            headers (dict): The request headers (including Authorization).
+            supports_json (bool): Whether the selected model/endpoint supports native JSON mode.
+            force_json_output (bool): Whether the caller requires JSON output (even if via prompt).
+            max_retries (int): Maximum number of retries.
+            request_timeout (int): Request timeout in seconds.
+
+        Returns:
+            str or None: The content string from the API response, or None on failure.
+        """
         payload = {
-            "model": self.chat_model,
+            "model": model_name, # Dùng tham số
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": ""}, # Sẽ đặt lại bên dưới
                 {"role": "user", "content": user_prompt}
             ],
-            "temperature": 0.7,
-            #"max_tokens": 200000,
+            "temperature": 0.7, # Có thể điều chỉnh hoặc đưa ra settings
+            # "max_tokens": 4096, # Cân nhắc thêm giới hạn token nếu cần
         }
-        # Add JSON mode if supported and requested
-        if force_json and self.supports_json_mode:
-            payload["response_format"] = {"type": "json_object"}
-            # Adjust system prompt specifically for JSON mode if needed
-            system_prompt_to_use = "You are a helpful assistant designed to output JSON. Respond ONLY with the valid JSON object requested, without any introductory text, explanations, or markdown formatting."
-            payload["messages"][0]["content"] = system_prompt_to_use
-        else:
-             # If not forcing JSON or not supported, use original system prompt
-            payload["messages"][0]["content"] = system_prompt
 
-        url = f"{self.base_url}/chat/completions"
+        system_prompt_to_use = system_prompt # Bắt đầu với prompt gốc
+
+        # Add JSON mode if supported and requested by the caller
+        if force_json_output and supports_json:
+            payload["response_format"] = {"type": "json_object"}
+            # Adjust system prompt specifically for JSON mode for better compliance
+            system_prompt_to_use = "You are a helpful assistant designed to output JSON. Respond ONLY with the valid JSON object requested, without any introductory text, explanations, or markdown formatting."
+            logger.debug(f"OpenAI/Compatible API ({model_name}): Using native JSON mode.")
+        elif force_json_output and not supports_json:
+             # Nếu cần JSON nhưng model không hỗ trợ native JSON mode (trường hợp ít gặp với OpenAI, nhưng có thể cho các API tương thích khác)
+             # --> Yêu cầu JSON qua prompt.
+             logger.warning(f"OpenAI/Compatible API ({model_name}): Native JSON mode not supported or requested off. Modifying user prompt to request JSON within markers.")
+             json_request_instruction = (
+                 "\n\n"
+                 "CRITICAL REQUIREMENT: Your *entire response* MUST be ONLY the valid JSON object requested in the prompt above. "
+                 "Enclose this JSON object within triple backticks followed by 'json' like this:\n"
+                 "```json\n"
+                 "{\n"
+                 '  "key": "value",\n'
+                 '  ...\n'
+                 "}\n"
+                 "```\n"
+                 "DO NOT include ANY introduction, explanation, concluding remarks, or any other text outside the ```json ... ``` markers."
+             )
+             payload["messages"][1]["content"] = user_prompt + json_request_instruction # Cập nhật user prompt
+             # system_prompt_to_use giữ nguyên là system_prompt gốc
+
+        # Set the final system prompt in the payload
+        payload["messages"][0]["content"] = system_prompt_to_use.strip()
+
+        # Xác định URL endpoint hoàn chỉnh
+        url = f"{base_url}/chat/completions" # Dùng tham số base_url
+
+        # --- Retry Loop ---
         attempt = 0
         while attempt < max_retries:
             attempt += 1
             try:
-                logger.debug(f"Calling {self.selected_provider_name} API (Attempt {attempt}/{max_retries}, Model: {self.chat_model}, Timeout: {request_timeout}s)...")
-                response = requests.post(url, headers=self.headers, json=payload, timeout=request_timeout)
-                response.raise_for_status()
-                data = response.json()
-                if 'choices' in data and data['choices']:
-                    content = data['choices'][0].get('message', {}).get('content', '').strip() # Safer access
-                    if content:
-                        logger.debug(f"{self.selected_provider_name} API call successful (Attempt {attempt}).")
-                        return content # Return the raw content string
-                    else:
-                         logger.warning(f"API response has empty content (Attempt {attempt}/{max_retries}).")
+                # Log chi tiết hơn về request
+                logger.debug(f"Calling OpenAI/Compatible API (Attempt {attempt}/{max_retries}, Model: {model_name}, URL: {url}, Timeout: {request_timeout}s)...")
+                # Log payload nếu cần debug (cẩn thận với dữ liệu nhạy cảm)
+                # logger.debug(f"Request Payload (Attempt {attempt}): {json.dumps(payload, indent=2)}")
 
+                response = requests.post(url, headers=headers, json=payload, timeout=request_timeout) # Dùng tham số headers
+
+                logger.debug(f"API Response Status Code: {response.status_code}") # Log status code
+
+                response.raise_for_status() # Kiểm tra lỗi HTTP (4xx, 5xx)
+
+                data = response.json()
+                # Log raw response nếu cần debug
+                # logger.debug(f"Raw JSON Response (Attempt {attempt}): {data}")
+
+                if 'choices' in data and data['choices']:
+                    message_content = data['choices'][0].get('message', {}).get('content')
+                    # Kiểm tra None hoặc chuỗi rỗng
+                    if message_content is not None and message_content.strip() != "":
+                        content = message_content.strip()
+                        logger.debug(f"OpenAI/Compatible API call successful (Attempt {attempt}). Content length: {len(content)}")
+                        return content # Trả về chuỗi nội dung thô
+                    elif message_content is None:
+                         logger.warning(f"API response has 'content: null' (Attempt {attempt}/{max_retries}).")
+                         # Có thể thử lại hoặc thất bại ngay
+                    else: # Chuỗi rỗng ''
+                         logger.warning(f"API response has empty string content '' (Attempt {attempt}/{max_retries}).")
                 else:
-                    logger.warning(f"Invalid API response structure (Attempt {attempt}/{max_retries}): {data}")
+                    logger.warning(f"Invalid API response structure - 'choices' missing or empty (Attempt {attempt}/{max_retries}): {data}")
 
             except requests.exceptions.Timeout:
-                logger.warning(f"{self.selected_provider_name} API call timed out after {request_timeout}s (Attempt {attempt}/{max_retries}). Retrying...")
+                logger.warning(f"OpenAI/Compatible API call timed out after {request_timeout}s (Attempt {attempt}/{max_retries}). Retrying...")
             except requests.exceptions.RequestException as e:
-                 logger.error(f"{self.selected_provider_name} API request error (Attempt {attempt}/{max_retries}): {e}")
+                 # Log lỗi request chi tiết hơn
+                 err_msg = f"OpenAI/Compatible API request error (Attempt {attempt}/{max_retries}, Model: {model_name}): {type(e).__name__} - {e}"
+                 status_code = -1
+                 resp_text = "N/A"
                  if hasattr(e, 'response') and e.response is not None:
-                      logger.error(f"Response status: {e.response.status_code}, text: {e.response.text[:200]}...")
-                 if e.response is not None and 400 <= e.response.status_code < 500 and e.response.status_code not in [429, 401, 403]:
+                     status_code = e.response.status_code
+                     try: resp_text = e.response.text[:500] # Giới hạn độ dài log
+                     except Exception: resp_text = "[Could not decode response text]"
+                     err_msg += f" | Status: {status_code}, Response: {resp_text}"
+                 logger.error(err_msg)
+
+                 # Dừng retry nếu lỗi client (trừ rate limit, auth, ...)
+                 if 400 <= status_code < 500 and status_code not in [401, 403, 429]:
                       logger.error("Client error detected, stopping retries.")
                       break
+            except json.JSONDecodeError as json_err:
+                 # Lỗi khi response không phải JSON hợp lệ (vd: trang lỗi HTML)
+                 logger.error(f"Failed to decode JSON response from API (Attempt {attempt}/{max_retries}): {json_err}")
+                 logger.debug(f"Raw Response Text (First 500 chars): {response.text[:500] if response else 'No Response Object'}")
+                 break # Thường không retry lỗi decode JSON
             except Exception as e:
-                logger.error(f"Unexpected error calling {self.selected_provider_name} API (Attempt {attempt}/{max_retries}): {e}", exc_info=True)
+                # Bắt các lỗi không mong muốn khác
+                logger.error(f"Unexpected error type {type(e).__name__} calling API (Attempt {attempt}/{max_retries}): {e}", exc_info=True)
+                break # Có thể dừng retry với lỗi không rõ
 
+            # Logic chờ trước khi retry
             if attempt < max_retries:
                 wait_time = 2 ** attempt
-                logger.info(f"Waiting {wait_time}s before retrying...")
+                logger.info(f"Waiting {wait_time}s before retrying API call...")
                 time.sleep(wait_time)
 
-        logger.error(f"Failed to get valid response from {self.selected_provider_name} API after multiple retries.")
+        # Nếu vòng lặp kết thúc mà không thành công
+        logger.error(f"Failed to get valid response from OpenAI/Compatible API (Model: {model_name}) after {max_retries} attempts.")
         return None
     
-    def _call_deepseek_api_internal(self, system_prompt, user_prompt, max_retries=3, request_timeout=90, force_json=True):
-        """Internal method to call DeepSeek API."""
-        # !! Verify endpoint structure - Assuming /chat/completions is correct !!
-        url = f"{self.base_url}/chat/completions"
+    def _call_deepseek_api_internal(self, system_prompt, user_prompt, model_name, base_url, headers, supports_json, force_json_output, max_retries=3, request_timeout=90):
+        """
+        Internal method to call DeepSeek API.
 
+        Args:
+            system_prompt (str): The system message.
+            user_prompt (str): The user's prompt.
+            model_name (str): The specific model to use (e.g., "deepseek-chat", "deepseek-reasoner").
+            base_url (str): The base URL for the API endpoint.
+            headers (dict): The request headers (including Authorization).
+            supports_json (bool): Whether the selected model/endpoint supports native JSON mode.
+            force_json_output (bool): Whether the caller requires JSON output (even if via prompt).
+            max_retries (int): Maximum number of retries.
+            request_timeout (int): Request timeout in seconds.
+
+        Returns:
+            str or None: The content string from the API response, or None on failure.
+        """
+        # Xác định URL endpoint hoàn chỉnh
+        url = f"{base_url}/chat/completions" # Dùng tham số base_url
+
+        # Khởi tạo payload cơ bản
         payload = {
-            "model": self.chat_model,
+            "model": model_name, # Dùng tham số model_name
             "messages": [
-                # System prompt will be adjusted based on force_json below
-                {"role": "system", "content": ""},
+                {"role": "system", "content": ""}, # Sẽ đặt lại bên dưới
                 {"role": "user", "content": user_prompt}
             ],
-            "temperature": 0.7,
-            # "max_tokens": 4096, # Check Deepseek docs for limits/defaults if needed
-            # "stream": False, # Default is False based on example
+            "temperature": 0.7, # Có thể điều chỉnh hoặc đưa ra settings
+            # "max_tokens": 4096, # Cân nhắc giới hạn nếu cần
         }
 
-        system_prompt_to_use = system_prompt # Start with the original system prompt
+        system_prompt_to_use = system_prompt # Bắt đầu với prompt gốc
 
         # --- JSON Mode Handling specific to DeepSeek ---
-        if force_json:
-            if self.supports_json_mode:
+        if force_json_output: # Kiểm tra xem có yêu cầu JSON không
+            if supports_json: # Kiểm tra xem model có hỗ trợ JSON mode gốc không
+                # --- Trường hợp: Có yêu cầu JSON VÀ model hỗ trợ (deepseek-chat) ---
                 payload["response_format"] = {'type': 'json_object'}
-                # *** DEEPSEEK RECOMMENDATION: Modify system prompt for JSON mode ***
+                # Sử dụng system prompt đặc biệt cho JSON mode gốc của DeepSeek
                 system_prompt_to_use = f"""
                 You are an assistant that outputs ONLY valid JSON objects. Ensure your entire response is a single JSON object matching the structure requested or exemplified in the user prompt. Include the word "json" in your thinking process if needed, but the final output must be ONLY the JSON itself.
                 Original system instruction (if any): {system_prompt}
                 """
-                logger.debug("DeepSeek: Using native JSON mode and modified system prompt.")
+                logger.debug(f"DeepSeek API ({model_name}): Using native JSON mode.")
             else:
-                # Fallback if native JSON is not supported (shouldn't happen based on docs)
-                logger.warning("DeepSeek: Native JSON mode reported as unsupported, but attempting prompt modification.")
-                user_prompt += "\n\nIMPORTANT: Respond ONLY with a single, valid JSON object enclosed in ```json ... ``` markers. Do not include any other text."
-                payload["messages"][1]["content"] = user_prompt # Update user prompt
-                system_prompt_to_use = system_prompt # Use original system prompt
-        # else: use original system_prompt_to_use
+                # --- Trường hợp: Có yêu cầu JSON NHƯNG model KHÔNG hỗ trợ (deepseek-reasoner) ---
+                # --> Phải yêu cầu JSON thông qua prompt engineering.
+                logger.warning(f"DeepSeek API ({model_name}): Native JSON mode not supported. Modifying user prompt to request JSON within markers.")
+                # Instruction yêu cầu JSON trong dấu ```json``` (đã tăng cường ở bước trước)
+                json_request_instruction = (
+                    "\n\n"
+                    "CRITICAL REQUIREMENT: Your *entire response* MUST be ONLY the valid JSON object requested in the prompt above. "
+                    "Enclose this JSON object within triple backticks followed by 'json' like this:\n"
+                    "```json\n"
+                    "{\n"
+                    '  "key": "value",\n'
+                    '  ...\n'
+                    "}\n"
+                    "```\n"
+                    "DO NOT include ANY introduction, explanation, concluding remarks, or any other text outside the ```json ... ``` markers."
+                )
+                payload["messages"][1]["content"] = user_prompt + json_request_instruction # Cập nhật user prompt
+                # system_prompt_to_use giữ nguyên là system_prompt gốc vì hướng dẫn chính nằm ở user_prompt
+        # else: (force_json_output is False)
+             # Không yêu cầu JSON, sử dụng system_prompt gốc
+             # logger.debug(f"DeepSeek API ({model_name}): Not requesting JSON output.")
+             # system_prompt_to_use giữ nguyên
 
         # Set the final system prompt in the payload
         payload["messages"][0]["content"] = system_prompt_to_use.strip()
@@ -161,85 +266,76 @@ class ScriptGenerator:
         while attempt < max_retries:
             attempt += 1
             try:
-                # *** Log the request details BEFORE sending ***
-                # Be careful logging sensitive data like the full payload if prompts contain private info
+                # Log request details (cẩn thận với dữ liệu nhạy cảm)
                 # logger.debug(f"DeepSeek Request Payload (Attempt {attempt}): {json.dumps(payload, indent=2)}")
-                logger.debug(f"Calling {self.selected_provider_name} API (Attempt {attempt}/{max_retries}, Model: {self.chat_model}, URL: {url}, Timeout: {request_timeout}s)...")
+                logger.debug(f"Calling DeepSeek API (Attempt {attempt}/{max_retries}, Model: {model_name}, URL: {url}, Timeout: {request_timeout}s)...") # Dùng model_name
 
-                response = requests.post(url, headers=self.headers, json=payload, timeout=request_timeout)
+                response = requests.post(url, headers=headers, json=payload, timeout=request_timeout) # Dùng tham số headers
 
-                # *** Log Status Code Immediately ***
-                logger.debug(f"DeepSeek Response Status Code: {response.status_code}")
+                logger.debug(f"DeepSeek Response Status Code: {response.status_code}") # Log status code
 
                 response.raise_for_status() # Check for HTTP errors (4xx, 5xx)
 
                 data = response.json()
-                logger.debug(f"DeepSeek Raw JSON Response (Attempt {attempt}): {data}") # Log raw response
+                # Log raw response nếu cần debug
+                # logger.debug(f"DeepSeek Raw JSON Response (Attempt {attempt}): {data}")
 
                 if 'choices' in data and data['choices']:
                     message_content = data['choices'][0].get('message', {}).get('content')
                     # Check specifically for None or empty string
                     if message_content is not None and message_content.strip() != "":
                         content = message_content.strip()
-                        logger.debug(f"{self.selected_provider_name} API call successful (Attempt {attempt}). Content length: {len(content)}")
+                        logger.debug(f"DeepSeek API call successful (Attempt {attempt}). Content length: {len(content)}")
                         return content # Return the raw content string
                     elif message_content is None:
                          logger.warning(f"API response has 'content: null' (Attempt {attempt}/{max_retries}). DeepSeek might return this with JSON mode sometimes.")
-                         # Consider retrying or failing immediately if content is None
-                         # For now, let it proceed to retry loop
-                    else: # Empty string
+                         # Có thể thử lại hoặc thất bại ngay
+                    else: # Empty string ''
                          logger.warning(f"API response has empty string content '' (Attempt {attempt}/{max_retries}).")
-                         # Consider retrying or failing
                 else:
                     logger.warning(f"Invalid API response structure - 'choices' missing or empty (Attempt {attempt}/{max_retries}): {data}")
 
             except requests.exceptions.Timeout:
-                logger.warning(f"{self.selected_provider_name} API call timed out after {request_timeout}s (Attempt {attempt}/{max_retries}). Retrying...")
+                logger.warning(f"DeepSeek API call timed out after {request_timeout}s (Attempt {attempt}/{max_retries}). Retrying...")
             except requests.exceptions.RequestException as e:
-                # Log more details about the request error
-                err_msg = f"{self.selected_provider_name} API request error (Attempt {attempt}/{max_retries}): {type(e).__name__} - {e}"
+                # Log lỗi request chi tiết hơn
+                err_msg = f"DeepSeek API request error (Attempt {attempt}/{max_retries}, Model: {model_name}): {type(e).__name__} - {e}" # Thêm model_name vào log lỗi
                 status_code = -1
                 resp_text = "N/A"
                 if hasattr(e, 'response') and e.response is not None:
                     status_code = e.response.status_code
-                    try:
-                        resp_text = e.response.text[:500] # Limit response text length
-                    except Exception:
-                        resp_text = "[Could not decode response text]"
+                    try: resp_text = e.response.text[:500] # Giới hạn độ dài log
+                    except Exception: resp_text = "[Could not decode response text]"
                     err_msg += f" | Status: {status_code}, Response: {resp_text}"
+                logger.error(err_msg)
 
-                logger.error(err_msg) # Log the consolidated error message
-
-                # Stop retrying for client errors (except rate limit, auth)
+                # Dừng retry nếu lỗi client (trừ rate limit, auth, ...)
                 if 400 <= status_code < 500 and status_code not in [401, 403, 429]:
                     logger.error("Client error detected, stopping retries.")
                     break
             except json.JSONDecodeError as json_err:
-                 # This happens if the response isn't valid JSON (e.g., HTML error page)
-                 logger.error(f"Failed to decode JSON response from {self.selected_provider_name} (Attempt {attempt}/{max_retries}): {json_err}")
+                 # Lỗi khi response không phải JSON hợp lệ (vd: trang lỗi HTML)
+                 logger.error(f"Failed to decode JSON response from DeepSeek API (Attempt {attempt}/{max_retries}): {json_err}")
                  logger.debug(f"Raw Response Text (First 500 chars): {response.text[:500] if response else 'No Response Object'}")
-                 # Don't retry JSON decode errors usually
-                 break
+                 break # Thường không retry lỗi decode JSON
             except Exception as e:
-                # Catch any other unexpected errors
-                logger.error(f"Unexpected error type {type(e).__name__} calling {self.selected_provider_name} API (Attempt {attempt}/{max_retries}): {e}", exc_info=True)
-                # Maybe break on unexpected errors too? Or let it retry? Let's break.
-                break
+                # Bắt các lỗi không mong muốn khác
+                logger.error(f"Unexpected error type {type(e).__name__} calling DeepSeek API (Attempt {attempt}/{max_retries}): {e}", exc_info=True)
+                break # Có thể dừng retry với lỗi không rõ
 
-            # Retry logic
+            # Logic chờ trước khi retry
             if attempt < max_retries:
                 wait_time = 2 ** attempt
-                logger.info(f"Waiting {wait_time}s before retrying {self.selected_provider_name} call...")
+                logger.info(f"Waiting {wait_time}s before retrying DeepSeek API call...")
                 time.sleep(wait_time)
 
-        # Loop finished without success
-        logger.error(f"Failed to get valid response from {self.selected_provider_name} API after {max_retries} attempts.")
+        # Nếu vòng lặp kết thúc mà không thành công
+        logger.error(f"Failed to get valid response from DeepSeek API (Model: {model_name}) after {max_retries} attempts.") # Thêm model_name vào log lỗi
         return None
 
-    # --- NEW: Main LLM API call wrapper ---
-    def _call_llm_api(self, user_prompt, system_prompt="You are a helpful assistant.", max_retries=3, request_timeout=90, require_json=True):
+    def _call_llm_api(self, user_prompt, system_prompt="You are a helpful assistant.", max_retries=3, request_timeout=90, require_json=True, is_core_content_task=True):
         """
-        Calls the selected LLM provider's API.
+        Calls the selected LLM provider's API, potentially overriding for non-core tasks.
 
         Args:
             user_prompt (str): The user's prompt.
@@ -249,49 +345,138 @@ class ScriptGenerator:
             require_json (bool): If True, expects a JSON string response. If provider
                                  doesn't support native JSON mode, prompt is modified
                                  and output needs parsing.
+            is_core_content_task (bool): If False, and Reasoner was selected, use default provider.
 
         Returns:
             str or None: The content string from the LLM response, or None on failure.
                          If require_json is True and native JSON mode isn't supported,
                          this might return a string containing JSON within markdown markers.
         """
+        # --- XÁC ĐỊNH PROVIDER VÀ CẤU HÌNH SẼ DÙNG ---
+        provider_key_to_use = self.selected_provider_name
+        provider_config_to_use = self.provider_config
+        supports_json_mode_to_use = self.supports_json_mode
+        api_key_to_use = self.api_key # Lấy API key tương ứng với provider đã chọn ban đầu
+
+        # Logic override nếu người dùng chọn Reasoner nhưng task không phải core
+        if self.selected_provider_name == "deepseek_reasoner" and not is_core_content_task:
+            default_provider_key = DEFAULT_LLM_PROVIDER # Lấy default từ settings
+            if default_provider_key != "deepseek_reasoner": # Chỉ override nếu default khác Reasoner
+                logger.info(f"Non-core task: User selected Reasoner, overriding to default provider '{default_provider_key}'.")
+                provider_key_to_use = default_provider_key
+                if provider_key_to_use in LLM_PROVIDERS:
+                    provider_config_to_use = LLM_PROVIDERS[provider_key_to_use]
+                    supports_json_mode_to_use = provider_config_to_use.get("supports_json_mode", False)
+                    # LẤY ĐÚNG API KEY CHO PROVIDER MẶC ĐỊNH
+                    default_api_key_name = provider_config_to_use.get("api_key_name")
+                    if default_api_key_name == "OPENAI_API_KEY":
+                        api_key_to_use = OPENAI_API_KEY
+                    elif default_api_key_name == "DEEPSEEK_API_KEY":
+                        api_key_to_use = DEEPSEEK_API_KEY
+                    # Add elif for future default providers if needed
+                    if not api_key_to_use:
+                        logger.error(f"API Key for default provider '{default_provider_key}' is missing! Reverting to Reasoner for this call.")
+                        # Hoặc raise lỗi ở đây nếu muốn chặt chẽ hơn
+                        provider_key_to_use = self.selected_provider_name # Revert về Reasoner nếu key default thiếu
+                        provider_config_to_use = self.provider_config
+                        supports_json_mode_to_use = self.supports_json_mode
+                        api_key_to_use = self.api_key # Revert key
+                else:
+                    logger.error(f"Default provider '{default_provider_key}' not found in LLM_PROVIDERS config! Reverting to Reasoner for this call.")
+                    provider_key_to_use = self.selected_provider_name # Revert về Reasoner nếu default config lỗi
+                    provider_config_to_use = self.provider_config
+                    supports_json_mode_to_use = self.supports_json_mode
+                    # api_key_to_use giữ nguyên của Reasoner
+            else:
+                 # Default provider LÀ Reasoner hoặc người dùng chọn Reasoner và task LÀ core
+                 logger.debug(f"Task type core={is_core_content_task}. Using initially selected provider (DeepSeek Reasoner).")
+                 # Không cần làm gì thêm, các biến đã đúng
+        else:
+             # Trường hợp người dùng không chọn Reasoner ban đầu
+             logger.debug(f"Task type core={is_core_content_task}. Using initially selected provider: {provider_key_to_use}")
+             # Không cần làm gì thêm, các biến đã đúng
+
+        # Lấy thông tin cụ thể từ cấu hình đã chọn (config và key đã được xác định ở trên)
+        model_to_use = provider_config_to_use.get("chat_model")
+        base_url_to_use = provider_config_to_use.get("base_url")
+        headers_to_use = {
+            "Authorization": f"Bearer {api_key_to_use}",
+            "Content-Type": "application/json"
+        }
+        # --- KẾT THÚC XÁC ĐỊNH PROVIDER ---
+
+        logger.info(f"Executing LLM call with: Provider='{provider_key_to_use}', Model='{model_to_use}', SupportsJSON={supports_json_mode_to_use}, RequireJSON={require_json}")
+
         content = None
-        if self.selected_provider_name == "openai":
-            content = self._call_openai_api_internal(system_prompt, user_prompt, max_retries, request_timeout, force_json=require_json)
-        elif self.selected_provider_name == "deepseek":
-            content = self._call_deepseek_api_internal(system_prompt, user_prompt, max_retries, request_timeout, force_json=require_json)
+        # --- SỬ DỤNG provider_key_to_use để quyết định gọi hàm nào ---
+        # --- VÀ TRUYỀN CÁC THAM SỐ CẤU HÌNH VÀO HÀM NỘI BỘ ---
+        if provider_key_to_use == "openai":
+            content = self._call_openai_api_internal(
+                system_prompt=system_prompt, user_prompt=user_prompt,
+                model_name=model_to_use, base_url=base_url_to_use, headers=headers_to_use,
+                supports_json=supports_json_mode_to_use, # Đã đổi tên tham số
+                force_json_output=require_json, # Đã đổi tên tham số
+                max_retries=max_retries, request_timeout=request_timeout
+            )
+        elif provider_key_to_use in ["deepseek", "deepseek_reasoner"]: # Gộp cả hai deepseek
+            content = self._call_deepseek_api_internal(
+                system_prompt=system_prompt, user_prompt=user_prompt,
+                model_name=model_to_use, base_url=base_url_to_use, headers=headers_to_use,
+                supports_json=supports_json_mode_to_use, # Đã đổi tên tham số
+                force_json_output=require_json, # Đã đổi tên tham số
+                max_retries=max_retries, request_timeout=request_timeout
+            )
         # Add elif for future providers
         else:
-            logger.error(f"LLM provider '{self.selected_provider_name}' is not implemented.")
+            logger.error(f"LLM provider '{provider_key_to_use}' is not implemented.")
             return None
 
         # --- Post-processing for JSON if native mode wasn't supported ---
-        if content and require_json and not self.supports_json_mode:
-            logger.debug("Attempting to extract JSON from response (native JSON mode not supported)...")
-            # Try to find JSON within ```json ... ``` markers
+        # SỬ DỤNG supports_json_mode_to_use đã xác định ở trên
+        if content and require_json and not supports_json_mode_to_use:
+            logger.debug(f"Attempting to extract JSON from response (Provider: {provider_key_to_use}, Native JSON support: {supports_json_mode_to_use})...")
             import re
-            match = re.search(r"```json\s*(\{.*?\})\s*```", content, re.DOTALL)
+            # Try to find JSON within ```json ... ``` markers
+            match = re.search(r"```json\s*(\{.*?\})\s*```", content, re.DOTALL | re.IGNORECASE) # Thêm IGNORECASE
             if match:
-                json_string = match.group(1)
-                # Basic validation
+                json_string = match.group(1).strip() # Lấy group 1 và strip()
+                # Basic validation: Bắt đầu bằng { và kết thúc bằng }
                 if json_string.startswith('{') and json_string.endswith('}'):
                     logger.debug("Successfully extracted JSON from markdown markers.")
-                    return json_string
+                    # Thử parse để đảm bảo nó là JSON hợp lệ trước khi trả về
+                    try:
+                        json.loads(json_string)
+                        return json_string # Trả về string JSON đã trích xuất
+                    except json.JSONDecodeError as parse_err:
+                         logger.warning(f"Found markers, but content inside failed JSON parsing: {parse_err}")
+                         logger.debug(f"Extracted invalid JSON string: {json_string[:200]}...")
+                         return None # Coi như thất bại nếu không parse được
                 else:
-                    logger.warning("Found markers, but content inside doesn't look like valid JSON.")
-                    return None # Or maybe return the raw content for the caller to try parsing? Risky.
+                    logger.warning("Found markers, but content inside doesn't look like a JSON object (doesn't start/end with {}).")
+                    logger.debug(f"Content inside markers: {json_string[:200]}...")
+                    return None # Failed to extract valid JSON object
             else:
-                 # If no markers, maybe the LLM returned *only* JSON? Try basic check.
-                 if content.startswith('{') and content.endswith('}'):
+                 # Nếu không có markers, thử kiểm tra xem toàn bộ content có phải JSON không
+                 # Loại bỏ khoảng trắng đầu/cuối trước khi kiểm tra
+                 trimmed_content = content.strip()
+                 if trimmed_content.startswith('{') and trimmed_content.endswith('}'):
                      logger.debug("Response seems to be JSON directly (no markers found).")
-                     return content
+                     # Thử parse để đảm bảo hợp lệ
+                     try:
+                         json.loads(trimmed_content)
+                         return trimmed_content # Trả về toàn bộ nội dung nếu parse thành công
+                     except json.JSONDecodeError as parse_err:
+                          logger.warning(f"Content looks like JSON but failed parsing: {parse_err}")
+                          logger.debug(f"Direct content received: {trimmed_content[:200]}...")
+                          return None # Coi như thất bại
                  else:
-                     logger.warning("Could not extract JSON from response (no markers and not direct JSON).")
+                     logger.warning("Could not extract JSON from response (no markers and not direct JSON object).")
                      logger.debug(f"Raw content received: {content[:200]}...")
                      return None # Failed to extract JSON
 
-        # If JSON wasn't required, or if native JSON mode was used, return content directly
-        return content    
+        # If JSON wasn't required, or if native JSON mode was used and successful,
+        # or if extraction failed but require_json was False, return content directly.
+        return content
 
     # --- Chia Câu thành Shots ---
     def _breakdown_sentence_into_shots(self, sentence_text, target_style_tone):
@@ -347,7 +532,8 @@ class ScriptGenerator:
         response_json_str = self._call_llm_api(
             user_prompt=prompt_step2,
             request_timeout=45,
-            require_json=True # Need JSON { "shots": [...] }
+            require_json=True,
+            is_core_content_task=False, # Không phải core task, dùng LLM mặc định ngay cả khi DeepSeek Reasoner được chọn
         )
         if not response_json_str:
             logger.warning(f"Step 2 Failed: No response from API for breaking down sentence.")
@@ -1446,7 +1632,8 @@ class ScriptGenerator:
         response_json_str = self._call_llm_api(
             user_prompt=analysis_prompt,
             request_timeout=45,
-            require_json=True # Need JSON { "shots": [...] }
+            require_json=True,
+            is_core_content_task=False, # Không phải core task, dùng LLM mặc định ngay cả khi DeepSeek Reasoner được chọn
         )        
         if not response_json_str:
             logger.error("Batch video analysis failed: No response from API.")

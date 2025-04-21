@@ -17,7 +17,6 @@ from src.script_generator import ScriptGenerator
 from src.image_generator import ImageGenerator
 from src.voice_generator import VoiceGenerator
 from src.video_editor import VideoEditor
-from config.settings import VIDEO_SETTINGS
 from src.youtube_uploader import YouTubeUploader
 
 # --- THÊM CÁC IMPORT STRATEGY NÀY ---
@@ -44,7 +43,8 @@ from config.credentials import (
 from config.settings import (
     OUTPUT_DIR, TEMP_DIR, ASSETS_DIR,
     YOUTUBE_SETTINGS,
-    LLM_PROVIDERS, DEFAULT_LLM_PROVIDER
+    LLM_PROVIDERS, DEFAULT_LLM_PROVIDER, VIDEO_SETTINGS,
+    LLM_PROVIDER_DISPLAY_NAMES
 )
 
 # Setup logging
@@ -295,10 +295,13 @@ def get_youtube_transcript(video_url, languages=None):
 # --- Helper function to prompt for LLM Provider ---
 def prompt_for_llm_provider():
     """Prompts the user to select an LLM provider."""
+    
     print("\nSelect LLM Provider:")
+
     available_providers = list(LLM_PROVIDERS.keys())
-    for i, provider_name in enumerate(available_providers):
-        print(f"{i+1}. {provider_name.capitalize()}")
+    for i, provider_key in enumerate(available_providers):
+        display_name = LLM_PROVIDER_DISPLAY_NAMES.get(provider_key, provider_key.capitalize())
+        print(f"{i+1}. {display_name}")
 
     default_index = -1
     try:
@@ -307,17 +310,22 @@ def prompt_for_llm_provider():
         logger.warning(f"Default LLM Provider '{DEFAULT_LLM_PROVIDER}' not found in available list. Using first provider as default.")
         default_index = 0
 
+    default_provider_key = available_providers[default_index]
+    default_display_name = LLM_PROVIDER_DISPLAY_NAMES.get(default_provider_key, default_provider_key.capitalize())
+
     choice = ""
     valid_choices = [str(j+1) for j in range(len(available_providers))]
     while choice not in valid_choices:
-        prompt_text = f"Enter LLM provider choice ({','.join(valid_choices)}, default is {default_index+1} '{available_providers[default_index].capitalize()}'): "
+        prompt_text = f"Enter LLM provider choice ({','.join(valid_choices)}, default is {default_index+1} '{default_display_name}'): "
         choice = input(prompt_text).strip()
         if not choice:
             choice = str(default_index + 1) # Use default if empty input
 
     selected_index = int(choice) - 1
     chosen_provider = available_providers[selected_index]
-    logger.info(f"Selected LLM Provider: {chosen_provider}")
+    selected_display_name = LLM_PROVIDER_DISPLAY_NAMES.get(chosen_provider, chosen_provider.capitalize())
+    logger.info(f"Selected LLM Provider: {chosen_provider} ({selected_display_name})")
+
     return chosen_provider
 # --- End Helper function ---
 
@@ -703,7 +711,7 @@ def main():
 
     # --- Image/Video Generation ---
     logger.info("Generating visuals...")
-    image_generator = ImageGenerator()
+    image_generator = ImageGenerator(script_generator=script_generator)
     logger.info(f"Requesting images (Source: {visual_source_final}, Presentation: {final_timing_mode})...")
 
     images = image_generator.generate_images_for_script(
