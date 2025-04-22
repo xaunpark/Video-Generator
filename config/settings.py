@@ -179,14 +179,14 @@ YOUTUBE_SETTINGS = {
 }
 
 # Cấu hình Voice Generator
-VOICE_SETTINGS = {
-    "voice_id": "21m00Tcm4TlvDq8ikWAM",  # Rachel - Giọng nữ tiếng Anh Mỹ
-    "model_id": "eleven_monolingual_v1",  # Model cho tiếng Anh
-    "stability": 0.5,
-    "similarity_boost": 0.75,
-    "style": 0.0,  # Giọng đọc tin tức trung tính
-    "use_speaker_boost": True
-}
+#VOICE_SETTINGS = {
+#    "voice_id": "21m00Tcm4TlvDq8ikWAM",  # Rachel - Giọng nữ tiếng Anh Mỹ
+#    "model_id": "eleven_monolingual_v1",  # Model cho tiếng Anh
+#    "stability": 0.5,
+#    "similarity_boost": 0.75,
+#    "style": 0.0,  # Giọng đọc tin tức trung tính
+#    "use_speaker_boost": True
+#}
 
 # Đường dẫn đến ffprobe (tương tự ffmpeg)
 FFPROBE_EXECUTABLE_PATH = "ffprobe" # Mặc định tìm trong PATH
@@ -202,3 +202,58 @@ LOGGER_FORMAT = "%(asctime)s | %(levelname)s | %(message)s"
 
 # Threshold detect Vietnamese
 VI_CHAR_RATIO_THRESHOLD = 0.3
+
+# --- Text-to-Speech (TTS) Provider Settings ---
+TTS_PROVIDERS = {
+    "openai": {
+        "api_key_name": "OPENAI_API_KEY", # Tên biến API key trong credentials.py
+        "base_url": "https://api.openai.com/v1/audio/speech",
+        "default_model": "tts-1",
+        "default_voice": "alloy", # Giọng mặc định của OpenAI
+        "valid_voices": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
+        "valid_models": ["tts-1", "tts-1-hd"],
+    },
+    "minimax": {
+        "api_key_name": "MINIMAX_API_KEY",
+        "group_id_name": "MINIMAX_GROUP_ID", # Tên biến Group ID trong credentials.py
+        "base_url": "https://api.minimaxi.chat/v1/t2a_v2", # URL của API T2A v2
+        "default_model": "speech-02-turbo", # Model mặc định của MiniMax
+        "default_voice": "moss_audio_e73154aa-1f23-11f0-9892-fe0442d6b67f",  #Giọng Ma Chu - Truyện ma bẻ lái 
+        # Liệt kê các voice_id bạn muốn hỗ trợ từ tài liệu MiniMax
+        # default_voice phải là một trong các voice_id trong valid_voices
+        "valid_voices": [
+            "moss_audio_e73154aa-1f23-11f0-9892-fe0442d6b67f", "male-qn-jingying", "male-qn-badao", "male-qn-daxuesheng",
+            "female-qn-qingse", "female-qn-yujie", "female-qn-tianmei", "female-qn-chengshu",
+            "presenter_male", "presenter_female",
+            "audiobook_male_1", "audiobook_female_1",
+            "emotional_male_1", "emotional_female_1",
+            # Thêm các giọng quốc tế nếu cần (ví dụ từ tài liệu)
+            "eng_male_1", "eng_female_1", "Santa_Claus", "Wise_Woman"
+            # ... thêm các voice_id khác bạn muốn dùng ...
+        ],
+        "valid_models": ["speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"],
+        "default_audio_settings": { # Cài đặt audio mặc định cho MiniMax
+            "sample_rate": 32000,
+            "bitrate": 128000,
+            "format": "mp3",
+            "channel": 1
+        },
+        "default_voice_settings": { # Cài đặt giọng mặc định cho MiniMax
+             # voice_id sẽ được lấy từ thuộc tính self.voice của VoiceGenerator
+             "speed": 1.0,
+             "vol": 1.0,
+             "pitch": 0
+             # "emotion": None # Có thể thêm emotion nếu muốn
+        }
+    }
+    # Thêm provider khác (VD: ElevenLabs) vào đây nếu muốn
+    # "elevenlabs": { ... }
+}
+
+# --- Chọn Provider TTS mặc định ---
+DEFAULT_TTS_PROVIDER = "openai"  # Đặt là "openai" hoặc "minimax"
+# Kiểm tra xem provider mặc định có hợp lệ không
+if DEFAULT_TTS_PROVIDER not in TTS_PROVIDERS:
+     # Dừng chương trình nếu cấu hình sai để tránh lỗi sau này
+     raise ValueError(f"ERROR in settings.py: DEFAULT_TTS_PROVIDER ('{DEFAULT_TTS_PROVIDER}') is not defined in TTS_PROVIDERS.")
+# ---------------------------------

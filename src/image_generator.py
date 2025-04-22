@@ -2022,8 +2022,21 @@ class ImageGenerator:
         try:
             # Prepare prompt (giữ nguyên prompt cũ)
             prompt = f"""
-            Create a specific, detailed image search query...[Giữ nguyên prompt cũ]...
-            Output ONLY the search query text...
+            **Task:** Generate an extremely concise English image search query (target: 5-7 words, absolute max 10 words) based *only* on the visual elements described in the Scene Content below. Ignore the Video Title context unless essential for visual understanding.
+
+            **Scene Content:** "{scene_content}"
+
+            **CRITICAL INSTRUCTIONS:**
+            1.  **Output ONLY the query text.** NO introductory phrases ("Here is the query:"), NO explanations, NO formatting (like quotes or hashtags).
+            2.  **Focus on Visuals:** Extract the main nouns, actions, or descriptive adjectives that define the *look* of the scene.
+            3.  **Be Concise:** Use the fewest words possible while still being descriptive. Aim for 5-7 words.
+            4.  **English Only.**
+
+            **Example Input:** "The sleek, silver electric car charged silently at the futuristic station under a twilight sky."
+            **Example CORRECT Output:** silver electric car charging station twilight
+
+            **Your turn. Input Scene:** "{scene_content}"
+            **Output (Query Only):**
             """
 
             logger.debug(f"Calling LLM (via SG) for search query generation: {scene_content[:100]}...")

@@ -45,6 +45,10 @@ logger.debug(f"Expected client secrets file path: {YOUTUBE_CLIENT_SECRETS_FILE_P
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
+# --- MINIMAX KEYS ---
+MINIMAX_API_KEY = os.getenv('MINIMAX_API_KEY')
+MINIMAX_GROUP_ID = os.getenv('MINIMAX_GROUP_ID')
+
 # --- KIỂM TRA CÁC KEY QUAN TRỌNG VÀ BÁO LỖI NẾU THIẾU ---
 missing_keys_files = []
 if not OPENAI_API_KEY:
@@ -60,6 +64,10 @@ if not PIXABAY_API_KEY:
     missing_keys_files.append('PIXABAY_API_KEY')
 if not DEEPSEEK_API_KEY:
     missing_keys_files.append('DEEPSEEK_API_KEY')
+if not MINIMAX_API_KEY:
+    missing_keys_files.append('MINIMAX_API_KEY (env)')
+if not MINIMAX_GROUP_ID:
+    missing_keys_files.append('MINIMAX_GROUP_ID (env)')
 
 # Kiểm tra sự tồn tại của file secrets bằng đường dẫn tuyệt đối
 if not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE_PATH):

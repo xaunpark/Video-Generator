@@ -44,7 +44,8 @@ from config.settings import (
     OUTPUT_DIR, TEMP_DIR, ASSETS_DIR,
     YOUTUBE_SETTINGS,
     LLM_PROVIDERS, DEFAULT_LLM_PROVIDER, VIDEO_SETTINGS,
-    LLM_PROVIDER_DISPLAY_NAMES
+    LLM_PROVIDER_DISPLAY_NAMES,
+    TTS_PROVIDERS, DEFAULT_TTS_PROVIDER
 )
 
 # Setup logging
@@ -329,6 +330,45 @@ def prompt_for_llm_provider():
     return chosen_provider
 # --- End Helper function ---
 
+def prompt_for_tts_provider():
+    """Prompts the user to select a TTS provider."""
+    print("\n--- Step 0.5: Select Text-to-Speech (TTS) Provider ---")
+
+    available_tts_providers = list(TTS_PROVIDERS.keys())
+    # Tạo tên hiển thị đơn giản nếu chưa có (ví dụ: minimax -> Minimax)
+    tts_display_names = {k: k.capitalize() for k in available_tts_providers}
+    # Có thể tạo dict tên hiển thị riêng trong settings.py nếu muốn đẹp hơn
+
+    for i, provider_key in enumerate(available_tts_providers):
+        display_name = tts_display_names.get(provider_key, provider_key)
+        print(f"{i+1}. {display_name}")
+
+    # Xác định default provider từ settings
+    default_tts_key = DEFAULT_TTS_PROVIDER
+    try:
+        default_tts_index = available_tts_providers.index(default_tts_key)
+    except ValueError:
+        logger.warning(f"Default TTS Provider '{default_tts_key}' not found. Using first as default.")
+        default_tts_index = 0
+        default_tts_key = available_tts_providers[0]
+
+    default_display_name = tts_display_names.get(default_tts_key, default_tts_key)
+
+    choice = ""
+    valid_choices = [str(j+1) for j in range(len(available_tts_providers))]
+    while choice not in valid_choices:
+        prompt_text = f"Enter TTS provider choice ({','.join(valid_choices)}, default is {default_tts_index+1} '{default_display_name}'): "
+        choice = input(prompt_text).strip()
+        if not choice:
+            choice = str(default_tts_index + 1) # Dùng default nếu trống
+
+    selected_index = int(choice) - 1
+    chosen_provider = available_tts_providers[selected_index]
+    selected_display_name = tts_display_names.get(chosen_provider, chosen_provider)
+    logger.info(f"Selected TTS Provider: {chosen_provider} ({selected_display_name})")
+
+    return chosen_provider
+
 # --- Helper function to prompt for Visual Timing Mode (SIMPLIFIED) ---
 def prompt_for_visual_timing_mode():
     print("\n--- Step 3.5: Select Visual Presentation Mode ---")
@@ -364,6 +404,9 @@ def main():
     # --- Prompt for LLM Provider FIRST ---
     print("\n--- Step 0: Select LLM Provider ---")
     selected_llm = prompt_for_llm_provider()
+    
+    # --- Prompt for TTS Provider ---
+    selected_tts = prompt_for_tts_provider()
 
     # --- Gather ALL User Inputs First ---
     print("\n--- Step 1: Select Input Source ---")
@@ -669,39 +712,30 @@ def main():
 
     # --- Voice Generation ---
     logger.info("Generating voice...")
-    voice_generator = VoiceGenerator()
+    voice_generator = VoiceGenerator(selected_provider=selected_tts)
     # Optionally set voice/model based on language/style here if needed
     # voice_generator.set_voice(...)
 
     # Lấy cài đặt giọng nói ưu tiên từ strategy đã chọn
     try:
         voice_settings_override = selected_style_strategy.get_voice_settings()
-        if voice_settings_override: # Chỉ áp dụng nếu strategy trả về dict không rỗng
+        if voice_settings_override:
             logger.info(f"Applying voice setting overrides from style '{selected_style_name}': {voice_settings_override}")
-
-            # Áp dụng các override cụ thể
             new_voice = voice_settings_override.get('voice')
             if new_voice:
-                voice_generator.set_voice(new_voice) # Gọi hàm set_voice
-
+                # Cần kiểm tra xem voice này có hợp lệ với provider đã chọn không?
+                # Nên thêm logic kiểm tra ở đây hoặc trong set_voice
+                voice_generator.set_voice(new_voice)
             new_model = voice_settings_override.get('model')
             if new_model:
-                voice_generator.set_model(new_model) # Gọi hàm set_model
-
-            # Thêm các cài đặt khác nếu VoiceGenerator hỗ trợ và strategy cung cấp
-            # Ví dụ:
-            # if 'stability' in voice_settings_override:
-            #     voice_generator.set_stability(voice_settings_override['stability'])
-            # if 'similarity_boost' in voice_settings_override:
-            #     voice_generator.set_similarity_boost(voice_settings_override['similarity_boost'])
+                voice_generator.set_model(new_model)
         else:
-            logger.info(f"Style '{selected_style_name}' uses default voice settings.")
+             logger.info(f"Style '{selected_style_name}' uses default voice settings for {selected_tts}.") # Thêm provider vào log
     except AttributeError:
-        logger.warning(f"Selected style strategy object does not have get_voice_settings method. Using default voice.")
+        logger.warning(f"Selected style strategy object does not have get_voice_settings method. Using default voice for {selected_tts}.")
     except Exception as e:
         logger.error(f"Error applying voice settings from strategy: {e}", exc_info=True)
-        logger.warning("Proceeding with default voice settings due to error.")
-    # --- KẾT THÚC KHỐI CODE THÊM ---
+        logger.warning(f"Proceeding with default voice settings for {selected_tts} due to error.")
     
     audio_files = voice_generator.generate_audio_for_script(script)
     if not audio_files:

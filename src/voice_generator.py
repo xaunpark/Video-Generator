@@ -14,8 +14,8 @@ if __name__ == "__main__":
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
-from config.credentials import OPENAI_API_KEY
-from config.settings import TEMP_DIR
+from config.credentials import OPENAI_API_KEY, MINIMAX_API_KEY, MINIMAX_GROUP_ID
+from config.settings import TEMP_DIR, TTS_PROVIDERS, DEFAULT_TTS_PROVIDER
 
 # Tải các biến môi trường
 load_dotenv()
@@ -24,32 +24,71 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 class VoiceGenerator:
-    def __init__(self):
-        """Khởi tạo VoiceGenerator sử dụng OpenAI TTS API"""
+    def __init__(self, selected_provider=None): # Thêm selected_provider
+        """Khởi tạo VoiceGenerator hỗ trợ nhiều provider (OpenAI, MiniMax)."""
         self.temp_dir = TEMP_DIR
-        self.api_key = OPENAI_API_KEY
-        
+
+        # --- Xác định Provider ---
+        self.selected_tts_provider = selected_provider or DEFAULT_TTS_PROVIDER
+        if self.selected_tts_provider not in TTS_PROVIDERS:
+            logger.warning(
+                f"Selected TTS Provider '{self.selected_tts_provider}' not found in settings. "
+                f"Falling back to default '{DEFAULT_TTS_PROVIDER}'."
+            )
+            self.selected_tts_provider = DEFAULT_TTS_PROVIDER
+
+        logger.info(f"Initializing VoiceGenerator with provider: {self.selected_tts_provider}")
+
+        try:
+            self.provider_config = TTS_PROVIDERS[self.selected_tts_provider]
+        except KeyError:
+            logger.critical(f"Configuration for TTS provider '{self.selected_tts_provider}' is missing in settings.py!")
+            raise ValueError(f"Missing configuration for TTS provider: {self.selected_tts_provider}")
+
+        # --- Load API Key và Group ID (nếu cần) ---
+        self.api_key = None
+        self.group_id = None
+        api_key_name = self.provider_config.get("api_key_name")
+        group_id_name = self.provider_config.get("group_id_name") # Thêm dòng này
+
+        if api_key_name == "OPENAI_API_KEY":
+            self.api_key = OPENAI_API_KEY
+        elif api_key_name == "MINIMAX_API_KEY":
+            self.api_key = MINIMAX_API_KEY
+            if group_id_name == "MINIMAX_GROUP_ID": # Thêm kiểm tra group_id
+                self.group_id = MINIMAX_GROUP_ID
+        # Thêm elif cho các provider khác
+
         if not self.api_key:
-            logger.error("API key của OpenAI không được cung cấp")
-            raise ValueError("API key không hợp lệ")
-        
-        # Cấu hình API OpenAI
-        self.base_url = "https://api.openai.com/v1/audio/speech"
+            logger.critical(f"API key ('{api_key_name}') for TTS provider '{self.selected_tts_provider}' is missing or empty.")
+            raise ValueError(f"API key for {self.selected_tts_provider} not found.")
+        if self.selected_tts_provider == "minimax" and not self.group_id: # Kiểm tra group_id cho minimax
+             logger.critical(f"Group ID ('{group_id_name}') for MiniMax TTS provider is missing or empty.")
+             raise ValueError(f"Group ID for MiniMax not found.")
+
+
+        # --- Cấu hình Chung và Mặc định ---
+        self.base_url = self.provider_config.get("base_url")
+        self.model = self.provider_config.get("default_model")
+        self.voice = self.provider_config.get("default_voice")
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
+
+        # Lưu cài đặt mặc định cụ thể của provider (nếu có)
+        self.audio_settings = self.provider_config.get("default_audio_settings", {})
+        self.voice_settings = self.provider_config.get("default_voice_settings", {})
+
         # Tạo thư mục lưu trữ âm thanh
         self.audio_dir = os.path.join(self.temp_dir, "audio")
         os.makedirs(self.audio_dir, exist_ok=True)
-        
-        # Thiết lập mặc định cho OpenAI TTS
-        self.voice = "alloy"  # Các lựa chọn: alloy, echo, fable, onyx, nova, shimmer
-        self.model = "tts-1"  # hoặc "tts-1-hd" cho chất lượng cao hơn
-        
-        # Kiểm tra kết nối
-        self._test_connection()
+
+        # Bỏ qua _test_connection() vì phức tạp khi có nhiều provider
+        # self._test_connection()
+        logger.info(f"VoiceGenerator for '{self.selected_tts_provider}' initialized.")
+        logger.info(f"  Default Model: {self.model}")
+        logger.info(f"  Default Voice: {self.voice}")
     
     def _test_connection(self):
         """Kiểm tra kết nối với OpenAI API"""
@@ -117,34 +156,46 @@ class VoiceGenerator:
                     unit_audio_path = os.path.join(project_audio_dir, unit_audio_filename)
 
                     # Gọi hàm tạo audio (hàm này không đổi)
-                    self._generate_audio(unit_text, unit_audio_path)
+                    generated_path, api_duration = self._generate_audio(unit_text, unit_audio_path)
 
-                    # Lấy thời lượng thực tế của file audio vừa tạo
+                    if not generated_path:
+                        logger.error(f"  Speech Unit {unit_number}: Tạo audio thất bại.")
+                        continue # Bỏ qua unit này nếu tạo audio lỗi
+                    
+                    # --- ƯU TIÊN DURATION TỪ API (MiniMax) ---
                     actual_unit_duration = 0.0
-                    try:
-                        if os.path.exists(unit_audio_path) and os.path.getsize(unit_audio_path) > 100: # Kiểm tra file hợp lệ
-                            audio_info_mutagen = mutagen.mp3.MP3(unit_audio_path)
-                            actual_unit_duration = audio_info_mutagen.info.length
-                            logger.info(f"  Speech Unit {unit_number}: Audio duration = {actual_unit_duration:.3f}s")
-                        else:
-                            logger.warning(f"  Speech Unit {unit_number}: Audio file '{unit_audio_filename}' không hợp lệ sau khi tạo. Ước tính duration.")
+                    if api_duration is not None and api_duration > 0:
+                        actual_unit_duration = api_duration
+                        logger.info(f"  Speech Unit {unit_number}: Sử dụng duration từ API = {actual_unit_duration:.3f}s")
+                    else:
+                        # --- FALLBACK SANG MUTAGEN (Cho OpenAI hoặc MiniMax lỗi duration) ---
+                        logger.info(f"  Speech Unit {unit_number}: Lấy duration bằng mutagen...")
+                        try:
+                            if os.path.exists(generated_path) and os.path.getsize(generated_path) > 100:
+                                audio_info_mutagen = mutagen.mp3.MP3(generated_path)
+                                actual_unit_duration = audio_info_mutagen.info.length
+                                logger.info(f"    Mutagen duration = {actual_unit_duration:.3f}s")
+                            else:
+                                logger.warning(f"    Audio file '{os.path.basename(generated_path)}' không hợp lệ. Ước tính duration.")
+                                actual_unit_duration = self._estimate_duration(unit_text)
+                        except mutagen.MutagenError as me:
+                            logger.warning(f"    Lỗi Mutagen: {me}. Ước tính duration.")
                             actual_unit_duration = self._estimate_duration(unit_text)
-                    except mutagen.MutagenError as me:
-                        logger.warning(f"  Speech Unit {unit_number}: Lỗi Mutagen khi đọc duration file '{unit_audio_filename}': {me}. Ước tính duration.")
-                        actual_unit_duration = self._estimate_duration(unit_text)
-                    except Exception as e:
-                        logger.warning(f"  Speech Unit {unit_number}: Lỗi không xác định khi đọc duration file '{unit_audio_filename}': {e}. Ước tính duration.")
-                        actual_unit_duration = self._estimate_duration(unit_text)
+                        except Exception as e:
+                            logger.warning(f"    Lỗi không xác định khi đọc duration: {e}. Ước tính duration.")
+                            actual_unit_duration = self._estimate_duration(unit_text)
+                        # --- KẾT THÚC FALLBACK MUTAGEN ---
 
-                    # Thêm thông tin audio của unit vào danh sách kết quả
+                    # --- THÊM THÔNG TIN AUDIO (Dùng generated_path) ---
                     audio_files_info.append({
-                        "type": "speech_unit", # Đánh dấu loại
+                        "type": "speech_unit",
                         "unit_number": unit_number,
-                        "path": unit_audio_path, # Lưu đường dẫn đầy đủ để dùng ngay
-                        "duration": actual_unit_duration, # Thời lượng thực tế (hoặc ước tính)
-                        "content": unit_text, # Text gốc của unit
-                        "scene_numbers": scene_numbers_in_unit # Danh sách các scene (shots) thuộc unit này
+                        "path": generated_path, # DÙNG PATH TRẢ VỀ TỪ _generate_audio
+                        "duration": actual_unit_duration, # Duration cuối cùng đã xác định
+                        "content": unit_text,
+                        "scene_numbers": scene_numbers_in_unit
                     })
+                    # -----------------------------------------------
 
                 except Exception as e:
                     logger.error(f"Lỗi khi tạo audio cho Speech Unit {unit_number}: {str(e)}", exc_info=True)
@@ -164,41 +215,126 @@ class VoiceGenerator:
             return audio_files_info
     
     def _generate_audio(self, text, output_path):
-        """Tạo file âm thanh từ văn bản sử dụng OpenAI TTS API"""
-        try:
-            # Kiểm tra xem văn bản có quá dài không
-            # OpenAI TTS có giới hạn khoảng 4096 tokens (khoảng 3000 từ)
-            if len(text) > 4000:
-                logger.warning(f"Văn bản quá dài ({len(text)} ký tự), có thể gây lỗi API. Cắt xuống 4000 ký tự.")
-                text = text[:4000]
-            
-            # Payload theo định dạng của API OpenAI
-            payload = {
-                "model": self.model,
-                "input": text,
-                "voice": self.voice,
-                "response_format": "mp3"
-            }
-            
-            # Gọi API
-            response = requests.post(self.base_url, json=payload, headers=self.headers)
-            
-            # Kiểm tra kết quả
-            if response.status_code == 200:
-                # Lưu audio vào file
+        """
+        Tạo file âm thanh từ văn bản sử dụng provider đã chọn (OpenAI hoặc MiniMax).
+
+        Returns:
+            tuple: (str path_to_audio, float duration_in_seconds | None)
+                Trả về (None, None) nếu thất bại.
+        """
+        logger.debug(f"[{self.selected_tts_provider}] Generating audio for text: '{text[:50]}...' -> {os.path.basename(output_path)}")
+        max_chars = 4000 if self.selected_tts_provider == "openai" else 5000 # Giới hạn ký tự khác nhau
+
+        if len(text) > max_chars:
+            logger.warning(f"[{self.selected_tts_provider}] Văn bản quá dài ({len(text)} chars). Cắt xuống {max_chars} chars.")
+            text = text[:max_chars]
+
+        # --- Phân nhánh theo Provider ---
+        if self.selected_tts_provider == "openai":
+            try:
+                payload = {
+                    "model": self.model,
+                    "input": text,
+                    "voice": self.voice,
+                    "response_format": "mp3"
+                }
+                response = requests.post(self.base_url, json=payload, headers=self.headers, timeout=60) # Timeout hợp lý
+                response.raise_for_status() # Kiểm tra lỗi HTTP
+
                 with open(output_path, 'wb') as f:
                     f.write(response.content)
-                
-                logger.info(f"Đã tạo file âm thanh tại: {output_path}")
-                return output_path
-            else:
-                error_msg = f"Lỗi API ({response.status_code}): {response.text}"
-                logger.error(error_msg)
-                raise Exception(error_msg)
-                
-        except Exception as e:
-            logger.error(f"Lỗi khi tạo âm thanh với OpenAI TTS: {str(e)}")
-            raise
+                logger.info(f"[openai] Đã tạo file âm thanh: {os.path.basename(output_path)}")
+                # OpenAI không trả về duration, sẽ lấy bằng mutagen sau
+                return output_path, None
+            except requests.exceptions.RequestException as e:
+                logger.error(f"[openai] Lỗi API request: {e}")
+                return None, None
+            except Exception as e:
+                logger.error(f"[openai] Lỗi không xác định khi tạo audio: {e}", exc_info=True)
+                return None, None
+
+        elif self.selected_tts_provider == "minimax":
+            try:
+                # --- Xây dựng URL và Payload cho MiniMax ---
+                if not self.group_id: # Kiểm tra lại group_id
+                    raise ValueError("MiniMax Group ID is required but missing.")
+                url = f"{self.base_url}?GroupId={self.group_id}"
+
+                # Lấy cài đặt voice từ self.voice_settings và cập nhật voice_id
+                current_voice_settings = self.provider_config.get('default_voice_settings', {}).copy()
+                current_voice_settings['voice_id'] = self.voice # Gán voice_id hiện tại
+
+                payload = {
+                    "model": self.model,
+                    "text": text,
+                    "stream": False, # Luôn là False cho non-streaming
+                    "output_format": "hex", # Luôn yêu cầu hex để lấy data
+                    "voice_setting": current_voice_settings,
+                    "audio_setting": self.provider_config.get('default_audio_settings', {})
+                    # Thêm các tham số khác nếu cần, ví dụ:
+                    # "language_boost": "English",
+                    # "subtitle_enable": False,
+                }
+                logger.debug(f"[minimax] Payload: {json.dumps(payload, indent=2)}") # Log payload để debug
+
+                # --- Gọi API MiniMax ---
+                response = requests.post(url, headers=self.headers, json=payload, timeout=90) # Timeout dài hơn chút
+                response.raise_for_status() # Kiểm tra lỗi HTTP
+
+                # --- Xử lý Response MiniMax ---
+                data = response.json()
+                base_resp = data.get('base_resp', {})
+                status_code = base_resp.get('status_code', -1)
+                status_msg = base_resp.get('status_msg', 'Unknown Error')
+
+                if status_code != 0:
+                    logger.error(f"[minimax] Lỗi API ({status_code}): {status_msg}")
+                    logger.error(f"  Trace ID: {data.get('trace_id')}")
+                    return None, None # Báo lỗi
+
+                # Lấy audio hex và decode
+                hex_audio = data.get('data', {}).get('audio')
+                if not hex_audio:
+                    logger.error("[minimax] API trả về thành công nhưng không có dữ liệu audio ('data.audio').")
+                    return None, None
+
+                try:
+                    audio_bytes = bytes.fromhex(hex_audio)
+                except ValueError as hex_err:
+                    logger.error(f"[minimax] Lỗi giải mã chuỗi hex audio: {hex_err}")
+                    return None, None
+
+                # Ghi file audio
+                with open(output_path, 'wb') as f:
+                    f.write(audio_bytes)
+                logger.info(f"[minimax] Đã tạo file âm thanh: {os.path.basename(output_path)}")
+
+                # Lấy duration từ extra_info
+                duration_sec = None
+                extra_info = data.get('extra_info', {})
+                duration_ms = extra_info.get('audio_length')
+                if isinstance(duration_ms, (int, float)) and duration_ms > 0:
+                    duration_sec = duration_ms / 1000.0
+                    logger.info(f"[minimax] Duration từ API: {duration_sec:.3f}s")
+                else:
+                    logger.warning(f"[minimax] Không tìm thấy hoặc duration không hợp lệ trong extra_info: {extra_info}. Sẽ dùng mutagen.")
+
+                return output_path, duration_sec
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"[minimax] Lỗi API request: {e}")
+                return None, None
+            except json.JSONDecodeError as e:
+                logger.error(f"[minimax] Lỗi giải mã JSON response: {e}")
+                logger.debug(f"Raw response text: {response.text[:500]}") # Log phần đầu response nếu lỗi JSON
+                return None, None
+            except Exception as e:
+                logger.error(f"[minimax] Lỗi không xác định khi tạo audio: {e}", exc_info=True)
+                return None, None
+
+        else:
+            logger.error(f"TTS Provider '{self.selected_tts_provider}' không được hỗ trợ.")
+            return None, None
     
     def _estimate_duration(self, text):
         """Ước tính thời lượng của đoạn âm thanh dựa trên số từ (DÙNG LÀM FALLBACK)"""
@@ -249,22 +385,28 @@ class VoiceGenerator:
                 logger.error(f"Project {project_id}: Lỗi khi lưu audio_info.json: {e}", exc_info=True)
     
     def set_voice(self, voice):
-        """Thiết lập giọng đọc"""
-        valid_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+        """Thiết lập giọng đọc, kiểm tra tính hợp lệ theo provider đã chọn."""
+        valid_voices = self.provider_config.get("valid_voices", [])
         if voice in valid_voices:
             self.voice = voice
-            logger.info(f"Đã thiết lập giọng đọc: {voice}")
+            logger.info(f"[{self.selected_tts_provider}] Đã thiết lập giọng đọc: {voice}")
         else:
-            logger.warning(f"Giọng không hợp lệ: {voice}. Sử dụng giọng mặc định: {self.voice}")
+            logger.warning(
+                f"[{self.selected_tts_provider}] Giọng không hợp lệ: {voice}. "
+                f"Các giọng hợp lệ: {valid_voices}. Sử dụng giọng mặc định: {self.voice}"
+            )
     
     def set_model(self, model):
-        """Thiết lập model TTS"""
-        valid_models = ["tts-1", "tts-1-hd"]
+        """Thiết lập model TTS, kiểm tra tính hợp lệ theo provider đã chọn."""
+        valid_models = self.provider_config.get("valid_models", [])
         if model in valid_models:
             self.model = model
-            logger.info(f"Đã thiết lập model: {model}")
+            logger.info(f"[{self.selected_tts_provider}] Đã thiết lập model: {model}")
         else:
-            logger.warning(f"Model không hợp lệ: {model}. Sử dụng model mặc định: {self.model}")
+            logger.warning(
+                f"[{self.selected_tts_provider}] Model không hợp lệ: {model}. "
+                f"Các model hợp lệ: {valid_models}. Sử dụng model mặc định: {self.model}"
+            )
 
 # Test module nếu chạy trực tiếp
 # python -m src.voice_generator
