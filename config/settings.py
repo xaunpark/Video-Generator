@@ -116,6 +116,7 @@ VIDEO_SETTINGS = {
     "enhancement_saturation": 1.1,     # Giá trị saturation (1.0 là gốc, >1 tăng, <1 giảm)
     "enhancement_contrast": 1.05,      # Giá trị contrast (1.0 là gốc, >1 tăng, <1 giảm)
     "enhancement_brightness": 0.0,      # Giá trị brightness (-1.0 đến 1.0, 0 là gốc)    
+    "use_ai_for_media_selection": True,  # Bật/tắt tính năng chọn media bằng AI
 }
 
 # --- LLM Provider Settings ---

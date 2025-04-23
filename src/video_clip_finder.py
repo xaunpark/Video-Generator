@@ -7,6 +7,7 @@ import time
 import shutil
 from urllib.parse import urlparse
 from src.fix_pillow import *
+from typing import List, Dict, Optional
 
 from moviepy import *
 #from moviepy.editor import VideoFileClip, concatenate_videoclips, vfx
@@ -56,106 +57,80 @@ class VideoClipFinder:
         # Blacklisted terms (to avoid inappropriate content)
         self.blacklisted_terms = ["nude", "nsfw", "explicit", "porn", "sex", "adult", "violence", "bloody"]
         
-    def find_video_clip(self, query, scene_content, output_path, target_duration=None):
+    def find_video_clip_candidates(self, query: str) -> List[Dict]:
         """
-        Find and download a short video clip matching the query and scene content.
-        
+        Tìm kiếm video từ các nguồn (Pexels, Pixabay) dựa trên query và
+        trả về danh sách các ứng viên video thô (metadata).
+        Hàm này KHÔNG thực hiện lọc, chấm điểm hay sắp xếp.
+
         Args:
-            query (str): The search query for video content
-            scene_content (str): Content of the scene (for context)
-            output_path (str): Path to save the processed video clip
-            target_duration (float, optional): Target duration for the clip in seconds
-            
+            query (str): Từ khóa tìm kiếm video.
+
         Returns:
-            str: Path to the processed video clip, or None if no suitable clip found
+            List[Dict]: Danh sách các dictionary chứa thông tin metadata của
+                        các video ứng viên tìm được từ các nguồn. Trả về list
+                        rỗng nếu không tìm thấy hoặc có lỗi.
         """
-        if target_duration:
-            self.target_duration = target_duration
-            
-        # Check for blacklisted terms
+        # 1. Kiểm tra Blacklisted Terms (Giữ lại bước kiểm tra an toàn này)
+        sanitized_query = query # Mặc định dùng query gốc
         if any(term in query.lower() for term in self.blacklisted_terms):
             logger.warning(f"Query '{query}' contains blacklisted terms. Sanitizing query.")
-            # Extract main keywords and create safer query
-            safer_terms = [word for word in query.split() 
+            safer_terms = [word for word in query.split()
                           if word.lower() not in self.blacklisted_terms]
-            query = " ".join(safer_terms) + " safe"
-            
-        logger.info(f"Searching for video clip with query: '{query}'")
-        
-        # Check video cache first
-        cached_video = self._check_video_cache(query)
-        if cached_video:
-            logger.info(f"Using cached video for query: '{query}'")
-            # Convert cached video to required format
-            return self._process_video_clip(cached_video, output_path)
-            
-        # Try different sources until a suitable video is found
+            # Tạo query an toàn hơn, có thể thêm hậu tố nếu muốn
+            sanitized_query = " ".join(safer_terms)
+            if not sanitized_query: # Nếu query chỉ chứa từ khóa bị chặn
+                 logger.error(f"Query '{query}' consists entirely of blacklisted terms. Cannot search.")
+                 return [] # Trả về list rỗng
+            logger.info(f"Using sanitized query: '{sanitized_query}'")
+
+        logger.info(f"Searching for video clip CANDIDATES with query: '{sanitized_query}'")
+
+        # 2. Khởi tạo danh sách tổng hợp ứng viên
+        all_candidates: List[Dict] = []
+
+        # 3. Danh sách các hàm tìm kiếm từ các nguồn
+        # Thêm các nguồn khác vào đây nếu có
         video_sources = [
             self._search_pexels_videos,
             self._search_pixabay_videos
+            # ví dụ: self._search_another_source_videos
         ]
-        
+
+        # 4. Lặp qua từng nguồn và gọi hàm tìm kiếm tương ứng
         for source_func in video_sources:
-            if not callable(source_func):
-                continue
-                
+            # Lấy tên nguồn để log (cách làm cũ vẫn ổn)
+            source_name = "Unknown"
+            if hasattr(source_func, '__name__'): # Kiểm tra xem có lấy được tên không
+                 source_name = source_func.__name__.replace('_search_', '').replace('_videos', '').capitalize()
+
+            logger.info(f"--- Searching source: {source_name} for candidates ---")
             try:
+                # Gọi hàm tìm kiếm của nguồn đó với query đã được làm sạch
+                video_results: List[Dict] = source_func(sanitized_query)
 
-                # Lấy tên của hàm nguồn để log
-                source_name = source_func.__name__.replace('_search_', '').replace('_videos', '').capitalize()
-                logger.info(f"--- Searching source: {source_name} ---") # Log tên nguồn
+                # Kiểm tra xem có kết quả trả về không
+                if video_results:
+                    logger.info(f"Found {len(video_results)} candidates from {source_name}.")
+                    # Thêm tất cả kết quả từ nguồn này vào danh sách tổng
+                    all_candidates.extend(video_results)
+                else:
+                    logger.info(f"No candidates found from {source_name} for this query.")
 
-                video_results = source_func(query)
-                
-                if video_results and len(video_results) > 0:
-                    # Filter and sort videos by relevance and quality
-                    suitable_videos = self._filter_videos(video_results, query)
-                    
-                    # --- LOG  ---
-                    #if suitable_videos:
-                    #    logger.info(f"--- Top {min(5, len(suitable_videos))} suitable videos found from {source_name} (Target Duration: {self.target_duration:.1f}s) ---")
-                    #    for i, video_data in enumerate(suitable_videos[:5]): # Log top 5
-                    #        vid_url = video_data.get("video_url", "N/A")
-                    #        vid_score = video_data.get("score", 0.0)
-                    #        vid_duration = video_data.get("duration", 0.0)
-                    #        vid_source = video_data.get("source", "Unknown")
-                    #        vid_dims = f"{video_data.get('width', 'N/A')}x{video_data.get('height', 'N/A')}"
-
-                            # Định dạng thông tin thời lượng
-                    #        duration_str = f"{vid_duration:.1f}s" if vid_duration > 0 else "Unknown"
-
-                    #        logger.info(f"{i+1}. Score: {vid_score:.2f} | Duration: {duration_str} | Dim: {vid_dims} | Source: {vid_source} | URL: {vid_url[:70]}...")
-                    #    logger.info("--- Attempting download/process from top results ---")
-                    #else:
-                    #     logger.info(f"No suitable videos found from {source_name} after filtering.")
-                    # --- KẾT THÚC ĐOẠN LOG ---
-
-                    if suitable_videos:
-                        # Try to download top videos until success
-                        for video_data in suitable_videos[:5]:  # Try top 5
-                            try:
-                                video_url = video_data.get("video_url")
-                                if not video_url:
-                                    continue
-                                    
-                                logger.info(f"Attempting to download video: {video_url[:80]}...")
-                                
-                                # Download and process video
-                                downloaded_path = self._download_video(video_url, query)
-                                if downloaded_path:
-                                    # Process video to fit requirements
-                                    processed_path = self._process_video_clip(downloaded_path, output_path)
-                                    if processed_path:
-                                        return processed_path
-                            except Exception as e:
-                                logger.warning(f"Failed to download/process video {video_url}: {str(e)}")
-                                continue  # Try next video
             except Exception as e:
-                logger.warning(f"Error searching videos from source {source_name}: {str(e)}") # Sử dụng source_name đã lấy
-                continue  # Try next source
-                
-        logger.warning(f"No suitable video clips found for query: '{query}'")
-        return None
+                # Log lỗi nếu có vấn đề khi tìm kiếm từ nguồn cụ thể
+                logger.warning(f"Error searching video candidates from {source_name}: {e}", exc_info=False) # exc_info=False để log gọn hơn
+                continue # Tiếp tục với nguồn tiếp theo
+
+        # 5. Kết thúc và trả về danh sách ứng viên tổng hợp
+        total_found = len(all_candidates)
+        if total_found > 0:
+            logger.info(f"Found a total of {total_found} video candidates (before AI selection) for query '{query}'.")
+        else:
+            logger.warning(f"No video candidates found from any source for query '{query}'.")
+
+        # Trả về danh sách tất cả ứng viên đã tìm thấy, không lọc/sắp xếp
+        return all_candidates
         
     def _search_pexels_videos(self, query):
         """Search videos from Pexels API."""
@@ -346,15 +321,15 @@ class VideoClipFinder:
             # Base score
             score = 0.5
 
-            # Score based on title match with query (Giữ nguyên)
+            # Score based on title match with query
             title = video.get("title", "").lower()
             title_words = set(title.split())
             common_words = query_words.intersection(title_words)
             if common_words:
                 title_score = len(common_words) / len(query_words) if len(query_words) > 0 else 0 # Tránh chia cho 0
-                score += title_score * 0.3
+                score += title_score * 0.6
 
-            # Score based on resolution (Giữ nguyên)
+            # Score based on resolution
             width = video.get("width", 0)
             height = video.get("height", 0)
             if width >= 1920 and height >= 1080:
@@ -364,7 +339,7 @@ class VideoClipFinder:
             elif width >= 640 and height >= 480:
                 score += 0.1
 
-            # Score based on aspect ratio match (Giữ nguyên)
+            # Score based on aspect ratio match
             if width > 0 and height > 0:
                 video_ratio = width / height
                 target_ratio = self.target_width / self.target_height
@@ -387,7 +362,7 @@ class VideoClipFinder:
                 # Tính điểm thưởng (điều chỉnh điểm thưởng ở đây)
                 if ideal_lower_bound <= duration <= ideal_upper_bound:
                     # Lý tưởng: Thời lượng đúng hoặc dài hơn một chút -> Điểm thưởng cao nhất
-                    duration_score_bonus = 0.40 # Tăng nhẹ điểm thưởng tối đa
+                    duration_score_bonus = 0.2 # điểm thưởng tối đa
                     log_msg = "IDEAL MATCH"
                 elif acceptable_lower_bound_for_scoring <= duration < ideal_lower_bound:
                     # Chấp nhận được: Ngắn hơn (nhưng không quá ngưỡng lọc) -> Điểm thưởng thấp hơn
