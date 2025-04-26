@@ -108,9 +108,8 @@ VIDEO_SETTINGS = {
     "subtitle_style": "Alignment=2,OutlineColour=&H80000000,BorderStyle=3,Outline=1", # Style cho FFmpeg
     # -------------CHẾ ĐỘ CHẠY ẢNH/VIDEO THEO AUDIO HAY THEO TIME CỐ ĐỊNH --------------------
     "visual_timing_mode": "sync_to_audio", # Chỉ 2 lựa chọn: 'sync_to_audio', 'overall_theme_fixed_duration'
-    "fixed_visual_duration": 15.0,        # Dùng cho 'overall_theme_fixed_duration'
-    "theme_visual_query_count": 7,       # Số query/prompt cho chế độ theme
-    "theme_visual_generation_factor": 1.1, # Tạo dư visual cho chế độ theme
+    #"fixed_visual_duration": 15.0,        # Dùng cho 'overall_theme_fixed_duration'
+    #"theme_visual_query_count": 7,       # Số query/prompt cho chế độ theme
     # -------------TĂNG CƯỜNG CHẤT LƯỢNG VIDEO----------------------
     "enable_video_enhancement": True,  # Bật/tắt tính năng tăng cường
     "enhancement_saturation": 1.1,     # Giá trị saturation (1.0 là gốc, >1 tăng, <1 giảm)

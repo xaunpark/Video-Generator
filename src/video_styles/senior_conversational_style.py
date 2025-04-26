@@ -207,7 +207,7 @@ class SeniorConversationalStyle(BaseVideoStyle):
 
         return gpt_prompt.strip()
 
-    def get_video_search_query_override(self) -> Union[str, List[str], None]:
+#    def get_video_search_query_override(self) -> Union[str, List[str], None]:
         """
         Cung cấp truy vấn tìm kiếm video cố định cho style này.
         Trả về một chuỗi, một danh sách chuỗi, hoặc None.
@@ -235,7 +235,7 @@ class SeniorConversationalStyle(BaseVideoStyle):
         # --- LỰA CHỌN 3: Trả về None (Không dùng cho yêu cầu này) ---
         # return None # Nếu không muốn override query
     # --- KẾT THÚC THÊM PHƯƠNG THỨC MỚI ---
-    
+
     # Các phương thức khác như get_voice_settings, get_video_editing_settings
     # có thể được ghi đè ở đây nếu Senior Conversational cần cấu hình đặc biệt.
     # Ví dụ:

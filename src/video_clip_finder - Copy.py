@@ -480,7 +480,7 @@ class VideoClipFinder:
                 
             return None
             
-    def _process_video_clip(self, input_path, output_path, process_target_duration: float):
+    def _process_video_clip(self, input_path, output_path):
         """
         Process downloaded video to match required format and duration.
         
@@ -500,16 +500,16 @@ class VideoClipFinder:
             logger.info(f"Original video duration: {original_duration:.2f}s")
             
             # Cut to target duration if needed
-            if original_duration > process_target_duration:
+            if original_duration > self.target_duration:
                 # Calculate a good starting point (avoid starting at the very beginning)
-                if original_duration > (process_target_duration * 2):
-                    max_start = original_duration - process_target_duration - 1
+                if original_duration > (self.target_duration * 2):
+                    max_start = original_duration - self.target_duration - 1
                     start_time = random.uniform(1, max_start)
                 else:
                     start_time = 0
                     
-                logger.info(f"Cutting video from {start_time:.2f}s to {start_time + process_target_duration:.2f}s")
-                video = video.subclipped(start_time, start_time + process_target_duration)
+                logger.info(f"Cutting video from {start_time:.2f}s to {start_time + self.target_duration:.2f}s")
+                video = video.subclipped(start_time, start_time + self.target_duration)
             
             # Resize if needed
             if video.w != self.target_width or video.h != self.target_height:

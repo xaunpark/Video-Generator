@@ -771,10 +771,59 @@ class VideoEditor:
                     # Trường hợp đã tạo black track fallback
                     logger.info("Using pre-generated black track as main visual track.")                         
 
+            # --- 3.5 (MỚI): Điều chỉnh tốc độ tổng thể CHO overall_theme_fixed_duration (trong trường hợp visual không khớp với audio) ---
+            adjusted_main_visual_track_path = main_visual_track_path # Mặc định dùng bản gốc
+
+            if visual_timing_mode == 'overall_theme_fixed_duration':
+                logger.info("Theme Mode: Checking if overall visual duration needs adjustment to match audio...")
+                main_visual_duration = self._get_video_duration_ffprobe(main_visual_track_path)
+
+                # Chỉ thực hiện nếu lấy được cả 2 duration và chúng khác nhau đáng kể
+                if main_visual_duration and total_main_audio_duration and abs(main_visual_duration - total_main_audio_duration) > 0.15: # Ngưỡng 0.15s
+                    speed_factor = main_visual_duration / total_main_audio_duration
+                    # Chỉ điều chỉnh nếu tốc độ thay đổi không quá lớn (ví dụ: trong khoảng 0.9x đến 1.1x)
+                    if 0.9 <= speed_factor <= 1.1:
+                        logger.warning(f"Theme Mode: Adjusting overall visual track speed by factor {speed_factor:.4f} to match audio duration.")
+                        pts_factor = 1.0 / speed_factor
+                        # Tạo đường dẫn mới cho file đã điều chỉnh
+                        adjusted_path_temp = os.path.join(temp_project_dir, f"main_visual_track_adjusted_{project_id}.mp4")
+                        temp_files_to_clean.append(adjusted_path_temp) # Thêm vào cleanup
+
+                        cmd_speed_overall = [
+                            self.ffmpeg_path, "-y",
+                            "-i", main_visual_track_path, # Input là visual track gốc
+                            "-vf", f"setpts={pts_factor:.4f}*PTS", # Áp dụng filter tốc độ
+                            "-c:v", "libx264", "-crf", "23", "-preset", "fast", # Re-encode video
+                            "-an", # Output không cần audio ở bước này
+                            adjusted_path_temp
+                        ]
+                        try:
+                            subprocess.run(cmd_speed_overall, check=True, capture_output=True, text=True, encoding='utf-8')
+                            if os.path.exists(adjusted_path_temp) and os.path.getsize(adjusted_path_temp) > 1000:
+                                logger.info("Theme Mode: Overall visual track speed adjustment successful.")
+                                adjusted_main_visual_track_path = adjusted_path_temp # <<< Cập nhật đường dẫn để dùng cho các bước sau
+                            else:
+                                logger.error("Theme Mode: Speed adjustment failed to create valid output file. Using original visual track.")
+                        except Exception as speed_err:
+                            logger.error(f"Theme Mode: Error during overall speed adjustment: {speed_err}. Using original visual track.")
+                    else:
+                        logger.warning(f"Theme Mode: Required speed factor ({speed_factor:.3f}) is outside the acceptable range (0.9-1.1). Skipping overall adjustment.")
+                elif main_visual_duration and total_main_audio_duration:
+                     logger.info(f"Theme Mode: Visual duration ({main_visual_duration:.2f}s) and audio duration ({total_main_audio_duration:.2f}s) are already closely matched. No overall speed adjustment needed.")
+                else:
+                     logger.warning("Theme Mode: Could not get duration for both visual and audio tracks. Skipping overall speed adjustment.")
+            else:
+                # Log nếu là sync_to_audio hoặc mode khác
+                logger.info(f"Timing Mode is '{visual_timing_mode}'. Skipping overall visual track speed adjustment (handled per unit if sync_to_audio).")
+            # --- KẾT THÚC BƯỚC 3.5 ---
+
             # --- 4. Ghép nối Video Cuối Cùng (Intro + Visual Track + Outro - Chỉ hình ảnh) ---
             final_video_segments_no_audio = []
             if intro_video_path and os.path.exists(intro_video_path): final_video_segments_no_audio.append(intro_video_path)
-            if main_visual_track_path and os.path.exists(main_visual_track_path): final_video_segments_no_audio.append(main_visual_track_path)
+            if adjusted_main_visual_track_path and os.path.exists(adjusted_main_visual_track_path): final_video_segments_no_audio.append(adjusted_main_visual_track_path)
+            elif main_visual_track_path and os.path.exists(main_visual_track_path):
+                logger.warning("Using original main visual track as adjustment failed.")
+                final_video_segments_no_audio.append(main_visual_track_path)
             if outro_video_path and os.path.exists(outro_video_path): final_video_segments_no_audio.append(outro_video_path)
 
             if not final_video_segments_no_audio:

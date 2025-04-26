@@ -333,9 +333,11 @@ class ScriptGenerator:
         logger.error(f"Failed to get valid response from DeepSeek API (Model: {model_name}) after {max_retries} attempts.") # Thêm model_name vào log lỗi
         return None
 
-    def _call_llm_api(self, user_prompt, system_prompt="You are a helpful assistant.", max_retries=3, request_timeout=90, require_json=True, is_core_content_task=True):
+    def _call_llm_api(self, user_prompt, system_prompt="You are a helpful assistant.",
+                      max_retries=3, request_timeout=90, require_json=True,
+                      is_core_content_task=True, override_model=None): # <<< THÊM override_model=None
         """
-        Calls the selected LLM provider's API, potentially overriding for non-core tasks.
+        Calls the selected LLM provider's API, potentially overriding for non-core tasks or specific model requests.
 
         Args:
             user_prompt (str): The user's prompt.
@@ -346,7 +348,9 @@ class ScriptGenerator:
                                  doesn't support native JSON mode, prompt is modified
                                  and output needs parsing.
             is_core_content_task (bool): If False, and Reasoner was selected, use default provider.
-
+            override_model (str, optional): If provided, use this specific model name
+                                            instead of the default for the selected provider.
+                                            Defaults to None.
         Returns:
             str or None: The content string from the LLM response, or None on failure.
                          If require_json is True and native JSON mode isn't supported,
@@ -355,10 +359,11 @@ class ScriptGenerator:
         # --- XÁC ĐỊNH PROVIDER VÀ CẤU HÌNH SẼ DÙNG ---
         provider_key_to_use = self.selected_provider_name
         provider_config_to_use = self.provider_config
-        supports_json_mode_to_use = self.supports_json_mode
-        api_key_to_use = self.api_key # Lấy API key tương ứng với provider đã chọn ban đầu
+        # Bắt đầu với cài đặt JSON mode mặc định của provider đã chọn ban đầu
+        supports_json_mode_to_use = self.supports_json_mode 
+        api_key_to_use = self.api_key # API key của provider đã chọn ban đầu
 
-        # Logic override nếu người dùng chọn Reasoner nhưng task không phải core
+        # Logic override provider nếu người dùng chọn Reasoner nhưng task không phải core
         if self.selected_provider_name == "deepseek_reasoner" and not is_core_content_task:
             default_provider_key = DEFAULT_LLM_PROVIDER # Lấy default từ settings
             if default_provider_key != "deepseek_reasoner": # Chỉ override nếu default khác Reasoner
@@ -366,64 +371,102 @@ class ScriptGenerator:
                 provider_key_to_use = default_provider_key
                 if provider_key_to_use in LLM_PROVIDERS:
                     provider_config_to_use = LLM_PROVIDERS[provider_key_to_use]
-                    supports_json_mode_to_use = provider_config_to_use.get("supports_json_mode", False)
-                    # LẤY ĐÚNG API KEY CHO PROVIDER MẶC ĐỊNH
+                    # CẬP NHẬT lại JSON mode và API key theo provider MỚI
+                    supports_json_mode_to_use = provider_config_to_use.get("supports_json_mode", False) 
                     default_api_key_name = provider_config_to_use.get("api_key_name")
                     if default_api_key_name == "OPENAI_API_KEY":
                         api_key_to_use = OPENAI_API_KEY
                     elif default_api_key_name == "DEEPSEEK_API_KEY":
                         api_key_to_use = DEEPSEEK_API_KEY
-                    # Add elif for future default providers if needed
+                    # ... (các provider khác) ...
                     if not api_key_to_use:
                         logger.error(f"API Key for default provider '{default_provider_key}' is missing! Reverting to Reasoner for this call.")
-                        # Hoặc raise lỗi ở đây nếu muốn chặt chẽ hơn
-                        provider_key_to_use = self.selected_provider_name # Revert về Reasoner nếu key default thiếu
+                        # Revert lại các giá trị về của Reasoner
+                        provider_key_to_use = self.selected_provider_name 
                         provider_config_to_use = self.provider_config
                         supports_json_mode_to_use = self.supports_json_mode
-                        api_key_to_use = self.api_key # Revert key
+                        api_key_to_use = self.api_key
                 else:
-                    logger.error(f"Default provider '{default_provider_key}' not found in LLM_PROVIDERS config! Reverting to Reasoner for this call.")
-                    provider_key_to_use = self.selected_provider_name # Revert về Reasoner nếu default config lỗi
+                    logger.error(f"Default provider '{default_provider_key}' not found in LLM_PROVIDERS config! Reverting to Reasoner.")
+                    # Revert lại các giá trị về của Reasoner
+                    provider_key_to_use = self.selected_provider_name
                     provider_config_to_use = self.provider_config
                     supports_json_mode_to_use = self.supports_json_mode
-                    # api_key_to_use giữ nguyên của Reasoner
+                    api_key_to_use = self.api_key
             else:
-                 # Default provider LÀ Reasoner hoặc người dùng chọn Reasoner và task LÀ core
                  logger.debug(f"Task type core={is_core_content_task}. Using initially selected provider (DeepSeek Reasoner).")
-                 # Không cần làm gì thêm, các biến đã đúng
         else:
-             # Trường hợp người dùng không chọn Reasoner ban đầu
              logger.debug(f"Task type core={is_core_content_task}. Using initially selected provider: {provider_key_to_use}")
-             # Không cần làm gì thêm, các biến đã đúng
-
-        # Lấy thông tin cụ thể từ cấu hình đã chọn (config và key đã được xác định ở trên)
-        model_to_use = provider_config_to_use.get("chat_model")
+        # --- Kết thúc override provider ---
+        
+        # --- XÁC ĐỊNH MODEL VÀ URL CUỐI CÙNG SẼ DÙNG ---
+        # Lấy model mặc định từ cấu hình provider đã xác định ở trên
+        default_model_for_provider = provider_config_to_use.get("chat_model")
         base_url_to_use = provider_config_to_use.get("base_url")
+        # Headers dùng API key đã xác định ở trên
         headers_to_use = {
             "Authorization": f"Bearer {api_key_to_use}",
             "Content-Type": "application/json"
         }
-        # --- KẾT THÚC XÁC ĐỊNH PROVIDER ---
 
+        # === BEGIN LOGIC XỬ LÝ override_model ===
+        model_to_use = default_model_for_provider # Mặc định dùng model của provider
+        
+        if override_model and isinstance(override_model, str) and override_model.strip():
+             # Kiểm tra xem provider hiện tại có hỗ trợ model được override không
+             # Ví dụ đơn giản: chỉ cho phép override nếu provider là OpenAI
+             # Bạn có thể mở rộng logic này nếu cần
+             if provider_key_to_use == "openai": 
+                 logger.info(f"Overriding model for this call. Using '{override_model}' instead of default '{default_model_for_provider}' for provider '{provider_key_to_use}'.")
+                 model_to_use = override_model.strip() # Gán model override
+
+                 # Kiểm tra lại hỗ trợ JSON mode cho model override (cụ thể cho OpenAI)
+                 openai_models_supporting_json = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo-1106", "gpt-4o-mini"]
+                 if model_to_use in openai_models_supporting_json:
+                     supports_json_mode_to_use = True # Bật nếu model hỗ trợ
+                 else:
+                     if supports_json_mode_to_use: # Log nếu đang bật mà bị tắt
+                         logger.warning(f"Disabling native JSON mode because overridden OpenAI model '{model_to_use}' support is not listed.")
+                     supports_json_mode_to_use = False
+             elif provider_key_to_use == "deepseek": # Ví dụ cho DeepSeek
+                 if override_model == "deepseek-chat": # Chỉ chat hỗ trợ JSON
+                     supports_json_mode_to_use = True
+                     logger.info(f"Overriding model to '{override_model}' for DeepSeek.")
+                     model_to_use = override_model
+                 elif override_model == "deepseek-reasoner":
+                      supports_json_mode_to_use = False
+                      logger.info(f"Overriding model to '{override_model}' for DeepSeek.")
+                      model_to_use = override_model
+                 else:
+                      logger.warning(f"Model override '{override_model}' not explicitly supported by DeepSeek provider in this config. Using default '{default_model_for_provider}'.")
+                      # Không override model, giữ nguyên model_to_use và supports_json_mode_to_use
+             else:
+                  logger.warning(f"Model override '{override_model}' ignored because the selected provider '{provider_key_to_use}' does not support override in this configuration.")
+                  # Không override, giữ nguyên model_to_use và supports_json_mode_to_use
+        # === END LOGIC XỬ LÝ override_model ===
+        
+        # --- Log thông tin cuối cùng trước khi gọi ---
         logger.info(f"Executing LLM call with: Provider='{provider_key_to_use}', Model='{model_to_use}', SupportsJSON={supports_json_mode_to_use}, RequireJSON={require_json}")
 
         content = None
         # --- SỬ DỤNG provider_key_to_use để quyết định gọi hàm nào ---
-        # --- VÀ TRUYỀN CÁC THAM SỐ CẤU HÌNH VÀO HÀM NỘI BỘ ---
+        # --- VÀ TRUYỀN CÁC THAM SỐ ĐÃ XÁC ĐỊNH (bao gồm model_to_use, supports_json_mode_to_use) ---
         if provider_key_to_use == "openai":
             content = self._call_openai_api_internal(
                 system_prompt=system_prompt, user_prompt=user_prompt,
-                model_name=model_to_use, base_url=base_url_to_use, headers=headers_to_use,
-                supports_json=supports_json_mode_to_use, # Đã đổi tên tham số
-                force_json_output=require_json, # Đã đổi tên tham số
+                model_name=model_to_use,                 
+                base_url=base_url_to_use, headers=headers_to_use,
+                supports_json=supports_json_mode_to_use, 
+                force_json_output=require_json,
                 max_retries=max_retries, request_timeout=request_timeout
             )
         elif provider_key_to_use in ["deepseek", "deepseek_reasoner"]: # Gộp cả hai deepseek
             content = self._call_deepseek_api_internal(
                 system_prompt=system_prompt, user_prompt=user_prompt,
-                model_name=model_to_use, base_url=base_url_to_use, headers=headers_to_use,
-                supports_json=supports_json_mode_to_use, # Đã đổi tên tham số
-                force_json_output=require_json, # Đã đổi tên tham số
+                model_name=model_to_use,                 
+                base_url=base_url_to_use, headers=headers_to_use,
+                supports_json=supports_json_mode_to_use, 
+                force_json_output=require_json,
                 max_retries=max_retries, request_timeout=request_timeout
             )
         # Add elif for future providers
@@ -436,46 +479,34 @@ class ScriptGenerator:
         if content and require_json and not supports_json_mode_to_use:
             logger.debug(f"Attempting to extract JSON from response (Provider: {provider_key_to_use}, Native JSON support: {supports_json_mode_to_use})...")
             import re
-            # Try to find JSON within ```json ... ``` markers
-            match = re.search(r"```json\s*(\{.*?\})\s*```", content, re.DOTALL | re.IGNORECASE) # Thêm IGNORECASE
+            match = re.search(r"```json\s*(\{.*?\})\s*```", content, re.DOTALL | re.IGNORECASE)
             if match:
-                json_string = match.group(1).strip() # Lấy group 1 và strip()
-                # Basic validation: Bắt đầu bằng { và kết thúc bằng }
+                json_string = match.group(1).strip()
                 if json_string.startswith('{') and json_string.endswith('}'):
                     logger.debug("Successfully extracted JSON from markdown markers.")
-                    # Thử parse để đảm bảo nó là JSON hợp lệ trước khi trả về
                     try:
                         json.loads(json_string)
-                        return json_string # Trả về string JSON đã trích xuất
+                        return json_string
                     except json.JSONDecodeError as parse_err:
                          logger.warning(f"Found markers, but content inside failed JSON parsing: {parse_err}")
-                         logger.debug(f"Extracted invalid JSON string: {json_string[:200]}...")
-                         return None # Coi như thất bại nếu không parse được
+                         return None
                 else:
-                    logger.warning("Found markers, but content inside doesn't look like a JSON object (doesn't start/end with {}).")
-                    logger.debug(f"Content inside markers: {json_string[:200]}...")
-                    return None # Failed to extract valid JSON object
+                    logger.warning("Found markers, but content inside doesn't look like a JSON object.")
+                    return None
             else:
-                 # Nếu không có markers, thử kiểm tra xem toàn bộ content có phải JSON không
-                 # Loại bỏ khoảng trắng đầu/cuối trước khi kiểm tra
                  trimmed_content = content.strip()
                  if trimmed_content.startswith('{') and trimmed_content.endswith('}'):
                      logger.debug("Response seems to be JSON directly (no markers found).")
-                     # Thử parse để đảm bảo hợp lệ
                      try:
                          json.loads(trimmed_content)
-                         return trimmed_content # Trả về toàn bộ nội dung nếu parse thành công
+                         return trimmed_content
                      except json.JSONDecodeError as parse_err:
                           logger.warning(f"Content looks like JSON but failed parsing: {parse_err}")
-                          logger.debug(f"Direct content received: {trimmed_content[:200]}...")
-                          return None # Coi như thất bại
+                          return None
                  else:
                      logger.warning("Could not extract JSON from response (no markers and not direct JSON object).")
-                     logger.debug(f"Raw content received: {content[:200]}...")
-                     return None # Failed to extract JSON
+                     return None
 
-        # If JSON wasn't required, or if native JSON mode was used and successful,
-        # or if extraction failed but require_json was False, return content directly.
         return content
 
     # --- Chia Câu thành Shots ---
