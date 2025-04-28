@@ -217,19 +217,19 @@ TTS_PROVIDERS = {
         "api_key_name": "MINIMAX_API_KEY",
         "group_id_name": "MINIMAX_GROUP_ID", # Tên biến Group ID trong credentials.py
         "base_url": "https://api.minimaxi.chat/v1/t2a_v2", # URL của API T2A v2
-        "default_model": "speech-02-turbo", # Model mặc định của MiniMax
+        "default_model": "speech-02-hd", #hoặc speech-02-turbo...
         "default_voice": "moss_audio_e73154aa-1f23-11f0-9892-fe0442d6b67f",  #Giọng Ma Chu - Truyện ma bẻ lái 
         # Liệt kê các voice_id bạn muốn hỗ trợ từ tài liệu MiniMax
         # default_voice phải là một trong các voice_id trong valid_voices
         "valid_voices": [
-            "moss_audio_e73154aa-1f23-11f0-9892-fe0442d6b67f", "male-qn-jingying", "male-qn-badao", "male-qn-daxuesheng",
+            "moss_audio_e73154aa-1f23-11f0-9892-fe0442d6b67f", "moss_audio_27e22420-2381-11f0-b934-42db1b8d9b3b", "male-qn-jingying", "male-qn-badao", "male-qn-daxuesheng",
             "female-qn-qingse", "female-qn-yujie", "female-qn-tianmei", "female-qn-chengshu",
             "presenter_male", "presenter_female",
             "audiobook_male_1", "audiobook_female_1",
             "emotional_male_1", "emotional_female_1",
             # Thêm các giọng quốc tế nếu cần (ví dụ từ tài liệu)
             "eng_male_1", "eng_female_1", "Santa_Claus", "Wise_Woman"
-            # ... thêm các voice_id khác bạn muốn dùng ...
+
         ],
         "valid_models": ["speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"],
         "default_audio_settings": { # Cài đặt audio mặc định cho MiniMax

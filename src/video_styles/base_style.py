@@ -267,18 +267,27 @@ class BaseVideoStyle(ABC):
 
     def get_voice_settings(self) -> dict:
         """
-        Trả về cấu hình giọng nói ưu tiên cho style này.
-        Có thể trả về một phần hoặc toàn bộ cấu hình (ví dụ chỉ voice_id, hoặc cả model, stability...).
-        Mặc định trả về dict rỗng (dùng cấu hình gốc của VoiceGenerator).
-        """
-        return {}
+        Returns preferred voice settings for this style.
+        Can include keys like 'voice' (e.g., 'alloy', 'onyx'), 'model' (e.g., 'tts-1-hd'),
+        'speed' (e.g., 0.95), specific provider settings etc.
+        VoiceGenerator will try to apply these if compatible with the selected TTS provider.
 
-    # --- Phương thức liên quan đến Video Editing ---
+        Returns:
+            dict: A dictionary of voice settings to override, or empty if using defaults.
+        """
+        return {
+            "voice": "moss_audio_27e22420-2381-11f0-b934-42db1b8d9b3b",            
+        }
 
     def get_video_editing_settings(self) -> dict:
         """
-        Trả về các tham số video editing đặc thù cho style này.
-        Ví dụ: {'transition_type': 'dissolve', 'animation_intensity': 0.05}
-        Mặc định trả về dict rỗng (dùng cấu hình gốc của VideoEditor).
+        Returns preferred video editing parameters for this style.
+        Can include keys like 'transition_types' (list or string, e.g., ['dissolve']),
+        'transition_duration' (float), 'image_animation' (string, e.g., 'zoom_in'),
+        'animation_intensity' (float), 'music_volume' (float), etc.
+        VideoEditor will try to apply these overrides.
+
+        Returns:
+            dict: A dictionary of video editing settings to override, or empty if using defaults.
         """
-        return {}
+        return {} # Default: Use VideoEditor's default settings

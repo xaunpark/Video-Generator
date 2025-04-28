@@ -28,21 +28,27 @@ class InformativeStyle(BaseVideoStyle):
             # Ví dụ lấy từ cfg (cần import cfg):
             # "scene_range": cfg.SCENE_RANGE.get("informative", (80, 150)),
             # Hoặc định nghĩa cứng ở đây nếu muốn tách biệt hoàn toàn:
-             "scene_range": (80, 150), # Cần khớp với giá trị cũ
+             "scene_range": (20, 30), # Cần khớp với giá trị cũ
              # Có thể thêm các key khác nếu BaseVideoStyle yêu cầu sau này
         }
 
-    # --- CÁC PHƯƠNG THỨC KHÁC ---
-    # Vì style 'informative' không có yêu cầu đặc biệt về prompt script,
-    # prompt ảnh AI, layout, timing, voice, hoặc video editing so với mặc định,
-    # chúng ta KHÔNG cần ghi đè các phương thức khác. Chúng sẽ sử dụng
-    # triển khai mặc định từ BaseVideoStyle (mà chúng ta sẽ hoàn thiện ở Bước 3).
+    def get_voice_settings(self) -> dict:
+        """
+        Suggests voice settings for the Informative style.
+        Prefers a potentially warmer or deeper voice and slightly slower speed.
+        Example: OpenAI's 'onyx' or 'shimmer', MiniMax's emotional/audiobook voices.
+        """
+        return {
+            "voice": "moss_audio_27e22420-2381-11f0-b934-42db1b8d9b3b",
+        }
 
-    # Ví dụ, các phương thức sau sẽ dùng mặc định từ BaseVideoStyle:
-    # def generate_script_prompt(self, source_data: dict, language: str, video_mode: str) -> str:
-    #     return super().generate_script_prompt(source_data, language, video_mode) # Hoặc không cần dòng này
-
-    # def generate_ai_image_prompt(self, scene_content: str, video_title: str) -> str:
-    #     return super().generate_ai_image_prompt(scene_content, video_title) # Hoặc không cần dòng này
-
-    # ... và tương tự cho các phương thức should_override..., get_preferred..., get_voice_settings, v.v.
+    def get_video_editing_settings(self) -> dict:
+        """
+        Suggests video editing settings for the informative style.
+        Prefers clean 'fade' transitions and simple 'zoom_in' animation.
+        """
+        return {
+            "transition_types": ["fade"], # Force simple fade if transitions are enabled
+            "image_animation": "zoom_in", # Use a subtle zoom in instead of random
+            "animation_intensity": 0.02   # Keep intensity low for informative style
+        }

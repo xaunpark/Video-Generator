@@ -578,6 +578,7 @@ class VideoEditor:
 
                         # *** CHÈN CHAPTER CARD (NẾU CẦN) ***
                         if is_advanced_mode and image_gen and unit_chapter_num is not None and unit_chapter_num > current_chapter_processed:
+                            logger.debug(f"Attempting to insert card for Chapter {unit_chapter_num} (Current processed: {current_chapter_processed})")
                             logger.info(f"--- Inserting Chapter Card for Chapter {unit_chapter_num}: '{unit_chapter_title}' ---")
                             card_img_path = os.path.join(temp_project_dir, f"chapter_{unit_chapter_num}_card.png")
                             card_video_path = os.path.join(temp_project_dir, f"chapter_{unit_chapter_num}_card_video.mp4")
@@ -586,7 +587,6 @@ class VideoEditor:
                             created_card_img = image_gen._create_chapter_title_card(unit_chapter_title, card_img_path, unit_chapter_num)
                             if created_card_img:
                                 card_duration = VIDEO_SETTINGS.get("chapter_title_duration", 2.5)
-                                # Tạo video từ ảnh card (không tiếng)
                                 created_card_video = self._create_temp_visual_clip(
                                     {"path": created_card_img, "type": "image"}, # Giả lập media item
                                     card_duration,

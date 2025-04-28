@@ -193,7 +193,9 @@ class VoiceGenerator:
                         "path": generated_path, # DÙNG PATH TRẢ VỀ TỪ _generate_audio
                         "duration": actual_unit_duration, # Duration cuối cùng đã xác định
                         "content": unit_text,
-                        "scene_numbers": scene_numbers_in_unit
+                        "scene_numbers": scene_numbers_in_unit,
+                        "chapter_number": unit.get('chapter_number'),
+                        "chapter_title": unit.get('chapter_title')
                     })
                     # -----------------------------------------------
 

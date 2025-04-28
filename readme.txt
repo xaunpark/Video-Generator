@@ -57,3 +57,8 @@ Telegram bot id của MyVideoUploadNotifyBot: 6452766273
 ---
 
 Thêm is_core_content_task = False trong các hàm không cần phải sử dụng DeepSeek Reasoner mà sẽ dùng LLM mặc định (trong trường hợp chọn dùng DeepSeek Reasoner)
+---
+Có thể gọi trực tiếp mô hình (như gpt-4o-mini) trong _call_llm_api
+
+---
+Thêm voice trong strategy thì phải thêm cả vào trong valid_voices trong config/settings.py

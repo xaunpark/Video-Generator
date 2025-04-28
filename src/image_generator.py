@@ -1540,107 +1540,135 @@ class ImageGenerator:
         # --- Kết thúc sao chép ---
 
     def _attempt_online_image_acquisition(
-        self,
-        query: str,
-        project_media_dir: str, # <<< THÊM THAM SỐ NÀY
-        base_filename: str,
-        scene_content: Optional[str] = None # <<< THÊM THAM SỐ NÀY (Tùy chọn)
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Cố gắng tìm, chọn, tải và xử lý một ảnh online (ưu tiên Serper).
+            self,
+            query: str,
+            project_media_dir: str,
+            base_filename: str,
+            scene_content: Optional[str] = None
+        ) -> Tuple[Optional[str], Optional[str]]:
+            """
+            Cố gắng tìm, chọn, tải và xử lý một ảnh online (ưu tiên Serper).
+            BAO GỒM LỌC KÍCH THƯỚC TRƯỚC KHI CHỌN.
+            """
+            logger.info(f"Attempting ONLINE IMAGE ACQUISITION for query: '{query}'")
+            media_path = None
+            media_type = None
+            MIN_WIDTH = 900  # Ngưỡng tối thiểu
+            MIN_HEIGHT = 800 # Ngưỡng tối thiểu
 
-        Args:
-            query (str): Truy vấn tìm kiếm ảnh.
-            project_media_dir (str): Thư mục tạm của project để lưu ảnh.
-            base_filename (str): Tên file cơ sở (ví dụ: "scene_1").
-            scene_content (Optional[str]): Nội dung scene để làm ngữ cảnh cho AI selection.
-
-        Returns:
-            Tuple[Optional[str], Optional[str]]: Trả về (đường_dẫn_file_đã_xử_lý, "image")
-                                                nếu thành công, ngược lại (None, None).
-        """
-        logger.info(f"Attempting ONLINE IMAGE ACQUISITION for query: '{query}'")
-        media_path = None
-        media_type = None
-
-        # --- 1. Tìm ứng viên ảnh online (Serper) ---
-        image_candidates = []
-        try:
-            logger.info(f"--> Finding online image candidates (Serper) for query: '{query}'")
-            # Sử dụng hàm helper đã tạo trước đó để lấy danh sách ứng viên thô
-            image_candidates = self._search_image_candidates_serper(query)
-            logger.info(f"<-- Found {len(image_candidates)} online image candidates (Serper).")
-        except Exception as search_err:
-            logger.error(f"!!! Exception during Serper image candidate search: {search_err}", exc_info=True)
-            image_candidates = [] # Đảm bảo list rỗng nếu lỗi
-
-        if not image_candidates:
-            logger.warning(f"No online image candidates found (Serper) for query: '{query}'.")
-            return None, None # Thất bại nếu không có ứng viên
-        # --- Kết thúc tìm ứng viên ---
-
-        # --- 2. Chọn URL (AI hoặc Default) ---
-        selected_image_url = None
-        ai_selection_enabled = VIDEO_SETTINGS.get("use_ai_for_media_selection", False)
-
-        if ai_selection_enabled:
-            logger.info("--> Attempting AI selection for image...")
+            # --- 1. Tìm ứng viên ảnh online (Serper) ---
+            raw_candidates = []
             try:
-                selected_image_url = self._select_media_with_ai(
-                    media_type="image",
-                    query=query,
-                    target_duration=None, # Ảnh không có target duration
-                    candidates=image_candidates, # Truyền list ứng viên ảnh
-                    scene_content=scene_content # Truyền context scene nếu có
+                logger.info(f"--> Finding online image candidates (Serper) for query: '{query}'")
+                raw_candidates = self._search_image_candidates_serper(query)
+                logger.info(f"<-- Found {len(raw_candidates)} raw image candidates (Serper).")
+            except Exception as search_err:
+                logger.error(f"!!! Exception during Serper image candidate search: {search_err}", exc_info=True)
+                raw_candidates = []
+
+            if not raw_candidates:
+                logger.warning(f"No online image candidates found (Serper) for query: '{query}'.")
+                return None, None
+
+            # --- 1.5. LỌC ỨNG VIÊN THEO KÍCH THƯỚC ---
+            filtered_candidates = []
+            candidates_unknown_size = []
+            for cand in raw_candidates:
+                width = cand.get('width', 0)
+                height = cand.get('height', 0)
+                img_url = cand.get("imageUrl")
+
+                if not img_url: # Bỏ qua nếu không có url
+                    continue
+
+                if width >= MIN_WIDTH and height >= MIN_HEIGHT:
+                    filtered_candidates.append(cand) # Đạt chuẩn kích thước
+                elif width == 0 or height == 0:
+                    candidates_unknown_size.append(cand) # Kích thước không xác định
+                # else: (width > 0 and height > 0 but < threshold) -> Bỏ qua
+
+            logger.info(f"Filtered candidates: {len(filtered_candidates)} meet size criteria ({MIN_WIDTH}x{MIN_HEIGHT}). {len(candidates_unknown_size)} have unknown size.")
+
+            # Ưu tiên các ứng viên đã lọc kích thước, nếu không có thì dùng các ứng viên không rõ kích thước
+            candidates_to_consider = filtered_candidates
+            if not candidates_to_consider:
+                logger.warning("No candidates met minimum size criteria. Considering candidates with unknown size.")
+                candidates_to_consider = candidates_unknown_size
+
+            if not candidates_to_consider:
+                logger.warning(f"No suitable image candidates (known size or unknown size) left after filtering for query: '{query}'.")
+                return None, None
+            # --- Kết thúc lọc ---
+
+            # --- 2. Chọn URL (AI hoặc Default) TỪ DANH SÁCH ĐÃ LỌC/ƯU TIÊN ---
+            selected_image_url = None
+            ai_selection_enabled = VIDEO_SETTINGS.get("use_ai_for_media_selection", False)
+
+            if ai_selection_enabled:
+                logger.info(f"--> Attempting AI selection from {len(candidates_to_consider)} considered candidates...")
+                try:
+                    # *** CẢI TIẾN PROMPT AI ***
+                    # Gọi hàm _select_media_with_ai với prompt đã được cải tiến (xem Bước 2B)
+                    # và truyền candidates_to_consider
+                    selected_image_url = self._select_media_with_ai(
+                        media_type="image",
+                        query=query,
+                        target_duration=None,
+                        candidates=candidates_to_consider, # Dùng list đã lọc/ưu tiên
+                        scene_content=scene_content
+                    )
+                    if selected_image_url:
+                        logger.info(f"<-- AI selected image URL: {selected_image_url[:80]}...")
+                    else:
+                        logger.info("<-- AI rejected considered candidates.")
+                except Exception as ai_select_err:
+                    logger.error(f"!!! Error during AI image selection: {ai_select_err}", exc_info=True)
+                    selected_image_url = None
+            else:
+                # Chọn ứng viên đầu tiên từ danh sách đã lọc/ưu tiên
+                logger.info(f"AI selection disabled. Picking first from {len(candidates_to_consider)} considered candidates.")
+                if candidates_to_consider:
+                    first_candidate = candidates_to_consider[0]
+                    selected_image_url = first_candidate.get("imageUrl")
+                    if selected_image_url:
+                        img_w = first_candidate.get('width', 'N/A')
+                        img_h = first_candidate.get('height', 'N/A')
+                        logger.info(f"Selected first image candidate URL ({img_w}x{img_h}): {selected_image_url[:80]}...")
+                    else:
+                        logger.warning("First considered candidate is missing 'imageUrl'. Cannot select.")
+                        selected_image_url = None
+                else: # Trường hợp không còn ứng viên nào sau khi lọc (dù đã check ở trên)
+                    logger.warning("No image candidates left to select from (non-AI path).")
+                    selected_image_url = None
+
+
+            if not selected_image_url:
+                logger.warning("No image URL was selected.")
+                return None, None
+            # --- Kết thúc chọn URL ---
+
+            # --- 3. Tải và Xử lý Ảnh (Không đổi) ---
+            # ... (Phần này giữ nguyên) ...
+            processed_path = None
+            final_processed_path = os.path.join(project_media_dir, f"{base_filename}_online_processed.jpg")
+            try:
+                logger.info(f"--> Attempting to download and process selected image: {selected_image_url[:80]}...")
+                processed_path = self._download_and_process_image(
+                    image_url=selected_image_url,
+                    output_path=final_processed_path
                 )
-                if selected_image_url:
-                    logger.info(f"<-- AI selected image URL: {selected_image_url[:80]}...")
+                if processed_path:
+                    logger.info(f"<-- Image downloaded and processed successfully: {processed_path}")
+                    media_path = processed_path
+                    media_type = "image"
+                    logger.info(f"ONLINE IMAGE ACQUISITION SUCCEEDED for query '{query}'. Path: {media_path}")
+                    return media_path, media_type
                 else:
-                    logger.info("<-- AI rejected all image candidates.")
-            except Exception as ai_select_err:
-                logger.error(f"!!! Error during AI image selection: {ai_select_err}", exc_info=True)
-                selected_image_url = None
-        else:
-            logger.info("AI selection disabled. Picking first image candidate.")
-            # Chọn ứng viên đầu tiên làm mặc định
-            if image_candidates[0].get("imageUrl"): # Serper dùng key 'imageUrl'
-                selected_image_url = image_candidates[0].get("imageUrl")
-                logger.info(f"Selected first image candidate URL: {selected_image_url[:80]}...")
-            else:
-                logger.warning("First image candidate is missing 'imageUrl'. Cannot select.")
-                selected_image_url = None
-
-        if not selected_image_url:
-            logger.warning("No image URL was selected (either AI rejected or default selection failed).")
-            return None, None # Thất bại nếu không chọn được URL
-        # --- Kết thúc chọn URL ---
-
-        # --- 3. Tải và Xử lý Ảnh ---
-        processed_path = None
-        # Tạo đường dẫn file output cuối cùng cho ảnh đã xử lý
-        final_processed_path = os.path.join(project_media_dir, f"{base_filename}_online_processed.jpg")
-        try:
-            logger.info(f"--> Attempting to download and process selected image: {selected_image_url[:80]}...")
-            # Sử dụng hàm download và process đã có
-            processed_path = self._download_and_process_image(
-                image_url=selected_image_url,
-                output_path=final_processed_path
-            )
-            if processed_path:
-                logger.info(f"<-- Image downloaded and processed successfully: {processed_path}")
-                media_path = processed_path
-                media_type = "image"
-                # --- THÀNH CÔNG ---
-                logger.info(f"ONLINE IMAGE ACQUISITION SUCCEEDED for query '{query}'. Path: {media_path}")
-                return media_path, media_type
-            else:
-                # Hàm _download_and_process_image đã log lỗi bên trong
-                logger.error(f"!!! Failed to download or process image from URL: {selected_image_url}")
-                return None, None # Thất bại nếu tải/xử lý lỗi
-        except Exception as proc_err:
-            logger.error(f"!!! Exception during image download/processing: {proc_err}", exc_info=True)
-            return None, None
-        # --- Kết thúc tải và xử lý ---
+                    logger.error(f"!!! Failed to download or process image from URL: {selected_image_url}")
+                    return None, None
+            except Exception as proc_err:
+                logger.error(f"!!! Exception during image download/processing: {proc_err}", exc_info=True)
+                return None, None
 
     def _attempt_local_image_fallback(
         self,
@@ -2245,15 +2273,6 @@ class ImageGenerator:
                 #logger.info(f"Image {i+1}: Score={score:.2f} [{', '.join(score_components)}], Size={width}x{height}, URL={url[:80]}...")
 
                 potential_images.append({"url": url, "score": score, "width": width, "height": height})
-
-            if not potential_images:
-                logger.warning(f"No suitable images found after filtering for query: '{query}'")
-                # Fallback: use raw results if filtering removed everything
-                logger.info("Using fallback method: accepting all images with valid URLs")
-                potential_images = [{"url": img.get("imageUrl"), "score": 0.5, "width": img.get("imageWidth", 0), "height": img.get("imageHeight", 0)}
-                                    for img in image_results if img.get("imageUrl")]
-                if not potential_images:
-                    raise Exception("No images with URLs found even in raw results")
 
             # Sort images by score, highest first
             potential_images.sort(key=lambda x: x["score"], reverse=True)

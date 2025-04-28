@@ -39,9 +39,9 @@ class SeniorConversationalStyle(BaseVideoStyle):
             "target_audience": "60+",
             "layout_override": {
                 "enabled": True,
-                "target_total_word_range": (1500, 2500),
+                "target_total_word_range": (200, 300),
                 "chapter_count_range": (3, 4),
-                "chapter_word_target_range": (400, 700),
+                "chapter_word_target_range": (50, 100),
                 "structure_prompt": "Structure the video logically into 3 main conceptual parts: 1) An engaging Introduction/Hook, 2) The main discussion points providing value and practical advice, 3) A concluding summary and call to action/uplifting message. Divide these 3 conceptual parts into {chapter_count_min} to {chapter_count_max} distinct chapters in the final layout."
             }
         }
@@ -226,21 +226,26 @@ class SeniorConversationalStyle(BaseVideoStyle):
             "tranquil forest scene",
             "relaxing countryside view"
         ]
+    
+    def get_voice_settings(self) -> dict:
+        """
+        Suggests voice settings for the Senior Conversational style.
+        Prefers a potentially warmer or deeper voice and slightly slower speed.
+        Example: OpenAI's 'onyx' or 'shimmer', MiniMax's emotional/audiobook voices.
+        """
+        return {
+            "voice": "moss_audio_27e22420-2381-11f0-b934-42db1b8d9b3b",  # Example preference (deeper male for OpenAI)
+            # For MiniMax, could be: "emotional_female_1" or "audiobook_male_1"
+            # Add speed adjustment if desired:
+            # "speed": 0.95
+        }
 
-        # --- LỰA CHỌN 2: Trả về một chuỗi query duy nhất ---
-        # Ưu điểm: Đơn giản hơn cho ImageGenerator xử lý.
-        # Nhược điểm: Kết quả tìm kiếm có thể ít đa dạng hơn.
-        # return "peaceful nature calm landscape serene relaxing"
-
-        # --- LỰA CHỌN 3: Trả về None (Không dùng cho yêu cầu này) ---
-        # return None # Nếu không muốn override query
-    # --- KẾT THÚC THÊM PHƯƠNG THỨC MỚI ---
-
-    # Các phương thức khác như get_voice_settings, get_video_editing_settings
-    # có thể được ghi đè ở đây nếu Senior Conversational cần cấu hình đặc biệt.
-    # Ví dụ:
-    # def get_voice_settings(self) -> dict:
-    #     return {"voice": "onyx", "stability": 0.6} # Chọn giọng nam trầm ấm chẳng hạn
-
-    # def get_video_editing_settings(self) -> dict:
-    #     return {"transition_type": "dissolve", "animation_intensity": 0.02} # Hiệu ứng nhẹ nhàng hơn
+    def get_video_editing_settings(self) -> dict:
+        """
+        Suggests video editing settings for the Senior Conversational style.
+        Prefers smoother transitions (dissolve/crossfade) and slower animation.
+        """
+        return {
+            #"animation_intensity": 0.02,      # Slower, less intense animation
+            #"image_animation": "zoom_in"       # Gentle zoom might be better than random panning
+        }    
