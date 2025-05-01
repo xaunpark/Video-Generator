@@ -35,13 +35,13 @@ class SeniorConversationalStyle(BaseVideoStyle):
                 "Write as a continuous narrative, avoiding bullet points or explicit section titles in the content."
             ],
             "title_hint": "A helpful, friendly, and encouraging title for seniors",
-            "scene_range": (10, 20),
+            "scene_range": (150, 350),
             "target_audience": "60+",
             "layout_override": {
                 "enabled": True,
-                "target_total_word_range": (200, 300),
-                "chapter_count_range": (2, 3),
-                "chapter_word_target_range": (50, 100),
+                "target_total_word_range": (1500, 2500),
+                "chapter_count_range": (3, 4),
+                "chapter_word_target_range": (400, 700),
                 "structure_prompt": "Structure the video logically into 3 main conceptual parts: 1) An engaging Introduction/Hook, 2) The main discussion points providing value and practical advice, 3) A concluding summary and call to action/uplifting message. Divide these 3 conceptual parts into {chapter_count_min} to {chapter_count_max} distinct chapters in the final layout."
             }
         }

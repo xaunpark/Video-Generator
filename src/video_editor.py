@@ -399,30 +399,6 @@ class VideoEditor:
             # Tạo clip đen làm fallback
             return self._create_black_clip(target_duration, output_path)
 
-    def _escape_text_for_ffmpeg_drawtext(self, text_content):
-        """Escape text content for use in FFmpeg drawtext filter's 'text=' option."""
-        if not isinstance(text_content, str): return ''
-        # 1. Escape ký tự đặc biệt của FFmpeg filter: ' \ % : , [ ] =
-        #    Dấu \ -> \\\\ (trong f-string)
-        #    Dấu ' -> \\'
-        #    Dấu % -> %% (FFmpeg dùng % cho biến, cần escape thành %%)
-        #    Dấu : -> \\:
-        #    Dấu , -> \\,
-        #    Dấu [ -> \\[
-        #    Dấu ] -> \\]
-        #    Dấu = -> \\=
-        escaped = text_content.replace('\\', '\\\\\\\\') # Escape \ trước tiên
-        escaped = escaped.replace("'", "\\'")
-        escaped = escaped.replace("%", "%%")
-        escaped = escaped.replace(":", "\\:")
-        escaped = escaped.replace(",", "\\,")
-        escaped = escaped.replace("[", "\\[")
-        escaped = escaped.replace("]", "\\]")
-        escaped = escaped.replace("=", "\\=")
-        # 2. Xử lý xuống dòng nếu có (ít gặp trong title, nhưng để đề phòng)
-        escaped = escaped.replace('\n', '\\\n') # FFmpeg dùng \n hoặc \N
-        return escaped
-
     def _get_all_card_background_queries(self, script, language='en'):
         """
         Gọi LLM MỘT LẦN để lấy query tìm video nền cho TẤT CẢ chapters.
@@ -598,7 +574,31 @@ class VideoEditor:
         escaped_path = escaped_path.replace("=", "\\=")
         logger.debug(f"  -> Escaped path: {escaped_path}")
         return escaped_path
-    
+
+    def _escape_text_for_ffmpeg_drawtext(self, text_content):
+        """Escape text content for use in FFmpeg drawtext filter's 'text=' option."""
+        if not isinstance(text_content, str): return ''
+        # 1. Escape ký tự đặc biệt của FFmpeg filter: ' \ % : , [ ] =
+        #    Dấu \ -> \\\\ (trong f-string)
+        #    Dấu ' -> \\'
+        #    Dấu % -> %% (FFmpeg dùng % cho biến, cần escape thành %%)
+        #    Dấu : -> \\:
+        #    Dấu , -> \\,
+        #    Dấu [ -> \\[
+        #    Dấu ] -> \\]
+        #    Dấu = -> \\=
+        escaped = text_content.replace('\\', '\\\\\\\\') # Escape \ trước tiên
+        escaped = escaped.replace("'", "\\'")
+        escaped = escaped.replace("%", "%%")
+        escaped = escaped.replace(":", "\\:")
+        escaped = escaped.replace(",", "\\,")
+        escaped = escaped.replace("[", "\\[")
+        escaped = escaped.replace("]", "\\]")
+        escaped = escaped.replace("=", "\\=")
+        # 2. Xử lý xuống dòng nếu có (ít gặp trong title, nhưng để đề phòng)
+        escaped = escaped.replace('\n', '\\\n') # FFmpeg dùng \n hoặc \N
+        return escaped
+
     def _create_dynamic_chapter_card(self, chapter_num, chapter_title, card_duration, background_query, temp_project_dir, output_video_path):
         """
         Tạo video chapter card với nền động và tiêu đề overlay.
@@ -1391,31 +1391,90 @@ class VideoEditor:
                  self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
                  return None
 
-            # --- 5. Chuẩn bị Audio Track Cuối Cùng (Intro + Main + Outro) ---
+            # --- 5. Chuẩn bị Audio Track Cuối Cùng (Intro + Main + Outro + Silence) ---
             full_audio_path_final = None
             final_audio_files_to_concat = []
-            if intro_audio_path and os.path.exists(intro_audio_path): final_audio_files_to_concat.append(intro_audio_path)
-            if main_audio_track_path and os.path.exists(main_audio_track_path): final_audio_files_to_concat.append(main_audio_track_path)
-            if outro_audio_path and os.path.exists(outro_audio_path): final_audio_files_to_concat.append(outro_audio_path)
 
+            # --- THÊM INTRO AUDIO ---
+            if intro_audio_path and os.path.exists(intro_audio_path):
+                final_audio_files_to_concat.append(intro_audio_path)
+                logger.debug("Adding Intro audio to final concat list.")
+
+            # --- THÊM MAIN AUDIO (SPEECH UNITS + SILENCE) ĐÃ ĐƯỢC SẮP XẾP ---
+            if audio_files_info: # audio_files_info bây giờ chứa cả speech và silence
+                # Sắp xếp lại audio_files_info để đảm bảo silence đúng vị trí
+                def get_sort_key(item):
+                    is_silence = item.get('type') == 'chapter_card_silence'
+                    # Chapter number: silence của chapter N phải trước unit đầu tiên của chapter N
+                    ch_num = item.get('chapter_number', float('inf')) # Đẩy item không có chapter về cuối
+                    # Unit number: silence không có unit_number, ưu tiên nó lên trước unit_number > 0
+                    unit_num = item.get('unit_number')
+                    if unit_num is None and is_silence:
+                        unit_num_sort = -1 # Ưu tiên silence
+                    elif unit_num is None:
+                         unit_num_sort = float('inf') # Đẩy item lạ về cuối
+                    else:
+                         unit_num_sort = unit_num # Dùng unit number thật
+                    return (ch_num, unit_num_sort)
+
+                # Sắp xếp danh sách audio items
+                all_audio_items_sorted = sorted(audio_files_info, key=get_sort_key)
+                logger.debug(f"Sorted audio items for concatenation (incl. silence): {[os.path.basename(i['path']) for i in all_audio_items_sorted]}")
+
+                # Lấy đường dẫn các file đã sắp xếp
+                speech_and_silence_paths = [item['path'] for item in all_audio_items_sorted if item.get('path') and os.path.exists(item['path'])]
+
+                # Ghép nối speech units và silence thành main track
+                # (Code tạo main_audio_track_path giữ nguyên, chỉ cần đảm bảo dùng list đã sắp xếp)
+                # *** LƯU Ý: Nếu bạn đã tạo main_audio_track_path ở Bước 2 chỉ từ speech units,
+                #     bạn cần sửa lại Bước 2 HOẶC sửa lại Bước 5 này để ghép tất cả lại.
+                #     Cách đơn giản hơn là sửa lại Bước 5: ***
+
+                # Xóa bỏ việc tạo main_audio_track_path ở Bước 2 nếu nó chỉ chứa speech.
+                # Thay vào đó, thêm trực tiếp các file đã sắp xếp vào final_audio_files_to_concat:
+                if speech_and_silence_paths:
+                    final_audio_files_to_concat.extend(speech_and_silence_paths)
+                    logger.debug(f"Adding {len(speech_and_silence_paths)} speech/silence files to final concat list.")
+                else:
+                    logger.error("No valid speech or silence audio files found after sorting.")
+            else:
+                logger.error("audio_files_info is empty, cannot proceed with main audio concatenation.")
+
+
+            # --- THÊM OUTRO AUDIO ---
+            if outro_audio_path and os.path.exists(outro_audio_path):
+                final_audio_files_to_concat.append(outro_audio_path)
+                logger.debug("Adding Outro audio to final concat list.")
+
+            # --- Thực hiện ghép nối cuối cùng ---
             if final_audio_files_to_concat:
                 full_audio_path_final = os.path.join(temp_project_dir, f"full_audio_final_{project_id}.mp3")
                 temp_files_to_clean.append(full_audio_path_final)
                 final_audio_list_path = os.path.join(temp_project_dir, f"final_audio_list.txt")
                 temp_files_to_clean.append(final_audio_list_path)
                 try:
+                    # Ghi file list với các file đã sắp xếp đúng thứ tự
                     with open(final_audio_list_path, 'w', encoding='utf-8') as f:
-                        for afp in final_audio_files_to_concat: f.write(f"file '{os.path.abspath(afp).replace('\\', '/')}'\n")
+                        for afp in final_audio_files_to_concat:
+                            f.write(f"file '{os.path.abspath(afp).replace('\\', '/')}'\n")
+                    logger.debug(f"Final audio concat list content ({final_audio_list_path}):\n" + open(final_audio_list_path).read())
+
+                    # Chạy lệnh concat
                     concat_audio_cmd = [ self.ffmpeg_path, "-y", "-f", "concat", "-safe", "0", "-i", final_audio_list_path, "-c", "copy", full_audio_path_final ]
-                    subprocess.run(concat_audio_cmd, check=True, capture_output=True, text=True, encoding='utf-8')
-                    if not os.path.exists(full_audio_path_final): raise ValueError("Failed to concat final audio")
-                    logger.info(f"Created final full audio track: {os.path.basename(full_audio_path_final)}")
+                    process_concat = subprocess.run(concat_audio_cmd, check=False, capture_output=True, text=True, encoding='utf-8')
+
+                    if process_concat.returncode != 0 or not os.path.exists(full_audio_path_final):
+                        logger.error(f"Failed to concat final audio. FFmpeg stderr: {process_concat.stderr.strip()}")
+                        full_audio_path_final = None
+                    else:
+                        final_audio_duration = self._get_video_duration_ffprobe(full_audio_path_final)
+                        logger.info(f"Created final full audio track: {os.path.basename(full_audio_path_final)} (Duration: {final_audio_duration:.2f}s)")
+
                 except Exception as e:
-                    logger.error(f"Error creating final audio track: {e}")
+                    logger.error(f"Error creating final audio track: {e}", exc_info=True)
                     full_audio_path_final = None
             else:
-                logger.warning("No intro/main/outro audio found for final concatenation.")
-
+                logger.warning("No audio files found for final concatenation.")
 
             # --- 6. Thêm Audio Track Cuối Cùng vào Video Đã Ghép ---
             video_with_audio_path = os.path.join(temp_project_dir, f"intermediate_with_audio_{project_id}.mp4")
