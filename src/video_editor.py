@@ -781,7 +781,8 @@ class VideoEditor:
             logger.debug("    Adding title overlay using FFmpeg -filter_complex (Revised approach)...")
 
             # --- 3.1 Chuẩn bị Text Escaped và Font Path ---
-            display_text = f"Chapter {chapter_num}: {chapter_title}"
+            display_text = chapter_title
+            # display_text = f"Chapter {chapter_num}: {chapter_title}"
             # Escape text bằng hàm helper mới
             escaped_text_content = self._escape_text_for_ffmpeg_drawtext(display_text)
 
@@ -1100,7 +1101,7 @@ class VideoEditor:
                         # *** CHÈN CHAPTER CARD (NẾU CẦN) ***
                         # === Thay thế logic chèn card ===
                         # Kiểm tra điều kiện chèn card (đã bỏ check image_gen)
-                        if is_advanced_mode and unit_chapter_num is not None and unit_chapter_num > current_chapter_processed:
+                        if is_advanced_mode and unit_chapter_num is not None and unit_chapter_num > current_chapter_processed and unit_chapter_num > 1:
 
                             # 1. Lấy Query Nền (từ map đã tạo trước vòng lặp)
                             # fallback_card_query phải được định nghĩa trước vòng lặp

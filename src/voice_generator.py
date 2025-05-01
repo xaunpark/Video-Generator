@@ -188,8 +188,8 @@ class VoiceGenerator:
             # if not unit_text: continue # Tạm thời giữ lại để xử lý card
 
             # === KIỂM TRA VÀ CHÈN SILENCE CHO CHAPTER MỚI ===
-            if is_advanced_mode and unit_chapter_num is not None and unit_chapter_num > current_chapter_processed_audio:
-                logger.info(f"Detected start of Chapter {unit_chapter_num}. Inserting silence for card...")
+            if is_advanced_mode and unit_chapter_num is not None and unit_chapter_num > current_chapter_processed_audio and unit_chapter_num > 1:
+                logger.info(f"Detected start of Chapter {unit_chapter_num} (>1). Inserting silence for card...")
                 silence_filename = f"chapter_{unit_chapter_num}_silence.mp3"
                 silence_output_path = os.path.join(project_audio_dir, silence_filename)
                 # Lấy sample rate từ config provider hiện tại nếu có, hoặc dùng default
