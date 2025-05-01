@@ -35,12 +35,12 @@ class SeniorConversationalStyle(BaseVideoStyle):
                 "Write as a continuous narrative, avoiding bullet points or explicit section titles in the content."
             ],
             "title_hint": "A helpful, friendly, and encouraging title for seniors",
-            "scene_range": (150, 350),
+            "scene_range": (10, 20),
             "target_audience": "60+",
             "layout_override": {
                 "enabled": True,
                 "target_total_word_range": (200, 300),
-                "chapter_count_range": (3, 4),
+                "chapter_count_range": (2, 3),
                 "chapter_word_target_range": (50, 100),
                 "structure_prompt": "Structure the video logically into 3 main conceptual parts: 1) An engaging Introduction/Hook, 2) The main discussion points providing value and practical advice, 3) A concluding summary and call to action/uplifting message. Divide these 3 conceptual parts into {chapter_count_min} to {chapter_count_max} distinct chapters in the final layout."
             }
@@ -68,9 +68,10 @@ class SeniorConversationalStyle(BaseVideoStyle):
     # --- EP BUỘC TIMING MODE LÀ FIXED ---
     def should_override_timing_mode(self) -> bool:
         """Senior Conversational nên dùng timing mode cố định."""
-        return True
+        return False
+    #NẾU MUỐN ĐẶT get_preferred_timing_mode BÊN DƯỚI THÌ PHẢI CHUYỂN SANG TRUE
 
-    def get_preferred_timing_mode(self) -> str:
+    #def get_preferred_timing_mode(self) -> str:
         """Timing mode ưu tiên cho Senior Conversational."""
         return "overall_theme_fixed_duration"
     # --- KẾT THÚC ÉP BUỘC TIMING MODE ---

@@ -6,6 +6,7 @@ video_generator.py - Module để tạo video từ ảnh, video clips và audio
 """
 
 import os
+import pathlib
 import shutil
 import random
 import time
@@ -15,11 +16,13 @@ import subprocess
 import tempfile
 import mutagen
 from datetime import timedelta
+import requests
 import whisper
 import itertools
 from itertools import groupby
 
 from src.video_styles.base_style import BaseVideoStyle
+from config.credentials import OPENAI_API_KEY, DEEPSEEK_API_KEY
 
 from src.logger_config import setup_logger
 logger = setup_logger(__name__)
@@ -35,7 +38,7 @@ from src.fix_pillow import *
 
 # Import cấu hình từ project
 from config.settings import (
-    TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS, FFPROBE_EXECUTABLE_PATH, OUTPUT_DIR
+    TEMP_DIR, ASSETS_DIR, VIDEO_SETTINGS, FFPROBE_EXECUTABLE_PATH, OUTPUT_DIR, FONTS_DIR
 )
 
 # Import unidecode để chuẩn hóa text tốt hơn
@@ -396,7 +399,515 @@ class VideoEditor:
             # Tạo clip đen làm fallback
             return self._create_black_clip(target_duration, output_path)
 
+    def _escape_text_for_ffmpeg_drawtext(self, text_content):
+        """Escape text content for use in FFmpeg drawtext filter's 'text=' option."""
+        if not isinstance(text_content, str): return ''
+        # 1. Escape ký tự đặc biệt của FFmpeg filter: ' \ % : , [ ] =
+        #    Dấu \ -> \\\\ (trong f-string)
+        #    Dấu ' -> \\'
+        #    Dấu % -> %% (FFmpeg dùng % cho biến, cần escape thành %%)
+        #    Dấu : -> \\:
+        #    Dấu , -> \\,
+        #    Dấu [ -> \\[
+        #    Dấu ] -> \\]
+        #    Dấu = -> \\=
+        escaped = text_content.replace('\\', '\\\\\\\\') # Escape \ trước tiên
+        escaped = escaped.replace("'", "\\'")
+        escaped = escaped.replace("%", "%%")
+        escaped = escaped.replace(":", "\\:")
+        escaped = escaped.replace(",", "\\,")
+        escaped = escaped.replace("[", "\\[")
+        escaped = escaped.replace("]", "\\]")
+        escaped = escaped.replace("=", "\\=")
+        # 2. Xử lý xuống dòng nếu có (ít gặp trong title, nhưng để đề phòng)
+        escaped = escaped.replace('\n', '\\\n') # FFmpeg dùng \n hoặc \N
+        return escaped
 
+    def _get_all_card_background_queries(self, script, language='en'):
+        """
+        Gọi LLM MỘT LẦN để lấy query tìm video nền cho TẤT CẢ chapters.
+
+        Args:
+            script (dict): Toàn bộ đối tượng script chứa title và thông tin chapters
+                           (cần có 'scenes' hoặc 'speech_units' chứa chapter_number/title).
+            language (str): Ngôn ngữ ('en', 'vi').
+
+        Returns:
+            dict: Dictionary dạng {chapter_number (int): "query_string" (str)}
+                  hoặc một dictionary rỗng nếu lỗi hoặc không có chapter.
+        """
+        logger.info("Generating background video queries for all chapter cards (single LLM call)...")
+        queries_map = {}
+        main_video_title = script.get('title', 'Untitled Video')
+
+        # --- 1. Thu thập thông tin chapters ---
+        chapters_info = []
+        # Ưu tiên lấy từ 'scenes' vì nó thường đầy đủ hơn và được tạo trước
+        processed_chapters = set()
+        if 'scenes' in script and isinstance(script['scenes'], list):
+            for scene in script['scenes']:
+                num = scene.get('chapter_number')
+                title = scene.get('chapter_title')
+                # Chỉ lấy lần đầu tiên gặp mỗi chapter
+                if isinstance(num, int) and num > 0 and title and num not in processed_chapters:
+                    chapters_info.append({"number": num, "title": title})
+                    processed_chapters.add(num)
+        # Fallback lấy từ speech_units nếu scenes không có hoặc thiếu
+        elif 'speech_units' in script and isinstance(script['speech_units'], list):
+             logger.warning("Falling back to speech_units for chapter info (scenes might be missing chapter data).")
+             processed_chapters = set() # Reset
+             for unit in script['speech_units']:
+                 num = unit.get('chapter_number')
+                 title = unit.get('chapter_title')
+                 if isinstance(num, int) and num > 0 and title and num not in processed_chapters:
+                     chapters_info.append({"number": num, "title": title})
+                     processed_chapters.add(num)
+
+        if not chapters_info:
+            logger.warning("No valid chapter information found in the script to generate background queries.")
+            return {} # Trả về dict rỗng nếu không có chapter
+
+        # Sắp xếp theo chapter number để đảm bảo thứ tự
+        chapters_info.sort(key=lambda x: x['number'])
+        logger.debug(f"Found {len(chapters_info)} chapters for query generation: {chapters_info}")
+
+        # --- 2. Tạo Prompt Tổng Hợp ---
+        # Chuyển đổi chapter_info thành chuỗi dễ đọc cho prompt
+        chapter_list_str = "\n".join([f"- Chapter {c['number']}: {c['title']}" for c in chapters_info])
+        num_chapters = len(chapters_info)
+        lang_instruction = "English" if language == "en" else "Vietnamese"
+
+        prompt = f"""
+        You are an AI assistant specializing in selecting stock video backgrounds.
+        Your task is to generate ONE concise, abstract background video search query ({lang_instruction}) for EACH chapter title provided below.
+
+        Video Context:
+        - Main Video Title: "{main_video_title}"
+        - Chapter List ({num_chapters} chapters):
+        {chapter_list_str}
+
+        Requirements for EACH Query:
+        - **Purpose:** Find an abstract, ambient, or thematic VIDEO background (loopable is good) suitable for overlaying the chapter title text.
+        - **Style:** Prefer non-distracting visuals, subtle motion, textures, gradients, data flows, light effects, nature closeups, bokeh, cityscapes at night (depending on theme).
+        - **AVOID:** Specific objects, people, complex actions, or anything that directly illustrates the chapter's *narrative* content. These queries are for the BACKGROUND CARD only.
+        - **Concise:** Each query should be 2-5 words.
+        - **Language:** {lang_instruction}.
+        - **Diversity:** Try to suggest slightly different background themes or styles for different chapters if appropriate based on their titles.
+
+        Output Format:
+        Return ONLY a valid JSON object. The object should map each original chapter number (as a string key) to its corresponding generated background query string.
+
+        Example Output Structure:
+        {{
+          "1": "abstract blue particles loop",
+          "2": "soft gradient motion background",
+          "3": "digital data stream lines",
+          "4": "modern office ambient light"
+          // ... keys must be strings representing the chapter numbers from the input list
+        }}
+
+        **CRITICAL:** Ensure the output is ONLY the JSON object described above, with chapter numbers as STRING keys.
+        """
+
+        # --- 3. Gọi LLM một lần ---
+        # Cần có instance của ScriptGenerator hoặc gọi API trực tiếp
+        # Giả sử gọi API OpenAI trực tiếp (cần import OPENAI_API_KEY)
+        if not OPENAI_API_KEY:
+            logger.error("OpenAI API key missing. Cannot generate background queries.")
+            return {}
+
+        try:
+            model_to_use = "gpt-4o-mini" # Hoặc model khác phù hợp
+            headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+            payload = {
+                "model": model_to_use,
+                "messages": [
+                    {"role": "system", "content": "You generate abstract video background search queries based on chapter titles and return results as a JSON map."},
+                    {"role": "user", "content": prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.7, # Cho phép chút sáng tạo
+                "max_tokens": 200 + num_chapters * 20 # Ước tính token cần thiết
+            }
+            url = "https://api.openai.com/v1/chat/completions"
+
+            response = requests.post(url, headers=headers, json=payload, timeout=45) # Timeout hợp lý
+            response.raise_for_status()
+            data = response.json()
+
+            generated_content = data.get("choices", [{}])[0].get("message", {}).get("content")
+            if not generated_content:
+                 logger.error("LLM returned empty content for background queries.")
+                 return {}
+
+            # --- 4. Parse và Validate Kết quả ---
+            parsed_json = json.loads(generated_content)
+
+            # Chuyển đổi keys từ string về int và validate
+            validated_queries = {}
+            original_chapter_numbers = {c['number'] for c in chapters_info}
+
+            if isinstance(parsed_json, dict):
+                for key_str, query_str in parsed_json.items():
+                    try:
+                        chapter_num_int = int(key_str)
+                        # Kiểm tra xem chapter number này có trong danh sách gốc không
+                        if chapter_num_int in original_chapter_numbers and isinstance(query_str, str) and query_str.strip():
+                            validated_queries[chapter_num_int] = query_str.strip()
+                        else:
+                             logger.warning(f"Skipping invalid entry from LLM: Key '{key_str}' not in original chapters or query '{query_str}' invalid.")
+                    except ValueError:
+                        logger.warning(f"Skipping invalid key from LLM: Cannot convert '{key_str}' to integer.")
+            else:
+                logger.error(f"LLM did not return a JSON dictionary as expected. Received: {type(parsed_json)}")
+                return {}
+
+            # Kiểm tra xem có đủ query cho các chapter không
+            if len(validated_queries) < len(chapters_info):
+                logger.warning(f"LLM generated queries for only {len(validated_queries)} out of {len(chapters_info)} chapters. Missing chapters will use fallback.")
+
+            logger.info(f"Successfully generated {len(validated_queries)} background queries.")
+            return validated_queries # Trả về dict {int: str}
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"LLM API request failed for background queries: {e}")
+            return {}
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response from LLM for background queries: {e}")
+            logger.debug(f"LLM raw content: {generated_content}")
+            return {}
+        except Exception as e:
+            logger.error(f"Unexpected error generating LLM background queries: {e}", exc_info=True)
+            return {}
+
+    def escape_path_for_ffmpeg_filter(self, path):
+        """Escapes a file path for safe use within an FFmpeg filtergraph string."""
+        if not isinstance(path, str): return ''
+        logger.debug(f"Escaping path for filter: {path}")
+        # 1. Normalize path separators to forward slashes
+        normalized_path = path.replace('\\', '/')
+        # 2. Escape FFmpeg filter special characters: ' : \ , [ ] =
+        #    Note: The escaping for \ itself needs to be quadruple \\\\ in f-string
+        #          to produce \\ in the final command string needed by FFmpeg.
+        escaped_path = normalized_path.replace('\\', '\\\\\\\\')
+        escaped_path = escaped_path.replace("'", "\\'")
+        escaped_path = escaped_path.replace(":", "\\:")
+        escaped_path = escaped_path.replace(",", "\\,")
+        escaped_path = escaped_path.replace("[", "\\[")
+        escaped_path = escaped_path.replace("]", "\\]")
+        escaped_path = escaped_path.replace("=", "\\=")
+        logger.debug(f"  -> Escaped path: {escaped_path}")
+        return escaped_path
+    
+    def _create_dynamic_chapter_card(self, chapter_num, chapter_title, card_duration, background_query, temp_project_dir, output_video_path):
+        """
+        Tạo video chapter card với nền động và tiêu đề overlay.
+
+        Args:
+            chapter_num (int): Số thứ tự chapter.
+            chapter_title (str): Tiêu đề chapter.
+            card_duration (float): Thời lượng mong muốn cho card.
+            background_query (str): Query để tìm video nền.
+            temp_project_dir (str): Thư mục tạm để lưu file trung gian.
+            output_video_path (str): Đường dẫn file video card cuối cùng sẽ được tạo.
+
+        Returns:
+            str: Đường dẫn đến file video card đã tạo thành công, hoặc None nếu lỗi.
+        """
+        logger.info(f"  Creating dynamic card for Chapter {chapter_num} (Duration: {card_duration:.2f}s, Query: '{background_query}')...")
+        card_temp_files = [] # List để quản lý file tạm của riêng card này
+
+        try:
+            # === B1: Tìm và Tải Video Nền ===
+            # Khởi tạo VideoClipFinder nếu chưa có hoặc kiểm tra
+            if not hasattr(self, 'video_finder') or self.video_finder is None:
+                try:
+                    from src.video_clip_finder import VideoClipFinder
+                    self.video_finder = VideoClipFinder()
+                    logger.info("Initialized VideoClipFinder for card background.")
+                except Exception as vf_err:
+                    logger.error(f"Cannot initialize VideoClipFinder for card background: {vf_err}")
+                    return None
+
+            downloaded_bg_path = None # Biến lưu đường dẫn file tải về cuối cùng
+            bg_candidates_raw = []   # Lưu danh sách ứng viên thô
+
+            # 1.1. Gọi video_finder để lấy danh sách ứng viên thô
+            try:
+                logger.debug(f"    Searching background video candidates with query: '{background_query}'")
+                bg_candidates_raw = self.video_finder.find_video_clip_candidates(background_query)
+                logger.debug(f"    Found {len(bg_candidates_raw)} raw background candidates.")
+            except Exception as find_err:
+                logger.error(f"    Error finding background video candidates: {find_err}", exc_info=True)
+                # Không cần return None ngay, có thể thử fallback khác nếu muốn,
+                # nhưng ở đây ta sẽ tiếp tục và kiểm tra list rỗng ở dưới
+
+            # 1.2. Chọn lọc ứng viên (Logic lọc thủ công)
+            selected_candidate_url = None
+            if bg_candidates_raw:
+                # --- Tiêu chí lọc ---
+                min_bg_width = 1280 # Kích thước tối thiểu
+                min_bg_height = 720
+                preferred_sources = ["pexels", "pixabay"] # Ưu tiên nguồn
+
+                # Lọc lần 1: Ưu tiên nguồn và kích thước
+                filtered_candidates_1 = [
+                    c for c in bg_candidates_raw
+                    if c.get('source') in preferred_sources and \
+                       c.get('width', 0) >= min_bg_width and \
+                       c.get('height', 0) >= min_bg_height and \
+                       c.get('video_url') # Phải có URL
+                ]
+
+                # Lọc lần 2: Ưu tiên thời lượng >= card_duration (trong số các ứng viên đã lọc ở lần 1)
+                filtered_candidates_2 = [
+                    c for c in filtered_candidates_1
+                    if c.get('duration', 0) >= card_duration or c.get('duration', 0) == 0 # Chấp nhận duration=0
+                ]
+
+                # --- Logic lựa chọn ---
+                candidates_to_choose_from = []
+                if filtered_candidates_2: # Ưu tiên list đã lọc cả duration
+                    logger.debug(f"    Found {len(filtered_candidates_2)} candidates meeting duration/size/source criteria.")
+                    candidates_to_choose_from = filtered_candidates_2
+                elif filtered_candidates_1: # Nếu không có cái nào đủ dài, dùng list chỉ lọc size/source
+                    logger.warning(f"    No candidates met duration criteria. Considering {len(filtered_candidates_1)} candidates meeting size/source criteria.")
+                    candidates_to_choose_from = filtered_candidates_1
+                else: # Nếu lọc size/source cũng không còn gì, thử dùng list gốc (ít mong muốn)
+                    logger.warning(f"    No candidates met size/source criteria. Considering all {len(bg_candidates_raw)} raw candidates.")
+                    # Lọc lại list gốc chỉ giữ những cái có URL
+                    candidates_to_choose_from = [c for c in bg_candidates_raw if c.get('video_url')]
+
+                # Chọn URL từ danh sách cuối cùng
+                if candidates_to_choose_from:
+                    # Chọn cái đầu tiên (thường là tốt nhất từ API) hoặc ngẫu nhiên
+                    selected_candidate = candidates_to_choose_from[0]
+                    # Hoặc chọn ngẫu nhiên: selected_candidate = random.choice(candidates_to_choose_from)
+                    selected_candidate_url = selected_candidate.get('video_url')
+                    if selected_candidate_url:
+                         logger.info(f"    Selected background video URL: {selected_candidate_url[:80]}... (Source: {selected_candidate.get('source', 'N/A')}, Res: {selected_candidate.get('width','?')}x{selected_candidate.get('height','?')}, Dur: {selected_candidate.get('duration','?')})")
+                    else:
+                         logger.warning("    The chosen candidate is missing the video URL.")
+                else:
+                    logger.warning("    No candidates left after all filtering stages.")
+            else:
+                logger.warning("    No raw background video candidates were found.")
+
+            # 1.3. Tải xuống video đã chọn
+            if selected_candidate_url:
+                try:
+                    # Đặt tên file rõ ràng
+                    temp_bg_download_path = os.path.join(temp_project_dir, f"chapter_{chapter_num}_bg_downloaded.mp4")
+                    card_temp_files.append(temp_bg_download_path) # Thêm vào list dọn dẹp
+
+                    # Gọi hàm download của video_finder
+                    # Query key để tận dụng cache
+                    cache_query_key = f"ch_bg_{chapter_num}_{background_query}" # Thêm cả chapter number để cache riêng biệt
+                    downloaded_bg_path_from_finder = self.video_finder._download_video(selected_candidate_url, cache_query_key)
+
+                    # Sao chép file đã tải/cache vào thư mục tạm project
+                    if downloaded_bg_path_from_finder and os.path.exists(downloaded_bg_path_from_finder):
+                        try:
+                            # Dùng copy2 để giữ metadata nếu có
+                            shutil.copy2(downloaded_bg_path_from_finder, temp_bg_download_path)
+                            # Kiểm tra file đã copy
+                            if os.path.exists(temp_bg_download_path) and os.path.getsize(temp_bg_download_path) > 1000:
+                                downloaded_bg_path = temp_bg_download_path # Gán đường dẫn thành công
+                                logger.debug(f"    Background video obtained and copied to temp: {os.path.basename(downloaded_bg_path)}")
+                            else:
+                                logger.error("    Copied background video file is invalid or empty.")
+                                downloaded_bg_path = None
+                        except Exception as copy_err:
+                            logger.error(f"    Failed to copy downloaded background video to temp dir: {copy_err}")
+                            downloaded_bg_path = None
+                    else:
+                        logger.warning("    Video finder's _download_video failed or returned invalid path.")
+                        downloaded_bg_path = None
+                except Exception as dl_err:
+                    logger.error(f"    Error during background video download process: {dl_err}", exc_info=True)
+                    downloaded_bg_path = None
+            else:
+                logger.warning("    No background video URL was selected to download.")
+
+            # === Kết thúc Bước 1 ===
+
+            # Kiểm tra cuối cùng trước khi sang bước 2
+            if not downloaded_bg_path:
+                logger.error("    FAILED to obtain a valid background video file. Cannot create dynamic card.")
+                # (Optional: Tạo card tĩnh fallback ở đây)
+                # return self._create_static_chapter_card_fallback(...)
+                return None # Trả về None nếu không có nền
+
+            # === B2: Xử Lý Video Nền (Cắt/Loop/Scale/Pad) ===
+            card_base_video_path = os.path.join(temp_project_dir, f"chapter_{chapter_num}_card_base.mp4")
+            card_temp_files.append(card_base_video_path) # Thêm vào list dọn dẹp
+            logger.debug(f"    Processing background video to duration {card_duration:.2f}s -> {os.path.basename(card_base_video_path)}")
+            source_duration = self._get_video_duration_ffprobe(downloaded_bg_path)
+            ffmpeg_bg_cmd = []
+            input_options = []
+
+            # Xác định cách xử lý dựa trên duration
+            if source_duration is None:
+                logger.warning(f"    Cannot determine duration for background video. Assuming long enough, cutting to {card_duration}s.")
+                ffmpeg_bg_cmd = [ self.ffmpeg_path, "-y", "-i", downloaded_bg_path, "-t", str(card_duration) ] # Chỉ định input và output duration
+            elif source_duration >= card_duration:
+                # Video đủ dài, cắt đoạn giữa
+                start_time = max(0, (source_duration - card_duration) / 2)
+                input_options = ["-ss", str(start_time)] # Cắt từ input
+                ffmpeg_bg_cmd = [ self.ffmpeg_path, "-y", *input_options, "-i", downloaded_bg_path, "-t", str(card_duration) ] # Output duration
+            else: # source_duration < card_duration -> Loop
+                logger.warning(f"    Background video duration ({source_duration:.2f}s) is shorter than required ({card_duration:.2f}s). Looping.")
+                # Dùng -stream_loop và -t để loop input
+                input_options = ["-stream_loop", "-1"]
+                ffmpeg_bg_cmd = [ self.ffmpeg_path, "-y", *input_options, "-i", downloaded_bg_path, "-t", str(card_duration) ] # Output duration
+
+            # Thêm filter xử lý scale/pad và codec/params vào lệnh
+            ffmpeg_bg_cmd.extend([
+                "-vf", f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease:eval=frame,pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=pix_fmts=yuv420p",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "24", # CRF 24 cho nền có thể ổn
+                "-an", # Không cần audio cho video nền
+                "-r", str(self.fps), # Đảm bảo fps đầu ra
+                card_base_video_path
+            ])
+
+            # Thực thi lệnh xử lý video nền
+            logger.debug(f"    Running FFmpeg background processing: {' '.join(ffmpeg_bg_cmd)}")
+            process_bg = subprocess.run(ffmpeg_bg_cmd, check=False, capture_output=True, text=True, encoding='utf-8')
+            if process_bg.returncode != 0 or not os.path.exists(card_base_video_path) or os.path.getsize(card_base_video_path) < 1000:
+                logger.error(f"    Failed to process background video. FFmpeg stderr: {process_bg.stderr.strip()}")
+                return None # Lỗi xử lý nền
+
+            # === B3 & B4: Tạo Overlay Title và Ghép ===
+            logger.debug("    Adding title overlay using FFmpeg -filter_complex (Revised approach)...")
+
+            # --- 3.1 Chuẩn bị Text Escaped và Font Path ---
+            display_text = f"Chapter {chapter_num}: {chapter_title}"
+            # Escape text bằng hàm helper mới
+            escaped_text_content = self._escape_text_for_ffmpeg_drawtext(display_text)
+
+            font_path = self._get_font_path()
+            if not font_path: # ... (xử lý lỗi thiếu font) ...
+                return None
+
+            # Escape font path (vẫn cần thiết)
+            font_path_escaped = self.escape_path_for_ffmpeg_filter(font_path) # Dùng hàm escape cũ cho path
+
+            # --- 3.2 Cài đặt style text (giữ nguyên) ---
+            fontsize = VIDEO_SETTINGS.get("chapter_title_font_size", 70)
+            fontcolor = VIDEO_SETTINGS.get("chapter_title_font_color", "white")
+            boxcolor = VIDEO_SETTINGS.get("chapter_title_box_color", "black@0.6")
+            boxborderw = max(2, int(fontsize / 15))
+            pos_x = "(w-text_w)/2"
+            pos_y = f"(h-text_h)/2"
+
+            # --- 3.3 Xây dựng chuỗi filter_complex với text= ---
+            fade_in_duration = 0.6
+            fade_out_duration = 0.6
+            text_visible_start = 0.2
+            text_visible_end = max(text_visible_start + fade_in_duration + 0.5, card_duration - fade_out_duration)
+
+            # Filter drawtext dùng text= với nội dung đã escape
+            filter_drawtext = (
+                f"drawtext=fontfile='{font_path_escaped}':text='{escaped_text_content}':" # <<< SỬ DỤNG text=
+                f"fontsize={fontsize}:fontcolor={fontcolor}:x={pos_x}:y={pos_y}:"
+                f"box=1:boxcolor={boxcolor}:boxborderw={boxborderw}:alpha=1"
+            )
+            filter_fade = (
+                 f"fade=type=in:start_time={text_visible_start}:duration={fade_in_duration}:alpha=1:enable='between(t,{text_visible_start},{text_visible_start+fade_in_duration})',"
+                 f"fade=type=out:start_time={text_visible_end}:duration={fade_out_duration}:alpha=1:enable='between(t,{text_visible_end},{card_duration})'"
+            )
+            filtergraph = f"[0:v]{filter_drawtext},{filter_fade}[vout]"
+
+            # --- 3.4 Lệnh FFmpeg với -filter_complex ---
+            overlay_cmd = [
+                self.ffmpeg_path, "-y",
+                "-i", str(card_base_video_path),
+                "-filter_complex", filtergraph,
+                "-map", "[vout]",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-an",
+                "-r", str(self.fps),
+                str(output_video_path)
+            ]
+
+            # --- 3.5 Thực thi và Kiểm tra ---
+            logger.debug(f"    Running FFmpeg overlay command: {' '.join(overlay_cmd)}")
+            process_overlay = subprocess.run(overlay_cmd, check=False, capture_output=True, text=True, encoding='utf-8')
+
+            if process_overlay.returncode == 0 and os.path.exists(output_video_path) and os.path.getsize(output_video_path) > 1000:
+                logger.info(f"    Dynamic chapter card created successfully: {os.path.basename(output_video_path)}")
+                return output_video_path
+            else:
+                logger.error(f"    Failed to overlay title. FFmpeg stderr: {process_overlay.stderr.strip()}")
+                logger.warning("    Returning base background video due to overlay failure.")
+                try:
+                    # Copy file nền làm fallback thay vì move để file nền vẫn có thể được dọn dẹp đúng
+                    shutil.copy2(card_base_video_path, output_video_path)
+                    return output_video_path
+                except Exception as copy_err:
+                    logger.error(f"    Failed to copy base video as fallback: {copy_err}")
+                    return None
+
+        except Exception as e:
+            logger.error(f"    Error creating dynamic chapter card {chapter_num}: {e}", exc_info=True)
+            return None
+        finally:
+            # Dọn dẹp file tạm của card này (video nền)
+            logger.debug(f"    Cleaning up {len(card_temp_files)} temp files for card {chapter_num}")
+            for f_str in card_temp_files:
+                f_path_obj = pathlib.Path(f_str)
+                if f_path_obj.exists() and f_path_obj.resolve() != pathlib.Path(output_video_path).resolve():
+                    try:
+                        os.remove(f_path_obj)
+                    except OSError as remove_err:
+                         logger.warning(f"      Could not remove temp card file {f_path_obj.name}: {remove_err}")
+
+    def _get_font_path(self, preferred_font_name="Roboto-Bold.ttf"):
+        """
+        Lấy đường dẫn tuyệt đối đến file font, ưu tiên font trong thư mục assets/fonts.
+        Có thể thêm fallback tìm font hệ thống nếu muốn.
+
+        Args:
+            preferred_font_name (str): Tên file của font ưu tiên (ví dụ: "Roboto-Bold.ttf").
+
+        Returns:
+            str: Đường dẫn tuyệt đối đến file font tìm thấy, hoặc None nếu không tìm thấy.
+        """
+        # 1. Ưu tiên font trong thư mục assets/fonts
+        assets_font_path = os.path.join(FONTS_DIR, preferred_font_name)
+        if os.path.exists(assets_font_path):
+            logger.debug(f"Found preferred font in assets: {assets_font_path}")
+            return os.path.abspath(assets_font_path) # Trả về đường dẫn tuyệt đối
+
+        logger.warning(f"Preferred font '{preferred_font_name}' not found in '{FONTS_DIR}'.")
+
+        # 2. (Tùy chọn) Fallback tìm font hệ thống (logic này có thể phức tạp và phụ thuộc HĐH)
+        # Ví dụ đơn giản cho Windows (có thể cần điều chỉnh):
+        if os.name == 'nt':
+            system_font_dir = os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts')
+            system_font_path = os.path.join(system_font_dir, preferred_font_name)
+            if os.path.exists(system_font_path):
+                logger.info(f"Found system font: {system_font_path}")
+                return os.path.abspath(system_font_path)
+
+        # Ví dụ tìm kiếm ở các vị trí phổ biến trên Linux/Mac (cần hoàn thiện hơn):
+        # elif os.name == 'posix':
+        #     common_paths = ['/usr/share/fonts/truetype/', '/usr/local/share/fonts/', os.path.expanduser('~/.fonts/')]
+        #     for base_path in common_paths:
+        #         try:
+        #             # Tìm kiếm đệ quy (có thể chậm)
+        #             for root, _, files in os.walk(base_path):
+        #                 if preferred_font_name in files:
+        #                     found_path = os.path.join(root, preferred_font_name)
+        #                     logger.info(f"Found system font at: {found_path}")
+        #                     return os.path.abspath(found_path)
+        #         except Exception as e:
+        #              logger.debug(f"Error searching font path {base_path}: {e}")
+
+        # 3. Nếu không tìm thấy ở đâu cả
+        logger.error(f"Font '{preferred_font_name}' not found in assets or common system locations. Text rendering will likely fail.")
+        return None
+    
     # === HÀM CREATE_VIDEO CHÍNH (ĐÃ TỔNG HỢP) ===
     def create_video(self, script, media_items, audio_files_info, output_path,
                  background_music_path=None, visual_timing_mode="sync_to_audio",
@@ -477,7 +988,7 @@ class VideoEditor:
 
             logger.debug(f"Final Editing Settings Applied: Transitions={final_enable_transitions}, TransDuration={final_transition_duration}, AnimIntensity={final_animation_intensity}, AnimType={final_image_animation_type}, MusicVol={final_music_volume}, Subtitles={final_enable_subtitles}")
             # --- Kết thúc lấy cài đặt cuối cùng ---
-            
+
             # *** Khởi tạo ImageGenerator nếu là advanced mode ***
             image_gen = None
             if is_advanced_mode:
@@ -487,6 +998,16 @@ class VideoEditor:
                 except Exception as ig_err:
                     logger.error(f"Failed to initialize ImageGenerator for chapter cards: {ig_err}. Chapter cards will be skipped.")
                     image_gen = None # Đảm bảo là None nếu lỗi
+
+            # --- GỌI LLM LẤY QUERIES CHO TẤT CẢ CARDS (NẾU LÀ ADVANCED MODE) ---
+            card_background_queries_map = {} # Khởi tạo map rỗng
+            fallback_card_query = "abstract motion background" # Query dự phòng
+            if is_advanced_mode and visual_timing_mode == 'sync_to_audio': # Chỉ gọi khi cần card
+                # Gọi hàm helper mới
+                card_background_queries_map = self._get_all_card_background_queries(script, language)
+                if not card_background_queries_map:
+                     logger.warning("Failed to get specific queries from LLM. Will use fallback query for all cards.")
+            # --------------------------------------------------------------------
 
             # --- 1. Tạo file tạm cho Intro & Outro (Video+Audio) ---
             intro_video_path = None
@@ -577,29 +1098,58 @@ class VideoEditor:
                         unit_chapter_title = unit_info.get('chapter_title')
 
                         # *** CHÈN CHAPTER CARD (NẾU CẦN) ***
-                        if is_advanced_mode and image_gen and unit_chapter_num is not None and unit_chapter_num > current_chapter_processed:
-                            logger.debug(f"Attempting to insert card for Chapter {unit_chapter_num} (Current processed: {current_chapter_processed})")
-                            logger.info(f"--- Inserting Chapter Card for Chapter {unit_chapter_num}: '{unit_chapter_title}' ---")
-                            card_img_path = os.path.join(temp_project_dir, f"chapter_{unit_chapter_num}_card.png")
-                            card_video_path = os.path.join(temp_project_dir, f"chapter_{unit_chapter_num}_card_video.mp4")
-                            temp_files_to_clean.extend([card_img_path, card_video_path])
+                        # === Thay thế logic chèn card ===
+                        # Kiểm tra điều kiện chèn card (đã bỏ check image_gen)
+                        if is_advanced_mode and unit_chapter_num is not None and unit_chapter_num > current_chapter_processed:
 
-                            created_card_img = image_gen._create_chapter_title_card(unit_chapter_title, card_img_path, unit_chapter_num)
-                            if created_card_img:
-                                card_duration = VIDEO_SETTINGS.get("chapter_title_duration", 2.5)
-                                created_card_video = self._create_temp_visual_clip(
-                                    {"path": created_card_img, "type": "image"}, # Giả lập media item
-                                    card_duration,
-                                    card_video_path
+                            # 1. Lấy Query Nền (từ map đã tạo trước vòng lặp)
+                            # fallback_card_query phải được định nghĩa trước vòng lặp
+                            card_query = card_background_queries_map.get(unit_chapter_num, fallback_card_query)
+
+                            logger.info(f"--- Inserting DYNAMIC Chapter Card for Chapter {unit_chapter_num}: '{unit_chapter_title}' (Using BG Query: '{card_query}') ---")
+
+                            # 2. Xác định đường dẫn Output mong muốn cho card động
+                            card_video_path = os.path.join(temp_project_dir, f"chapter_{unit_chapter_num}_card_video.mp4")
+                            # Lưu ý: Không thêm card_video_path vào temp_files_to_clean ở đây ngay lập tức.
+                            # Chỉ thêm nếu hàm _create_dynamic_chapter_card trả về thành công.
+
+                            # 3. Gọi hàm mới để tạo card động
+                            created_card_video_path = None # Khởi tạo là None
+                            try:
+                                created_card_video_path = self._create_dynamic_chapter_card(
+                                    chapter_num=unit_chapter_num,
+                                    chapter_title=unit_chapter_title,
+                                    card_duration=VIDEO_SETTINGS.get("chapter_title_duration", 2.5),
+                                    background_query=card_query,
+                                    temp_project_dir=temp_project_dir, # Thư mục tạm chính
+                                    output_video_path=card_video_path # Đường dẫn output mong muốn
                                 )
-                                if created_card_video:
-                                    temp_visual_segments.append(created_card_video)
-                                    logger.info(f"Chapter {unit_chapter_num} card video created.")
-                                else:
-                                    logger.warning(f"Failed to create video for chapter {unit_chapter_num} card.")
+                            except Exception as dyn_card_err:
+                                # Bắt lỗi nếu chính hàm _create_dynamic_chapter_card gặp lỗi không mong muốn
+                                logger.error(f"Unexpected error calling _create_dynamic_chapter_card for chapter {unit_chapter_num}: {dyn_card_err}", exc_info=True)
+                                created_card_video_path = None # Đảm bảo là None nếu có lỗi
+
+                            # 4. Kiểm tra kết quả và thêm vào danh sách
+                            if created_card_video_path and os.path.exists(created_card_video_path):
+                                # THÀNH CÔNG: Thêm đường dẫn video card động vào danh sách segments
+                                temp_visual_segments.append(created_card_video_path)
+                                # THÊM vào danh sách cần dọn dẹp
+                                temp_files_to_clean.append(created_card_video_path)
+                                logger.info(f"Chapter {unit_chapter_num} dynamic card video created and added to main sequence.")
                             else:
-                                logger.warning(f"Failed to create image for chapter {unit_chapter_num} card.")
-                            current_chapter_processed = unit_chapter_num # Đánh dấu đã xử lý card cho chapter này
+                                # THẤT BẠI: Log cảnh báo, không thêm gì vào segments
+                                logger.warning(f"Failed to create dynamic card video for chapter {unit_chapter_num}. Chapter card will be SKIPPED.")
+                                # (TÙY CHỌN: Bạn có thể thêm code fallback tạo card tĩnh ở đây nếu muốn)
+                                # Ví dụ:
+                                # logger.info("Attempting static card fallback...")
+                                # static_card_path = self._create_static_card(...) # Tạo hàm fallback nếu cần
+                                # if static_card_path:
+                                #    temp_visual_segments.append(static_card_path)
+                                #    temp_files_to_clean.append(static_card_path)
+
+                            # 5. Cập nhật chapter đã xử lý (luôn thực hiện sau khi đã thử chèn)
+                            current_chapter_processed = unit_chapter_num
+                            logger.debug(f"+++ current_chapter_processed UPDATED to: {current_chapter_processed} +++")
                         # *** KẾT THÚC CHÈN CARD ***
 
                         if unit_audio_dur <= 0.1:
