@@ -144,9 +144,10 @@ def prompt_for_visual_source():
     print("1. Search online (Serper, Pexels, Pixabay) - Default")
     print("2. Generate images with AI (Google Imagen 3)")
     print("3. Search ONLY videos online (Pexels, Pixabay)")
+    print("4. Use ONLY local fallback videos (from assets/fallback_videos)")
 
     vis_choice = ""
-    valid_choices = ["1", "2", "3"]
+    valid_choices = ["1", "2", "3", "4"]
 
     while vis_choice not in valid_choices:
         vis_choice = input(f"Enter visual source choice ({','.join(valid_choices)}, default is 1): ").strip()
@@ -163,6 +164,12 @@ def prompt_for_visual_source():
              logger.warning("Video clips are disabled in settings (VIDEO_SETTINGS['enable_video_clips']). Selecting 'Video Only' might result in no visuals.")
              print("WARNING: Video clips are disabled in settings. This option might not work as expected.")
         return "video_only"  
+    elif vis_choice == "4":
+        logger.info("Selected usage of ONLY local fallback videos.")
+        if not os.listdir(os.path.join(ASSETS_DIR, "fallback_videos")): # Kiểm tra thư mục có trống không
+             logger.warning("Local fallback video directory 'assets/fallback_videos' is empty! This option might result in no visuals.")
+             print("WARNING: The 'assets/fallback_videos' directory appears empty.")
+        return "local_fallback_video_only"    
     else:
         logger.info("Selected online search for images/videos.")
         return "search" # default
@@ -404,7 +411,7 @@ def main():
     # --- Prompt for LLM Provider FIRST ---
     print("\n--- Step 0: Select LLM Provider ---")
     selected_llm = prompt_for_llm_provider()
-    
+
     # --- Prompt for TTS Provider ---
     selected_tts = prompt_for_tts_provider()
 
@@ -513,30 +520,56 @@ def main():
 
     # Kiểm tra xem Strategy có yêu cầu override Visual Source không
     try:
+        # Bước 1: Kiểm tra xem style có muốn override không?
         if selected_style_strategy.should_override_visual_source():
-            preferred_visual_source = selected_style_strategy.get_visual_source_preference()
+            preferred_visual_source_by_style = selected_style_strategy.get_visual_source_preference()
+            logger.info(f"Style '{selected_style_name}' requests visual source override to: '{preferred_visual_source_by_style}'")
 
-            if visual_source_choice_user != preferred_visual_source:
-                logger.warning(f"Style '{selected_style_name}' forces visual source to '{preferred_visual_source}'. Overriding user choice '{visual_source_choice_user}'.")
-                print(f"\nINFO: Visual source automatically set to '{preferred_visual_source}' for the '{selected_style_name}' style.")
+            # Bước 2: Áp dụng override BẤT KỂ lựa chọn người dùng
+            if visual_source_final != preferred_visual_source_by_style:
+                logger.warning(f"--> Style override is active. Forcing visual source to '{preferred_visual_source_by_style}' (Ignoring user choice '{visual_source_choice_user}').")
+                print(f"\nINFO: Visual source automatically set to '{preferred_visual_source_by_style}' due to the selected style ('{selected_style_name}').")
+                visual_source_final = preferred_visual_source_by_style
             else:
-                logger.info(f"Style '{selected_style_name}' preference '{preferred_visual_source}' matches user choice.")
-            visual_source_final = preferred_visual_source # Áp dụng override
+                # Trường hợp hiếm: Style muốn override nhưng giá trị lại trùng với lựa chọn user
+                logger.info(f"--> Style override '{preferred_visual_source_by_style}' matches user choice. Applying style preference.")
+                visual_source_final = preferred_visual_source_by_style
+
+        # Bước 3: Nếu style KHÔNG override, thì mới dùng lựa chọn của người dùng
         else:
             logger.info(f"Style '{selected_style_name}' does not override visual source. Using user choice: '{visual_source_choice_user}'.")
+            visual_source_final = visual_source_choice_user
 
     except AttributeError as e:
-        logger.error(f"Error checking visual source override: Strategy object (type: {type(selected_style_strategy).__name__}) might be missing required methods ({e}). Using user choice.")
-        visual_source_final = visual_source_choice_user # Fallback an toàn
+        logger.error(f"Error checking visual source override: Strategy object (type: {type(selected_style_strategy).__name__}) might be missing required methods ({e}). Using user choice as fallback.")
+        visual_source_final = visual_source_choice_user
     except Exception as e:
         logger.error(f"Unexpected error applying visual source override: {e}", exc_info=True)
-        visual_source_final = visual_source_choice_user # Fallback an toàn
+        visual_source_final = visual_source_choice_user
 
     # --- Get Visual Presentation Mode  ---
     final_timing_mode_user_choice = prompt_for_visual_timing_mode() # Lấy lựa chọn gốc của người dùng
 
-    # --- THÊM LOGIC GHI ĐÈ Ở ĐÂY ---
-    final_timing_mode = final_timing_mode_user_choice # Gán giá trị ban đầu
+    # --- KIỂM TRA OVERRIDE TIMING MODE TỪ STRATEGY ---
+    final_timing_mode = final_timing_mode_user_choice # Mặc định
+    try: # Thêm try-except để an toàn hơn
+        if selected_style_strategy.should_override_timing_mode():
+            preferred_timing_mode = selected_style_strategy.get_preferred_timing_mode()
+            if final_timing_mode_user_choice != preferred_timing_mode:
+                logger.warning(f"Style '{selected_style_name}' forces visual timing mode to '{preferred_timing_mode}'. Overriding user choice '{final_timing_mode_user_choice}'.")
+                print(f"\nINFO: Visual timing mode automatically set to '{preferred_timing_mode}' for the '{selected_style_name}' style.")
+            else:
+                 logger.info(f"Style '{selected_style_name}' preference '{preferred_timing_mode}' matches user choice for timing mode.")
+            final_timing_mode = preferred_timing_mode # Áp dụng override
+        else:
+            logger.info(f"Style '{selected_style_name}' does not override timing mode. Using user choice: '{final_timing_mode_user_choice}'.")
+    except AttributeError as e:
+        logger.error(f"Error checking timing mode override: Strategy object (type: {type(selected_style_strategy).__name__}) might be missing required methods ({e}). Using user choice.")
+        final_timing_mode = final_timing_mode_user_choice # Fallback an toàn
+    except Exception as e:
+        logger.error(f"Unexpected error applying timing mode override: {e}", exc_info=True)
+        final_timing_mode = final_timing_mode_user_choice # Fallback an toàn
+    # --- KẾT THÚC OVERRIDE TIMING MODE ---
 
     # --- KIỂM TRA OVERRIDE TIMING MODE TỪ STRATEGY ---
     final_timing_mode = final_timing_mode_user_choice # Mặc định
@@ -602,7 +635,9 @@ def main():
             article=selected_article,
             style_strategy=selected_style_strategy,
             language=language,
-            video_mode=video_mode
+            video_mode=video_mode,
+            visual_source_final=visual_source_final,
+            visual_timing_mode=final_timing_mode
         )
 
         # Save fetched articles (optional)
@@ -623,9 +658,10 @@ def main():
         logger.info(f"Article language: {language}. Generating script...")
         script = script_generator.generate_script_from_article(
             article=selected_article, # Sửa tên tham số
-            style_strategy=selected_style_strategy, # TRUYỀN STRATEGY OBJECT
+            style_strategy=selected_style_strategy,
             language=language,
-            video_mode=video_mode
+            visual_source_final=visual_source_final,
+            visual_timing_mode=final_timing_mode
         )
 
         # Save article info (optional)
@@ -643,11 +679,12 @@ def main():
         # Language was already set during input gathering
         script = script_generator.generate_script_from_keyword(
             keyword=keyword,
-            style_strategy=selected_style_strategy, # TRUYỀN STRATEGY OBJECT
+            style_strategy=selected_style_strategy,
             language=language,
-            video_mode=video_mode
+            video_mode=video_mode,
+            visual_source_final=visual_source_final,
+            visual_timing_mode=final_timing_mode
         )
-
 
     elif choice == "4": # YouTube Transcript
         logger.info(f"Processing Choice 4: Generating script from YouTube transcript...")
@@ -680,7 +717,9 @@ def main():
             style_strategy=selected_style_strategy, # TRUYỀN STRATEGY OBJECT
             language=language,
             context_hint=f"YouTube transcript ({youtube_url})",
-            video_mode=video_mode
+            video_mode=video_mode,
+            visual_source_final=visual_source_final,
+            visual_timing_mode=final_timing_mode
         )
 
     # --- Validation and Script Saving ---
@@ -737,7 +776,10 @@ def main():
         logger.error(f"Error applying voice settings from strategy: {e}", exc_info=True)
         logger.warning(f"Proceeding with default voice settings for {selected_tts} due to error.")
     
-    audio_files = voice_generator.generate_audio_for_script(script)
+    audio_files = voice_generator.generate_audio_for_script(
+        script=script,
+        visual_timing_mode=final_timing_mode
+    )
     if not audio_files:
         logger.error("Audio generation failed. Cannot proceed.")
         return

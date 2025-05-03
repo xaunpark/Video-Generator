@@ -1234,42 +1234,46 @@ class VideoEditor:
 
                 elif visual_timing_mode == 'overall_theme_fixed_duration':
                     logger.info("Assembling visual track from overall theme visuals...")
-                    fixed_duration = VIDEO_SETTINGS.get("fixed_visual_duration", 5.0)
-                    # Lấy danh sách các theme visuals đã được tạo bởi ImageGenerator
+
+                    # Lấy danh sách các theme visuals đã được tạo bởi ImageGenerator TỪ THAM SỐ media_items
                     theme_visuals_available = [item for item in media_items if item.get("media_type") == "theme_visual"]
 
+                    # --- Kiểm tra xem có visual nào được cung cấp không ---
                     if not theme_visuals_available:
-                        logger.warning("No theme visuals provided for 'overall_theme' mode. Creating black track.")
+                        logger.error("CRITICAL: No theme visuals found in the provided media_items list for 'overall_theme' mode!")
+                        logger.warning("Creating a black track as fallback.")
                         main_visual_track_path = os.path.join(temp_project_dir, f"black_track_{project_id}.mp4")
                         if not self._create_black_clip(total_main_audio_duration, main_visual_track_path):
                             logger.error("Failed to create fallback black track.")
                             self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
                             return None
-                        # Nếu tạo black clip thành công, gán nó làm main_visual_track_path và bỏ qua bước ghép nối dưới
-                        temp_visual_segments = [] # Không cần ghép nữa
+                        temp_files_to_clean.append(main_visual_track_path) # Thêm black track vào cleanup
+                        temp_visual_segments = [] # Đảm bảo list segment rỗng
+                        logger.info("Using fallback black track as main visual track.")
                     else:
-                        # Ước tính số visual cần để phủ hết audio
-                        num_visual_slots_needed = math.ceil(total_main_audio_duration / fixed_duration) if total_main_audio_duration > 0 and fixed_duration > 0 else 1
+                        # --- Sử dụng trực tiếp danh sách visual đã có ---
+                        logger.info(f"Received {len(theme_visuals_available)} theme visuals prepared by ImageGenerator.")
+                        temp_visual_segments = [] # Reset list segment tạm
 
-                        # Chọn visual (lặp lại visual cuối nếu thiếu)
-                        if len(theme_visuals_available) >= num_visual_slots_needed:
-                            selected_theme_visuals = theme_visuals_available[:num_visual_slots_needed]
-                        else:
-                            if theme_visuals_available: # Đảm bảo có ít nhất 1 visual để lặp lại
-                                selected_theme_visuals = theme_visuals_available + [theme_visuals_available[-1]] * (num_visual_slots_needed - len(theme_visuals_available))
-                            else: # Trường hợp cực hiếm: có list nhưng rỗng?
-                                selected_theme_visuals = [] # Để logic sau xử lý
-
-                        logger.info(f"Selected {len(selected_theme_visuals)} theme visuals for assembly.")
-
-                        # Tạo clip tạm thời (không audio) cho từng visual đã chọn
-                        for idx, visual_item in enumerate(selected_theme_visuals):
+                        # --- Lặp qua danh sách visual đã được cung cấp ---
+                        for idx, visual_item in enumerate(theme_visuals_available):
                             clip_temp_path = os.path.join(temp_project_dir, f"theme_vis_{idx+1}_final.mp4")
                             temp_files_to_clean.append(clip_temp_path) # Thêm vào dọn dẹp
-                            # Tạo clip với duration cố định
+
+                            # *** LẤY DURATION TỪ VISUAL ITEM ***
+                            item_duration = visual_item.get('duration')
+                            # Fallback nếu duration không có hoặc không hợp lệ trong item
+                            if not item_duration or not isinstance(item_duration, (int, float)) or item_duration <= 0:
+                                logger.warning(f"Theme visual item {idx+1} (Path: {visual_item.get('path')}) missing valid duration. Using default fallback (5s).")
+                                # Lấy giá trị fallback từ settings nếu có, hoặc đặt cứng
+                                item_duration = VIDEO_SETTINGS.get("fixed_visual_duration", 5.0)
+
+                            logger.debug(f"Creating temp clip for theme visual {idx+1} (Path: {os.path.basename(visual_item.get('path', 'N/A'))}) with duration {item_duration:.2f}s")
+
+                            # Tạo clip tạm thời (không audio) cho visual này với duration đã lấy
                             created_clip = self._create_temp_visual_clip(
                                 visual_item,
-                                fixed_duration, # Duration cố định cho theme mode
+                                item_duration, # <<< TRUYỀN DURATION CỦA ITEM NÀY
                                 clip_temp_path,
                                 animation_type=final_image_animation_type,
                                 animation_intensity=final_animation_intensity
@@ -1277,50 +1281,45 @@ class VideoEditor:
                             if created_clip:
                                 temp_visual_segments.append(created_clip)
                             else:
-                                logger.warning(f"Failed to create temp clip for theme visual {idx+1}. Skipping.")
+                                logger.warning(f"Failed to create temp clip for theme visual {idx+1} (Path: {visual_item.get('path')}). Skipping.")
 
-                        # Nếu không tạo được clip nào (dù có visual item) -> lỗi
+                        # Kiểm tra xem có tạo được clip nào không
                         if not temp_visual_segments:
-                            logger.error("Failed to create any temporary clips for theme visuals.")
+                            logger.error("Failed to create any temporary clips for the theme visuals provided.")
                             # Cân nhắc tạo black clip fallback ở đây nếu muốn
                             self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
                             return None
+                        # Nếu tạo thành công, bước ghép nối sẽ chạy sau
 
                 else: # Mode không hợp lệ
                     logger.error(f"Invalid visual_timing_mode: {visual_timing_mode}")
                     self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
                     return None
-                # --- KẾT THÚC PHÂN NHÁNH ---
+                # --- KẾT THÚC PHÂN NHÁNH TIMING MODE ---
 
                 # --- Ghép nối các Visual Segments thành Track Chính ---
-                # Bước này chạy cho cả 2 mode (nếu có temp_visual_segments)
-                if not main_visual_track_path and temp_visual_segments: # Chỉ ghép nếu chưa có black track và có segment
+                # (Logic này giờ sẽ nhận đúng danh sách temp_visual_segments cho theme mode)
+                if not main_visual_track_path and temp_visual_segments:
                     main_visual_track_path = os.path.join(temp_project_dir, f"main_visual_track_{project_id}.mp4")
-                    # Quyết định có thêm transition khi ghép main visual track hay không
-                    # Chỉ thêm nếu là theme mode VÀ được bật trong settings
                     add_main_vis_transitions = (visual_timing_mode == 'overall_theme_fixed_duration' and final_enable_transitions)
                     logger.info(f"Concatenating main visual track ({len(temp_visual_segments)} segments, Transitions: {add_main_vis_transitions})...")
                     main_visual_track_path = self.concatenate_videos_with_ffmpeg(
                         temp_visual_segments,
                         main_visual_track_path,
                         add_transitions=add_main_vis_transitions,
-                        transition_duration=final_transition_duration, # Truyền duration cuối cùng
-                        transition_types=final_transition_types # Truyền loại transition cuối cùng
+                        transition_duration=final_transition_duration,
+                        transition_types=final_transition_types
                     )
                     if not main_visual_track_path:
                         logger.error("Failed to concatenate main visual track.")
                         self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
                         return None
-                    temp_files_to_clean.append(main_visual_track_path) # Thêm vào cleanup sau khi tạo thành công
+                    temp_files_to_clean.append(main_visual_track_path) # Thêm vào cleanup
 
                 elif not main_visual_track_path and not temp_visual_segments:
-                    # Trường hợp không có visual nào được tạo/chọn
                     logger.error("No visual segments available to create the main visual track.")
                     self._cleanup_temp_files(temp_files_to_clean, temp_project_dir)
-                    return None
-                elif main_visual_track_path and not temp_visual_segments:
-                    # Trường hợp đã tạo black track fallback
-                    logger.info("Using pre-generated black track as main visual track.")                         
+                    return None                         
 
             # --- 3.5 (MỚI): Điều chỉnh tốc độ tổng thể CHO overall_theme_fixed_duration (trong trường hợp visual không khớp với audio) ---
             adjusted_main_visual_track_path = main_visual_track_path # Mặc định dùng bản gốc

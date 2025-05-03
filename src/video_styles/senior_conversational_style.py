@@ -1,252 +1,164 @@
 # src/video_styles/senior_conversational_style.py
-
-import json
-from typing import List, Optional, Union
-
 from .base_style import BaseVideoStyle
-from config.settings import MAX_ARTICLE_LENGTH
-from src.utils import safe_truncate # Import hàm tiện ích nếu cần
-
-import logging
-logger = logging.getLogger(f"{__name__}.SeniorConversationalStyle")
-
-# Import style_configs cũ để lấy cấu trúc prompt gốc (TẠM THỜI)
-# SAU KHI HOÀN THÀNH VIỆC DI CHUYỂN, BẠN CÓ THỂ XÓA IMPORT NÀY
-# from src.prompt_generator import style_configs as old_style_configs
+from typing import Dict, Optional, List
 
 class SeniorConversationalStyle(BaseVideoStyle):
     """
-    Chiến lược cho style video 'Senior Conversational'.
-    Ghi đè nhiều phương thức để cung cấp hành vi và cấu hình đặc biệt.
+    Generates detailed, conversational scripts suitable for explaining complex topics
+    to seniors or those preferring a slower, more narrative pace.
+    FORCES usage of local fallback videos and fixed duration timing.
     """
 
-    def get_style_config(self) -> dict:
-        """
-        Trả về cấu hình cụ thể cho style 'Senior Conversational'.
-        """
+    def get_style_config(self) -> Dict:
+        """Returns configuration for the senior conversational style."""
         return {
-            "tone": "warm, conversational, and motivational, targeted at seniors (60+)",
+            "tone": "Warm, Patient, Detailed, Conversational",
             "instructions": [
-                "Speak directly to the viewer like a caring friend.",
-                "Use simple, clear language, avoid jargon or overly complex sentences.",
-                "Provide practical, actionable advice with relatable examples for seniors.",
-                "Maintain a positive, reassuring, and uplifting mood.",
-                "Ensure smooth, natural transitions between ideas and chapters.",
-                "Write as a continuous narrative, avoiding bullet points or explicit section titles in the content."
+                "Speak directly to the viewer in a warm, respectful, and engaging manner.",
+                "Explain concepts thoroughly, assuming no prior knowledge.",
+                "Use clear, simple language but don't oversimplify complex ideas.",
+                "Break down information into logical, easy-to-follow steps or chapters.",
+                "Incorporate relatable analogies or simple examples.",
+                "Maintain a patient and encouraging tone.",
+                "Ensure a good narrative flow, like telling a story.",
+                "Aim for comprehensive coverage of the topic within each chapter.",
             ],
-            "title_hint": "A helpful, friendly, and encouraging title for seniors",
-            "scene_range": (150, 350),
-            "target_audience": "60+",
-            "layout_override": {
-                "enabled": True,
-                "target_total_word_range": (1500, 2500),
-                "chapter_count_range": (3, 4),
-                "chapter_word_target_range": (400, 700),
-                "structure_prompt": "Structure the video logically into 3 main conceptual parts: 1) An engaging Introduction/Hook, 2) The main discussion points providing value and practical advice, 3) A concluding summary and call to action/uplifting message. Divide these 3 conceptual parts into {chapter_count_min} to {chapter_count_max} distinct chapters in the final layout."
-            }
+            "goal": "To educate and engage seniors or beginners on a topic in a detailed, understandable, and conversational way.",
+            "target_audience": "Seniors or individuals new to the topic seeking detailed explanations."
         }
-
-    # --- GHI ĐÈ CÁC PHƯƠNG THỨC CẦN THIẾT ---
 
     def should_override_layout(self) -> bool:
-        """Senior Conversational yêu cầu cấu trúc layout chương đặc biệt."""
-        return True # Lấy từ config["layout_override"]["enabled"]
-
-    def get_layout_generation_params(self) -> dict:
-        """Trả về các tham số để tạo layout cho Senior Conversational."""
-        config = self.get_style_config()
-        layout_override = config.get("layout_override", {})
-        # Trả về các tham số cần thiết, ví dụ:
-        return {
-            "chapter_count_range": layout_override.get("chapter_count_range", (3, 4)),
-            "chapter_word_target_range": layout_override.get("chapter_word_target_range", (400, 700)),
-            "target_total_word_range": layout_override.get("target_total_word_range", (1500, 2500)),
-            "structure_prompt": layout_override.get("structure_prompt", "")
-            # Thêm các tham số khác nếu cần
-        }
-
-    # --- EP BUỘC TIMING MODE LÀ FIXED ---
-    def should_override_timing_mode(self) -> bool:
-        """Senior Conversational nên dùng timing mode cố định."""
-        return False
-    #NẾU MUỐN ĐẶT get_preferred_timing_mode BÊN DƯỚI THÌ PHẢI CHUYỂN SANG TRUE
-
-    #def get_preferred_timing_mode(self) -> str:
-        """Timing mode ưu tiên cho Senior Conversational."""
-        return "overall_theme_fixed_duration"
-    # --- KẾT THÚC ÉP BUỘC TIMING MODE ---
-
-    # --- ÉP BUỘC VISUAL SOURCE LÀ VIDEO_ONLY ---
-    def should_override_visual_source(self) -> bool:
-        """
-        Style này bắt buộc sử dụng nguồn visual cụ thể (chỉ video).
-        """
+        """This style strongly benefits from a specific chapter layout."""
         return True
 
-    def get_visual_source_preference(self) -> str:
-        """
-        Trả về nguồn visual bắt buộc cho style này.
-        """
-        return "video_only"
-    # --- KẾT THÚC ÉP BUỘC VISUAL SOURCE ---
+    def get_layout_generation_params(self) -> Dict:
+        """Define the structure needed for the Senior Conversational style."""
+        return {
+            "chapter_count_range": (2, 3), #4-7 chapters total
+            "chapter_word_target_range": (50, 100), # 350-600 words per chapter
+            "target_total_word_range": (200, 300), # 1600-3500 words total
+            "structure_prompt": (
+                "Start with a welcoming introduction and clear problem/topic statement (Chapter 1). "
+                "Dedicate subsequent chapters to exploring different facets, background, explanations, or steps in detail ({chapter_count_min}-{chapter_count_max} chapters total). "
+                "Conclude with a summary, key takeaways, and encouraging closing remarks (Final Chapter)."
+            )
+        }
 
-    def hook_instructions(self) -> str:
+    def get_chapter_content_instructions(self, chapter_num, total_chapters, chapter_summary, word_count_target, next_chapter_title=None) -> str:
+        """Specific instructions for generating chapter content."""
+        instructions = f"""
+        **Chapter-Specific Instructions (Chapter {chapter_num}/{total_chapters}):**
+        - **Tone:** Maintain the warm, patient, and conversational tone throughout. Address the audience directly (using 'you' is often appropriate).
+        - **Depth & Detail:** Remember the target word count (~{word_count_target} words). Fully elaborate on the points in the chapter summary ('{chapter_summary}'). Use examples, analogies, and clear explanations suitable for the target audience (seniors/beginners). Avoid jargon where possible or explain it clearly.
+        - **Pacing:** Write slightly longer, more descriptive sentences than a typical news report. Ensure a relaxed, unhurried pace.
         """
-        Trả về hướng dẫn tạo hook đặc biệt cho Senior Conversational.
-        """
-        logger.info("Đang thực  thi SeniorConversationalStyle: Generating hook instructions.")
-        return """
-        Start with one of the following proven hook styles tailored for a senior audience (60+). The goal is to instantly grab attention by speaking directly to their current concerns or goals:
-        • Highlight a common struggle or pain point 
-            (e.g., “Do you feel like your family no longer listens to you? This video will help you change that…”).
-        • Ask a thought-provoking question 
-            (e.g., “Do you still need friends after 70? What you’ll hear may surprise you…”).
-        • Lead with a striking statistic or health warning 
-            (e.g., “99% of deaths after age 75 are caused by these 5 things – here's how to avoid them.”).
-        • Present a powerful personal transformation 
-            (e.g., “At 74, I stay sharp and active every day thanks to these 4 simple habits…”).
-        • Make a clear and motivating promise 
-            (e.g., “If you eat these 5 foods, your constipation could disappear after age 60.”).
-
-        Use language that feels empathetic, inspiring, and easy to follow – avoid overly complex or fast-paced delivery.
-        """
-    ### --- Nhận thông tin về chapter hiện tại và trả về chuỗi hướng dẫn cụ thể (hoặc chuỗi rỗng nếu dùng mặc định) --- ###
-    def get_chapter_content_instructions(self, chapter_num: int, total_chapters: int, chapter_summary: str, word_count_target: int, next_chapter_title: str | None = None) -> str:
-        """
-        Cung cấp hướng dẫn cấu trúc nội dung chi tiết cho từng chapter
-        theo yêu cầu của style Senior Conversational (3 phần).
-        """
-        logger.info(f"SeniorConversationalStyle: Generating specific content instructions for Chapter {chapter_num}/{total_chapters}.")
-        instructions = f"\n**Specific Content Structure for Chapter {chapter_num}:**\n"
-
         if chapter_num == 1:
-            instructions += """
-        - Start with the required hook (as per separate instructions).
-        - Briefly introduce the main topic '[SELECTED TOPIC]' and its importance for seniors.
-        - Mention the key takeaways the video will cover (e.g., 'In this video, we’ll go over X simple habits...').
-        - Transition smoothly into the first point(s) relevant to this chapter's summary ('{chapter_summary}').
-        - Cover the first set of points thoroughly.
-        - End naturally, preparing the viewer for the next logical step (next chapter topic: '{next_chapter_title}').
-        """
-        elif chapter_num == total_chapters: # Chapter cuối cùng
-            instructions += f"""
-        - Cover the final points relevant to this chapter's summary ('{chapter_summary}').
-        - Provide a natural-feeling summary of the main takeaways from the *entire* video.
-        - Include a positive and reassuring motivational message suitable for seniors.
-        - Encourage viewers to share their thoughts or experiences in the comments.
-        - Include a call to action: ask them to like the video and subscribe.
-        - End with an uplifting closing statement (e.g., 'Here’s to living your best life at any age!').
-        """
-        else: # Các chapter ở giữa
-            instructions += f"""
-        - Continue discussing the points relevant to this chapter's summary ('{chapter_summary}').
-        - Provide clear explanations, actionable steps, and relatable examples for each point covered in this chapter.
-        - Ensure smooth, conversational transitions between points within the chapter.
-        - End naturally, preparing the viewer for the next logical step (next chapter topic: '{next_chapter_title}').
-        """
-        # Thay thế các placeholder nếu cần
-        instructions = instructions.replace("{chapter_summary}", chapter_summary)
-        instructions = instructions.replace("{next_chapter_title}", next_chapter_title if next_chapter_title else "[End of Video]")
-        # Bạn có thể cần truyền [SELECTED TOPIC] vào hàm này nếu muốn dùng nó ở đây
+            instructions += "- **Opening:** Start with a warm welcome and directly address the topic or question this video answers. Set a friendly, reassuring tone.\n"
+        elif chapter_num > 1:
+            instructions += "- **Transition In:** Begin by smoothly linking back to the previous chapter's main idea before introducing this chapter's focus. Use phrases like 'Now that we understand [previous topic], let's explore...', 'Building on that, we can now look at...'\n"
+
+        if chapter_num < total_chapters and next_chapter_title:
+            instructions += f"- **Transition Out:** Conclude this chapter by naturally setting the stage for the next topic ('{next_chapter_title}'). Hint at what's coming next without explicitly stating 'Next chapter...'. For example: 'This leads us nicely into thinking about...' or 'With this foundation, we're ready to explore how [next topic] plays a role...'\n"
+        elif chapter_num == total_chapters:
+            instructions += "- **Conclusion:** As this is the final chapter, summarize the key takeaways from the *entire video*. Offer final encouraging thoughts or practical advice. End on a positive and reassuring note.\n"
 
         return instructions.strip()
 
-    def generate_ai_image_prompt(self, scene_content: str, video_title: str) -> str:
+    def generate_script_prompt(self, source_data, language, mode="basic") -> str:
         """
-        Tạo prompt *cụ thể và an toàn* cho Imagen cho style Senior Conversational.
-        Logic này được chuyển từ ImageGenerator._create_imagen_prompt.
+        Generates the LLM prompt. This style typically uses Advanced Mode (layout override).
         """
-        logger.debug(f"Creating specific Imagen prompt for Senior Conversational.")
+        # This prompt generation is primarily for the 'basic' mode fallback,
+        # which might not be ideal for this style. Advanced mode is preferred.
+        config = self.get_style_config()
+        lang_instruction = "in English" if language == "en" else "bằng tiếng Việt"
+        input_type = source_data.get('type', 'unknown')
+        content_data = source_data.get('data', '')
+        context_hint = source_data.get('context', None)
 
-        # (Sao chép toàn bộ phần tạo gpt_prompt cho "senior_conversational"
-        # từ hàm _create_imagen_prompt trong image_generator.py cũ vào đây)
-        # ... (Phần này khá dài, hãy copy từ code cũ của bạn) ...
-        gpt_prompt = f"""
-            You are an expert prompt engineer for text-to-image AI like Google Imagen 3.
-            Your task is to convert the following scene content into a detailed, effective, and **appropriate** prompt for a video targeting **seniors (60+)**.
+        prompt = f"""
+        **Task:** Create a video script based on the provided source material.
+        **Style:** {config['tone']} (Target Audience: {config.get('target_audience', 'Seniors/Beginners')})
+        **Language:** Generate the script {lang_instruction}.
+        **Goal:** {config['goal']}
 
-            Consider these factors:
-            - Overall video title: "{video_title}"
-            - **Target Audience:** Seniors (60+)
-            - **Desired Video Style/Tone:** Warm, conversational, motivational, relatable, positive, gentle (warm, conversational, and motivational, targeted at seniors (60+)).
-            - Specific content of this scene: "{scene_content}"
-
-            **IMPORTANT SAFETY GUIDELINES (Apply Strictly):**
-            - NEVER generate prompts depicting children, minors, or family scenes with minors. Replace with adults (18+) or symbolic objects.
-            - Avoid depicting vulnerable populations or overly sensitive scenarios (e.g., severe illness depiction).
-            - Avoid depicting realistic human faces in close detail. Focus on general appearance, emotion, and setting.
-            - Ensure generated images are positive, respectful, and avoid ageist stereotypes.
-
-            **Instructions for the Imagen Prompt (Senior Conversational Style):**
-            1.  **Visual Style:** Aim for **photorealistic** but with **warm, soft lighting** and **calm, pleasing compositions**. Avoid harsh contrasts or overly busy scenes.
-            2.  **Subject Focus:** If depicting people, show **older adults (appearing 60+)** engaged in relatable activities (e.g., gentle exercise like walking/yoga, gardening, reading, talking with friends/family (adults only), enjoying nature, hobbies). Depict them with **positive expressions** (smiles, contentment, thoughtfulness). Show diversity in older adults respectfully.
-            3.  **Emotion:** Emphasize feelings of **warmth, comfort, connection, peace, gentle motivation, or contentment**.
-            4.  **Setting:** Prefer **cozy, comfortable, or serene settings** (e.g., comfortable homes, sunny gardens, parks, cafes, libraries).
-            5.  **Clarity & Simplicity:** Keep the visual concept clear and easy to understand. Avoid overly abstract or complex metaphors unless the scene content specifically calls for it.
-            6.  **Incorporate Tone:** Use descriptive words reflecting the warm, motivational, and conversational tone (e.g., "gentle sunlight," "cozy armchair," "warm smile," "peaceful garden," "supportive friend").
-            7.  **Length & Detail:** Be descriptive but concise (under 150 words). Mention key subjects, actions, setting, mood.
-            8.  **Safety First:** Strictly adhere to the safety guidelines above. Rewrite scene concepts if needed (e.g., instead of "grandchildren playing," use "photo albums on a table" or "knitting supplies").
-
-            Output ONLY the generated Imagen prompt, with no extra explanations or quotation marks.
-            """
-
-        # (Phần gọi OpenAI API để tạo prompt thực tế nên nằm trong ImageGenerator,
-        # hàm này chỉ trả về CÁI PROMPT để ImageGenerator sử dụng)
-        # Hàm này chỉ cần trả về string prompt cho OpenAI/LLM khác xử lý sau.
-        # Logic gọi API để tạo prompt này nên nằm trong ImageGenerator._create_imagen_prompt
-        # hoặc một helper chung, và hàm này chỉ cần trả về text prompt.
-        # Tạm thời, hàm này sẽ trả về chính `gpt_prompt` này.
-
-        # TODO: Xem xét lại việc gọi API tạo prompt AI. Có thể hàm này nên
-        # trả về *hướng dẫn* cho LLM tạo prompt, thay vì tự gọi API.
-        # Hiện tại, trả về prompt hướng dẫn LLM tạo prompt Imagen.
-        # ImageGenerator sẽ cần gọi LLM một lần nữa với prompt này.
-
-        # Ví dụ trả về prompt cho LLM (để LLM tạo ra prompt Imagen cuối)
-        # Tuy nhiên, code hiện tại của bạn là _create_imagen_prompt gọi API,
-        # nên chúng ta sẽ tạm giữ logic đó ở đây cho nhất quán, dù không lý tưởng lắm.
-
-        return gpt_prompt.strip()
-
-#    def get_video_search_query_override(self) -> Union[str, List[str], None]:
+        **Follow these instructions strictly:**
         """
-        Cung cấp truy vấn tìm kiếm video cố định cho style này.
-        Trả về một chuỗi, một danh sách chuỗi, hoặc None.
+        for instruction in config['instructions']:
+            prompt += f"- {instruction}\n"
+        prompt += "- Prioritize detailed explanations and a conversational flow.\n"
+
+        prompt += f"""
+        **Source Material:**
         """
-        logger.info("SeniorConversationalStyle: Providing fixed 'natural/calm' video search queries.")
-        # --- LỰA CHỌN 1: Trả về một danh sách các query ---
-        # Ưu điểm: Tăng khả năng tìm thấy video đa dạng hơn một chút.
-        # ImageGenerator sẽ cần chọn ngẫu nhiên từ list này.
-        return [
-            "peaceful nature landscape",
-            "calm serene outdoors",
-            "gentle flowing water relaxing",
-            "quiet garden pathway",
-            "warm sunlight park bench",
-            "slow motion nature close up",
-            "tranquil forest scene",
-            "relaxing countryside view"
+        if input_type == 'article':
+            prompt += f"- Type: News Article\n"
+            prompt += f"- Title: {content_data.get('title', '')}\n"
+            prompt += f"- Content to Elaborate On:\n{content_data.get('content', '')}\n"
+            prompt += "- Task: Elaborate on this article in a detailed, conversational manner suitable for seniors.\n"
+        elif input_type == 'keyword':
+            prompt += f"- Type: Keyword/Topic\n"
+            prompt += f"- Topic: \"{content_data}\"\n"
+            prompt += "- Task: Generate a detailed, conversational script explaining this topic to seniors/beginners.\n"
+        elif input_type == 'text':
+            prompt += f"- Type: Input Text {f'({context_hint})' if context_hint else ''}\n"
+            prompt += f"- Text Content:\n{content_data}\n"
+            prompt += "- Task: Rewrite and expand on this text in a detailed, conversational style suitable for seniors.\n"
+        else:
+            return "Error: Invalid source data type."
+
+        prompt += f"""
+        **Output Format (Basic Mode):**
+        Return ONLY a valid JSON object following this structure:
+        {{
+        "title": "Warm and Clear Video Title {lang_instruction}",
+        "initial_scenes": [
+            "First sentence, starting the conversation warmly.",
+            "Second sentence, explaining a concept simply but thoroughly.",
+            "Third sentence, perhaps using an analogy or simple example.",
+            // ... continue generating detailed, conversational sentences. Aim for more sentences than a purely informative style.
         ]
-    
+        }}
+
+        **REMEMBER:** JSON ONLY. No introductory text. Focus on detailed explanation and a patient, warm tone.
+        """
+        return prompt
+
+    # --- Overrides for Visuals and Timing ---
+
+    def should_override_visual_source(self) -> bool:
+        """Forces the use of local fallback videos only."""
+        return True
+
+    def get_visual_source_preference(self) -> str:
+        """Specifies the forced visual source type."""
+        # Define a NEW identifier specifically for this purpose
+        return "local_fallback_video_only"
+
+    def should_override_timing_mode(self) -> bool:
+        """Forces the use of overall theme fixed duration timing."""
+        return True
+
+    def get_preferred_timing_mode(self) -> str:
+        """Specifies the forced timing mode."""
+        return "overall_theme_fixed_duration"
+
+    # --- Voice and Editing Settings (Keep as before or adjust) ---
     def get_voice_settings(self) -> dict:
-        """
-        Suggests voice settings for the Senior Conversational style.
-        Prefers a potentially warmer or deeper voice and slightly slower speed.
-        Example: OpenAI's 'onyx' or 'shimmer', MiniMax's emotional/audiobook voices.
-        """
+        """Suggests voice settings."""
         return {
-            "voice": "moss_audio_27e22420-2381-11f0-b934-42db1b8d9b3b",  # Example preference (deeper male for OpenAI)
-            # For MiniMax, could be: "emotional_female_1" or "audiobook_male_1"
-            # Add speed adjustment if desired:
-            # "speed": 0.95
+            "voice": "moss_audio_27e22420-2381-11f0-b934-42db1b8d9b3b",
+            # "speed": 0.95 # Optionally slow down slightly
         }
 
     def get_video_editing_settings(self) -> dict:
-        """
-        Suggests video editing settings for the Senior Conversational style.
-        Prefers smoother transitions (dissolve/crossfade) and slower animation.
-        """
+        """Suggests video editing settings."""
         return {
-            #"animation_intensity": 0.02,      # Slower, less intense animation
-            #"image_animation": "zoom_in"       # Gentle zoom might be better than random panning
-        }    
+            "transition_types": ["fade"], # Use 'fade' as smoother default
+            "animation_intensity": 0.02,
+            "image_animation": "zoom_in"
+        }
+
+    def get_description(self) -> str:
+        """Returns a user-friendly description of the style."""
+        return "Senior Conversational (FORCED LOCAL VIDEOS - Fixed Duration)" # Update desc

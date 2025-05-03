@@ -594,7 +594,8 @@ class ScriptGenerator:
             return None
 
     # --- Gộp logic xử lý Basic/Advanced vào một hàm nội bộ duy nhất ---
-    def _generate_script_internal(self, source_data: dict, style_strategy: BaseVideoStyle, language: str, video_mode: str, project_id: str) -> dict | None:
+    def _generate_script_internal(self, source_data: dict, style_strategy: BaseVideoStyle, language: str, video_mode: str, project_id: str,
+                                  visual_source_final: str, visual_timing_mode: str) -> dict | None:
         """
         Hàm nội bộ xử lý logic tạo script chính, phân nhánh Basic/Advanced.
         """
@@ -606,7 +607,7 @@ class ScriptGenerator:
 
         # --- Xác định chế độ thực thi ---
         use_advanced_layout = style_strategy.should_override_layout() or video_mode == "advanced"
-        # ... (log và xử lý conflict mode như trước) ...
+
         if use_advanced_layout and video_mode == "basic" and style_strategy.should_override_layout(): logger.info(...)
         elif not use_advanced_layout and video_mode == "advanced" and not style_strategy.should_override_layout(): logger.warning(...); video_mode = "basic" # Sửa lại video_mode
 
@@ -653,7 +654,8 @@ class ScriptGenerator:
 
             script_result = self._assemble_final_script(
                 project_id, layout_data, all_chapters_sentences,
-                style_strategy, language, input_type, source_info_for_assembly
+                style_strategy, language, input_type, source_info_for_assembly,
+                visual_source_final, visual_timing_mode
             )
             if script_result: logger.info("Advanced script assembly successful.")
 
@@ -678,54 +680,74 @@ class ScriptGenerator:
             final_speech_units = []
             global_shot_number = 1
             speech_unit_number = 1
-            for sentence in initial_sentences:
-                 original_sentence = sentence.strip()
-                 if not original_sentence: continue
-                 shots_for_sentence = self._breakdown_sentence_into_shots(original_sentence, style_tone)
-                 if not shots_for_sentence: shots_for_sentence = [original_sentence]
-                 # ... (logic tạo final_scenes, final_speech_units như cũ) ...
-                 shot_numbers_for_this_unit = []; valid_shots_found = False
-                 if shots_for_sentence:
-                     for shot_content in shots_for_sentence:
-                          shot_content_stripped = shot_content.strip()
-                          if not shot_content_stripped: continue
-                          final_scenes.append({"number": global_shot_number, "content": shot_content_stripped})
-                          shot_numbers_for_this_unit.append(global_shot_number)
-                          global_shot_number += 1; valid_shots_found = True
-                 if valid_shots_found:
-                     final_speech_units.append({"unit_number": speech_unit_number,"text": original_sentence,"scene_numbers": shot_numbers_for_this_unit})
-                     speech_unit_number += 1
 
-            if not final_scenes or not final_speech_units: return None
+            if visual_timing_mode == 'overall_theme_fixed_duration':
+                logger.info("Theme Mode (Basic): Skipping sentence breakdown. Creating 1:1 scene per sentence.")
+                for sentence in initial_sentences:
+                    original_sentence = sentence.strip()
+                    if not original_sentence: continue
+                    # Tạo 1 scene duy nhất cho câu này
+                    scene = {"number": global_shot_number, "content": original_sentence}
+                    final_scenes.append(scene)
+                    # Tạo speech unit tương ứng
+                    speech_unit = {"unit_number": speech_unit_number,"text": original_sentence,"scene_numbers": [global_shot_number]}
+                    final_speech_units.append(speech_unit)
+                    # Tăng các bộ đếm
+                    global_shot_number += 1
+                    speech_unit_number += 1
+            else: # Chế độ sync_to_audio (Logic cũ)
+                logger.info("Sync Mode (Basic): Breaking down sentences into shots...")
+                for sentence in initial_sentences:
+                     original_sentence = sentence.strip()
+                     if not original_sentence: continue
+                     shots_for_sentence = self._breakdown_sentence_into_shots(original_sentence, style_tone)
+                     if not shots_for_sentence: shots_for_sentence = [original_sentence]
+
+                     shot_numbers_for_this_unit = []; valid_shots_found = False
+                     if shots_for_sentence:
+                         for shot_content in shots_for_sentence:
+                              shot_content_stripped = shot_content.strip()
+                              if not shot_content_stripped: continue
+                              final_scenes.append({"number": global_shot_number, "content": shot_content_stripped})
+                              shot_numbers_for_this_unit.append(global_shot_number)
+                              global_shot_number += 1; valid_shots_found = True
+                     if valid_shots_found:
+                         final_speech_units.append({"unit_number": speech_unit_number,"text": original_sentence,"scene_numbers": shot_numbers_for_this_unit})
+                         speech_unit_number += 1
+            # --- KẾT THÚC KIỂM TRA TIMING MODE ---
+
+            if not final_scenes or not final_speech_units:
+                 logger.error("Basic Mode Step 2 Failed: No valid scenes or speech units generated.")
+                 return None            
 
             # === STEP 3: ANALYZE SHOTS ===
-            logger.info("Analyzing scenes for video clip suitability...")
-            # Gọi hàm phân tích cho danh sách scenes cuối cùng
-            analysis_results = self._analyze_shots_for_video_batch(final_scenes)
+            # Kiểm tra visual_source_final trước khi gọi phân tích
+            if visual_timing_mode != 'overall_theme_fixed_duration' and visual_source_final != "local_fallback_video_only":
+                logger.info("Analyzing scenes for video clip suitability (Basic Mode)...")
+                analysis_results = self._analyze_shots_for_video_batch(final_scenes)
 
-            if analysis_results:
-                logger.info(f"Updating {len(final_scenes)} scenes with video preference analysis results...")
-                updated_scene_count = 0
-                for scene in final_scenes:
-                    scene_num = scene.get('number')
-                    if scene_num is not None:
-                        # Lấy kết quả phân tích (True/False) cho scene này, mặc định là False nếu không tìm thấy
-                        prefer_video_flag = analysis_results.get(scene_num, False)
-                        # Thêm hoặc cập nhật key 'prefer_video' vào dictionary của scene
-                        scene['prefer_video'] = prefer_video_flag
-                        if prefer_video_flag:
-                            updated_scene_count += 1
-                    else:
-                        # Xử lý trường hợp scene không có 'number' (dù không nên xảy ra)
-                        scene['prefer_video'] = False
-                logger.info(f"Marked {updated_scene_count} scenes as preferring video.")
+                if analysis_results:
+                    logger.info(f"Updating {len(final_scenes)} scenes with video preference analysis results...")
+                    updated_scene_count = 0
+                    for scene in final_scenes:
+                        scene_num = scene.get('number')
+                        if scene_num is not None:
+                            prefer_video_flag = analysis_results.get(scene_num, False)
+                            scene['prefer_video'] = prefer_video_flag
+                            if prefer_video_flag: updated_scene_count += 1
+                        else:
+                            scene['prefer_video'] = False
+                    logger.info(f"Marked {updated_scene_count} scenes as preferring video.")
+                else:
+                    logger.warning("Video analysis skipped or failed (Basic Mode). Proceeding without 'prefer_video' flags.")
+                    for scene in final_scenes: scene['prefer_video'] = False # Đặt mặc định là False
             else:
-                # Log nếu phân tích bị tắt, lỗi hoặc không trả về kết quả hợp lệ
-                logger.warning("Video analysis skipped or failed. Proceeding without 'prefer_video' flags in scenes.")
-                # Đảm bảo key 'prefer_video' tồn tại và là False nếu không có phân tích
+                # Nếu là theme mode hoặc local fallback, bỏ qua phân tích
+                default_prefer_video = (visual_source_final == "local_fallback_video_only") # True nếu chỉ có video
+                log_reason = "overall theme timing" if visual_timing_mode == 'overall_theme_fixed_duration' else "local fallback video source"
+                logger.info(f"Skipping suitability analysis (Basic Mode) due to {log_reason}. Setting 'prefer_video' to {default_prefer_video}.")
                 for scene in final_scenes:
-                    scene['prefer_video'] = False
-            # === KẾT THÚC BƯỚC PHÂN TÍCH VIDEO PREFERENCE ===
+                    scene['prefer_video'] = default_prefer_video
 
             # === STEP 4: CREATE FINAL SCRIPT OBJECT ===
             is_ai_gen = input_type in ['keyword', 'text']
@@ -768,27 +790,30 @@ class ScriptGenerator:
         return script_result # Trả về dict script hoặc None nếu lỗi
 
     # --- Tạo Script với INPUT là ARTICLE (RSS, ARTICLE URL) ---
-    def generate_script_from_article(self, article, style_strategy: BaseVideoStyle, language=None, video_mode="basic"):
+    def generate_script_from_article(self, article, style_strategy: BaseVideoStyle, language=None, video_mode="basic",
+                                     visual_source_final: str = "search", visual_timing_mode: str = "sync_to_audio"):
         """
         Tạo kịch bản cho article bằng cách gọi hàm xử lý nội bộ.
         """
         project_id = generate_project_id(article.get('title', ''))
         source_data = {'type': 'article', 'data': article}
 
-        return self._generate_script_internal(source_data, style_strategy, language, video_mode, project_id)
+        return self._generate_script_internal(source_data, style_strategy, language, video_mode, project_id, visual_source_final, visual_timing_mode)
 
     # --- Tạo Script với INPUT là KEYWORD ---
-    def generate_script_from_keyword(self, keyword, style_strategy: BaseVideoStyle, language=None, video_mode="basic"):
+    def generate_script_from_keyword(self, keyword, style_strategy: BaseVideoStyle, language=None, video_mode="basic",
+                                     visual_source_final: str = "search", visual_timing_mode: str = "sync_to_audio"):
         """
         Tạo kịch bản từ từ khóa bằng cách gọi hàm xử lý nội bộ.
         """
         project_id = generate_project_id(keyword)
         source_data = {'type': 'keyword', 'data': keyword}
 
-        return self._generate_script_internal(source_data, style_strategy, language, video_mode, project_id)
+        return self._generate_script_internal(source_data, style_strategy, language, video_mode, project_id, visual_source_final, visual_timing_mode)
         
     # --- Tạo Script với INPUT là TEXT/TRANSCRIPT ---
-    def generate_script_from_text(self, input_text, style_strategy: BaseVideoStyle, language="en", context_hint=None, video_mode="basic"):
+    def generate_script_from_text(self, input_text, style_strategy: BaseVideoStyle, language="en", context_hint=None, video_mode="basic",
+                                  visual_source_final: str = "search", visual_timing_mode: str = "sync_to_audio"):
         """
         Tạo kịch bản từ text bằng cách gọi hàm xử lý nội bộ.
         """
@@ -796,7 +821,7 @@ class ScriptGenerator:
         project_id = generate_project_id(project_id_hint)
         source_data = {'type': 'text', 'data': input_text, 'context': context_hint}
 
-        return self._generate_script_internal(source_data, style_strategy, language, video_mode, project_id)
+        return self._generate_script_internal(source_data, style_strategy, language, video_mode, project_id, visual_source_final, visual_timing_mode)
     
     def _generate_video_layout(self, source_data, style_strategy: BaseVideoStyle, language):
         """
@@ -1193,7 +1218,8 @@ class ScriptGenerator:
             return None
     # --- Kết thúc hàm _generate_chapter_content ---
 
-    def _assemble_final_script(self, project_id, layout_data, all_chapters_sentences, style_strategy: BaseVideoStyle, language, input_type, source_info):
+    def _assemble_final_script(self, project_id, layout_data, all_chapters_sentences, style_strategy: BaseVideoStyle, language, input_type, source_info,
+                               visual_source_final: str, visual_timing_mode: str):
         """
         Giai đoạn 3 (Advanced Mode): Gộp nội dung chapter, breakdown thành shots, và tạo script cuối cùng.
 
@@ -1242,42 +1268,43 @@ class ScriptGenerator:
                 original_sentence = original_sentence.strip()
                 if not original_sentence: continue
 
-                # --- Breakdown câu thành shots ---
-                enable_breakdown = VIDEO_SETTINGS.get("enable_sentence_to_shot_breakdown", True)
-                shots_content_list = []
-
-                if enable_breakdown:
-                    # logger.debug(f"    Breaking down: '{original_sentence[:50]}...'")
-                    shots_content_list = self._breakdown_sentence_into_shots(original_sentence, style_tone)
-                    if not shots_content_list:
-                        logger.warning(f"    Breakdown failed for sentence in Ch {chapter_num}, using full sentence.")
-                        shots_content_list = [original_sentence]
-                else:
-                    # logger.debug(f"    Using full sentence as single shot.")
-                    shots_content_list = [original_sentence]
-                # --- Kết thúc breakdown ---
-
-                # --- Xử lý các shots ---
                 shot_numbers_for_this_unit = []
                 valid_shots_found = False
 
-                if shots_content_list:
-                    for shot_content in shots_content_list:
-                        shot_content_stripped = shot_content.strip()
-                        if not shot_content_stripped: continue
+                # --- KIỂM TRA TIMING MODE ---
+                if visual_timing_mode == 'overall_theme_fixed_duration':
+                    # Theme Mode: 1 scene = 1 câu gốc
+                    logger.debug(f"    Theme Mode: Creating single scene for sentence in Ch {chapter_num}.") # Thêm log để xác nhận
+                    scene = {
+                        "number": global_shot_number,
+                        "content": original_sentence,
+                        "chapter_number": chapter_num,
+                        "chapter_title": chapter_title
+                    }
+                    final_scenes.append(scene)
+                    shot_numbers_for_this_unit.append(global_shot_number)
+                    global_shot_number += 1
+                    valid_shots_found = True
+                else: # Sync Mode: Breakdown câu thành shots
+                    logger.debug(f"    Sync Mode: Calling breakdown for sentence in Ch {chapter_num}.") # Thêm log để xác nhận
+                    shots_content_list = self._breakdown_sentence_into_shots(original_sentence, style_tone)
+                    if not shots_content_list: shots_content_list = [original_sentence]
 
-                        # Tạo scene object VỚI thông tin chapter
-                        scene = {
-                            "number": global_shot_number,
-                            "content": shot_content_stripped,
-                            "chapter_number": chapter_num, # Thêm chapter info
-                            "chapter_title": chapter_title  # Thêm chapter info
-                        }
-                        final_scenes.append(scene)
-                        shot_numbers_for_this_unit.append(global_shot_number)
-                        global_shot_number += 1
-                        valid_shots_found = True
-                # --- Kết thúc xử lý shots ---
+                    if shots_content_list:
+                        for shot_content in shots_content_list:
+                            shot_content_stripped = shot_content.strip()
+                            if not shot_content_stripped: continue
+                            scene = {
+                                "number": global_shot_number,
+                                "content": shot_content_stripped,
+                                "chapter_number": chapter_num,
+                                "chapter_title": chapter_title
+                            }
+                            final_scenes.append(scene)
+                            shot_numbers_for_this_unit.append(global_shot_number)
+                            global_shot_number += 1
+                            valid_shots_found = True
+                # --- KẾT THÚC KIỂM TRA TIMING MODE ---
 
                 # --- Tạo speech unit ---
                 if valid_shots_found:
@@ -1314,33 +1341,35 @@ class ScriptGenerator:
             article_image_url = article_data.get('image_url')
         # *** Kết thúc lấy image_url ***
 
-        # === BƯỚC PHÂN TÍCH VIDEO PREFERENCE (THÊM VÀO) ===
-        logger.info("Analyzing scenes for video clip suitability...")
-        # Gọi hàm phân tích cho danh sách scenes cuối cùng
-        analysis_results = self._analyze_shots_for_video_batch(final_scenes)
+        # === BƯỚC PHÂN TÍCH VIDEO PREFERENCE ===
+        # Chỉ phân tích nếu KHÔNG phải theme mode VÀ KHÔNG phải local fallback
+        if visual_timing_mode != 'overall_theme_fixed_duration' and visual_source_final != "local_fallback_video_only":
+            logger.info("Analyzing scenes for video clip suitability (Advanced Mode)...")
+            analysis_results = self._analyze_shots_for_video_batch(final_scenes)
 
-        if analysis_results:
-            logger.info(f"Updating {len(final_scenes)} scenes with video preference analysis results...")
-            updated_scene_count = 0
-            for scene in final_scenes:
-                scene_num = scene.get('number')
-                if scene_num is not None:
-                    # Lấy kết quả phân tích (True/False) cho scene này, mặc định là False nếu không tìm thấy
-                    prefer_video_flag = analysis_results.get(scene_num, False)
-                    # Thêm hoặc cập nhật key 'prefer_video' vào dictionary của scene
-                    scene['prefer_video'] = prefer_video_flag
-                    if prefer_video_flag:
-                        updated_scene_count += 1
-                else:
-                    # Xử lý trường hợp scene không có 'number' (dù không nên xảy ra)
-                    scene['prefer_video'] = False
-            logger.info(f"Marked {updated_scene_count} scenes as preferring video.")
+            if analysis_results:
+                logger.info(f"Updating {len(final_scenes)} scenes with video preference analysis results...")
+                updated_scene_count = 0
+                for scene in final_scenes:
+                    scene_num = scene.get('number')
+                    if scene_num is not None:
+                        prefer_video_flag = analysis_results.get(scene_num, False)
+                        scene['prefer_video'] = prefer_video_flag
+                        if prefer_video_flag: updated_scene_count += 1
+                    else:
+                        scene['prefer_video'] = False
+                logger.info(f"Marked {updated_scene_count} scenes as preferring video.")
+            else:
+                logger.warning("Video analysis skipped or failed (Advanced Mode). Proceeding without 'prefer_video' flags.")
+                for scene in final_scenes: scene['prefer_video'] = False
         else:
-            # Log nếu phân tích bị tắt, lỗi hoặc không trả về kết quả hợp lệ
-            logger.warning("Video analysis skipped or failed. Proceeding without 'prefer_video' flags in scenes.")
-            # Đảm bảo key 'prefer_video' tồn tại và là False nếu không có phân tích
+            # Nếu là theme mode hoặc local fallback, bỏ qua phân tích
+            default_prefer_video = (visual_source_final == "local_fallback_video_only") # True nếu chỉ có video
+            log_reason = "overall theme timing" if visual_timing_mode == 'overall_theme_fixed_duration' else "local fallback video source"
+            logger.info(f"Skipping suitability analysis (Advanced Mode) due to {log_reason}. Setting 'prefer_video' to {default_prefer_video}.")
             for scene in final_scenes:
-                scene['prefer_video'] = False
+                scene['prefer_video'] = default_prefer_video
+
         # === KẾT THÚC BƯỚC PHÂN TÍCH VIDEO PREFERENCE ===
 
         script_result = {

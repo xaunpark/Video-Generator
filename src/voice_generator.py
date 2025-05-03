@@ -17,7 +17,7 @@ if __name__ == "__main__":
         sys.path.insert(0, project_root)
 
 from config.credentials import OPENAI_API_KEY, MINIMAX_API_KEY, MINIMAX_GROUP_ID
-from config.settings import TEMP_DIR, TTS_PROVIDERS, DEFAULT_TTS_PROVIDER
+from config.settings import TEMP_DIR, TTS_PROVIDERS, DEFAULT_TTS_PROVIDER, VIDEO_SETTINGS
 
 # Tải các biến môi trường
 load_dotenv()
@@ -155,64 +155,85 @@ class VoiceGenerator:
             logger.error(f"Error creating silence audio: {e}", exc_info=True)
             return None
 
-    def generate_audio_for_script(self, script):
-        """Tạo file âm thanh cho từng speech_unit VÀ khoảng lặng cho chapter cards."""
+    def generate_audio_for_script(self, script, visual_timing_mode="sync_to_audio"): # Thêm tham số timing mode
+        """Tạo file âm thanh cho từng speech_unit, tùy chọn thêm silence cho chapter cards dựa trên timing mode."""
         project_id = script.get('project_id', f"project_{time.strftime('%Y%m%d%H%M%S')}")
         project_audio_dir = os.path.join(self.audio_dir, project_id)
         os.makedirs(project_audio_dir, exist_ok=True)
 
-        logger.info(f"Generating voice and silence for script: '{script['title']}' (Project: {project_id})")
-        audio_files_info = []
+        # Log cả timing mode
+        logger.info(f"Generating voice for script: '{script['title']}' (Project: {project_id}, Timing Mode: {visual_timing_mode})")
+        audio_files_info = [] # List cuối cùng chứa thông tin tất cả file (speech & silence)
+        # Không cần generated_audio_paths nữa, audio_files_info đủ
 
         if not script.get('speech_units'):
             logger.error(f"Script {project_id} missing 'speech_units'. Cannot generate audio.")
             return []
 
-        # --- Lấy cài đặt chapter card duration ---
-        # Cần import VIDEO_SETTINGS từ config.settings
-        from config.settings import VIDEO_SETTINGS
+        # Lấy cài đặt từ VIDEO_SETTINGS
         card_duration = VIDEO_SETTINGS.get("chapter_title_duration", 2.5)
-        is_advanced_mode = script.get("script_mode") == "advanced" # Kiểm tra mode từ script
+        # Chuyển is_advanced_mode vào trong vòng lặp để kiểm tra từng unit nếu cần
+        is_advanced_mode_script = script.get("script_mode") == "advanced"
 
-        current_chapter_processed_audio = 0 # Theo dõi chapter đã xử lý silence
+        processed_chapters_for_silence = set() # Theo dõi chapter đã thêm silence
 
-        # --- Lặp qua từng Speech Unit ---
-        total_units = len(script['speech_units'])
-        for i, unit in enumerate(script['speech_units']):
+        # Sắp xếp speech units để đảm bảo xử lý đúng thứ tự chapter
+        speech_units_sorted = sorted(script.get('speech_units', []), key=lambda x: x.get('unit_number', float('inf')))
+        total_units = len(speech_units_sorted)
+
+        for i, unit in enumerate(speech_units_sorted):
             unit_number = unit.get('unit_number')
             unit_text = unit.get('text', '').strip()
             unit_chapter_num = unit.get('chapter_number') # Lấy chapter number
+            unit_chapter_title = unit.get('chapter_title') # Lấy chapter title
 
-            if unit_number is None: continue
-            # Không tạo audio cho unit rỗng, nhưng vẫn có thể cần xử lý chapter card trước nó
-            # if not unit_text: continue # Tạm thời giữ lại để xử lý card
+            if unit_number is None:
+                logger.warning(f"Skipping speech unit with missing number: {unit}")
+                continue
 
             # === KIỂM TRA VÀ CHÈN SILENCE CHO CHAPTER MỚI ===
-            if is_advanced_mode and unit_chapter_num is not None and unit_chapter_num > current_chapter_processed_audio and unit_chapter_num > 1:
-                logger.info(f"Detected start of Chapter {unit_chapter_num} (>1). Inserting silence for card...")
+            # Điều kiện: Script là advanced, KHÔNG phải theme mode, có chapter > 1, và chưa xử lý chapter đó
+            should_add_silence = (
+                is_advanced_mode_script and
+                visual_timing_mode != 'overall_theme_fixed_duration' and # << KIỂM TRA TIMING MODE
+                unit_chapter_num is not None and
+                unit_chapter_num > 1 and
+                unit_chapter_num not in processed_chapters_for_silence
+            )
+
+            if should_add_silence:
+                logger.info(f"Detected start of Chapter {unit_chapter_num} (>1) in non-theme mode. Inserting silence for card...")
                 silence_filename = f"chapter_{unit_chapter_num}_silence.mp3"
                 silence_output_path = os.path.join(project_audio_dir, silence_filename)
-                # Lấy sample rate từ config provider hiện tại nếu có, hoặc dùng default
                 tts_sample_rate = self.provider_config.get("default_audio_settings", {}).get("sample_rate", 32000)
 
                 created_silence_path = self._create_silence_audio(card_duration, silence_output_path, sample_rate=tts_sample_rate)
 
                 if created_silence_path:
+                    # Thêm thông tin silence vào danh sách kết quả chính
                     audio_files_info.append({
-                        "type": "chapter_card_silence",
-                        "chapter_number": unit_chapter_num,
+                        "type": "silence", # Đổi type cho rõ ràng
                         "path": created_silence_path,
-                        "duration": card_duration, # Thời lượng cố định của card
-                        "unit_number": None # Silence không phải là speech unit
+                        "duration": card_duration,
+                        "unit_number": None, # Không phải speech unit
+                        "scene_numbers": [],
+                        "content": f"[Silence for Chapter {unit_chapter_num}]",
+                        "chapter_number": unit_chapter_num,
+                        "chapter_title": unit_chapter_title # Lưu lại title để tham khảo
                     })
+                    processed_chapters_for_silence.add(unit_chapter_num) # Đánh dấu đã xử lý
                     logger.info(f"  Added silence file: {silence_filename}")
                 else:
                     logger.error(f"  Failed to create silence for Chapter {unit_chapter_num} card.")
-
-                current_chapter_processed_audio = unit_chapter_num # Cập nhật chapter đã xử lý
+            # Ghi log nếu bỏ qua silence do timing mode hoặc các lý do khác
+            elif is_advanced_mode_script and unit_chapter_num is not None and unit_chapter_num > 1 and unit_chapter_num not in processed_chapters_for_silence:
+                 log_reason = "timing mode is 'overall_theme_fixed_duration'" if visual_timing_mode == 'overall_theme_fixed_duration' else f"chapter {unit_chapter_num} already processed or other condition unmet"
+                 logger.debug(f"Skipping silence for Chapter {unit_chapter_num} because {log_reason}.")
+                 # Vẫn đánh dấu đã xử lý để tránh log lặp
+                 processed_chapters_for_silence.add(unit_chapter_num)
             # === KẾT THÚC CHÈN SILENCE ===
 
-            # --- Tạo Audio cho Speech Unit (nếu text không rỗng) ---
+            # --- Tạo Audio cho Speech Unit (chỉ khi text không rỗng) ---
             if unit_text:
                 logger.info(f"Processing Speech Unit {unit_number}/{total_units}...")
                 try:
@@ -222,51 +243,54 @@ class VoiceGenerator:
 
                     if not generated_path:
                         logger.error(f"  Speech Unit {unit_number}: Audio generation failed.")
-                        continue
+                        continue # Bỏ qua unit này
 
-                    # --- Lấy Duration (Ưu tiên API, fallback Mutagen/Estimate) ---
+                    # --- Lấy Duration (logic như cũ) ---
                     actual_unit_duration = 0.0
                     if api_duration is not None and api_duration > 0:
                         actual_unit_duration = api_duration
                         logger.debug(f"  Using duration from API: {actual_unit_duration:.3f}s")
                     else:
-                        # ... (Code fallback mutagen/estimate giữ nguyên) ...
                         logger.debug(f"  Getting duration using mutagen/estimate...")
                         try:
                             if os.path.exists(generated_path) and os.path.getsize(generated_path) > 100:
                                 audio_info_mutagen = mutagen.mp3.MP3(generated_path)
                                 actual_unit_duration = audio_info_mutagen.info.length
                             else: actual_unit_duration = self._estimate_duration(unit_text)
-                        except Exception: actual_unit_duration = self._estimate_duration(unit_text)
+                        except Exception as e_mut:
+                            logger.warning(f"    Mutagen/Estimate failed: {e_mut}. Using fallback estimate.")
+                            actual_unit_duration = self._estimate_duration(unit_text)
                         logger.debug(f"    Calculated duration: {actual_unit_duration:.3f}s")
+                    # --- Kết thúc lấy Duration ---
 
-                    # --- Thêm thông tin audio unit ---
+                    # --- Thêm thông tin audio unit vào danh sách chính ---
                     audio_files_info.append({
                         "type": "speech_unit",
                         "unit_number": unit_number,
                         "path": generated_path,
                         "duration": actual_unit_duration,
-                        "content": unit_text, # Giữ lại content nếu cần debug
+                        "content": unit_text,
                         "scene_numbers": unit.get('scene_numbers', []),
-                        # Sao chép thông tin chapter từ unit gốc
-                        "chapter_number": unit.get('chapter_number'),
-                        "chapter_title": unit.get('chapter_title')
+                        "chapter_number": unit_chapter_num, # Giữ lại chapter info
+                        "chapter_title": unit_chapter_title
                     })
                 except Exception as e:
                     logger.error(f"Error creating audio for Speech Unit {unit_number}: {str(e)}", exc_info=True)
             else:
-                    logger.info(f"Skipping audio generation for empty Speech Unit {unit_number} (but processed potential card silence).")
-
+                 # Chỉ log nếu unit rỗng nhưng không phải là unit đầu tiên của chapter > 1 (vì đã log ở trên)
+                 if not (is_advanced_mode_script and unit_chapter_num is not None and unit_chapter_num > 1 and i > 0 and speech_units_sorted[i-1].get('chapter_number') != unit_chapter_num):
+                     logger.info(f"Skipping audio generation for empty Speech Unit {unit_number}.")
         # --- Kết thúc vòng lặp ---
 
-        # --- Lưu thông tin audio (bao gồm cả silence) ---
+        # --- Lưu thông tin audio (bao gồm cả silence nếu có) ---
         if audio_files_info:
             self._save_audio_info(audio_files_info, script['title'], project_audio_dir, project_id)
-            logger.info(f"Finished generating {len(audio_files_info)} audio files (speech & silence) for {project_id}.")
+            total_files_gen = len([f for f in audio_files_info if f.get('path')])
+            logger.info(f"Finished generating {total_files_gen} audio files (speech & silence if applicable) for {project_id}.")
         else:
             logger.error(f"No audio files generated for project {project_id}.")
 
-        return audio_files_info
+        return audio_files_info # Trả về list cuối cùng
     
     def _generate_audio(self, text, output_path):
         """
